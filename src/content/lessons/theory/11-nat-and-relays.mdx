@@ -1,0 +1,228 @@
+---
+title: NAT, Hole Punching, and Relays
+order: 11
+summary: Why your friend can't join your hosted game, how NAT hole punching gets around it, and when only a relay will work.
+durationMin: 25
+objectives:
+  - Explain what a NAT does to outgoing and incoming packets, and why it blocks players from hosting
+  - Distinguish endpoint-independent ("cone") from endpoint-dependent ("symmetric") NAT mapping
+  - Walk through STUN discovery and UDP hole punching through a rendezvous server
+  - Explain when a relay (TURN, Unity Relay, Steam Datagram Relay) is required, and what it costs
+prerequisites: [theory/packets-and-protocols, theory/topologies]
+tags: [nat, connectivity, relay, p2p]
+sources:
+  - title: Bryan Ford, Pyda Srisuresh, Dan Kegel, Peer-to-Peer Communication Across Network Address Translators (USENIX 2005)
+    url: https://bford.info/pub/net/p2pnat/
+  - title: RFC 4787, NAT Behavioral Requirements for Unicast UDP
+    url: https://www.rfc-editor.org/rfc/rfc4787
+  - title: RFC 5128, State of Peer-to-Peer Communication across NATs
+    url: https://www.rfc-editor.org/rfc/rfc5128
+  - title: RFC 8489, Session Traversal Utilities for NAT (STUN)
+    url: https://www.rfc-editor.org/rfc/rfc8489
+  - title: RFC 8656, Traversal Using Relays around NAT (TURN)
+    url: https://www.rfc-editor.org/rfc/rfc8656
+  - title: RFC 8445, Interactive Connectivity Establishment (ICE)
+    url: https://www.rfc-editor.org/rfc/rfc8445
+  - title: RFC 1918, Address Allocation for Private Internets
+    url: https://www.rfc-editor.org/rfc/rfc1918
+  - title: 'NGO docs: Listen server and host architecture (port forwarding, relays, NAT punch)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/learn/listenserverhostarchitecture.html
+  - title: 'Steamworks docs: Steam Datagram Relay'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+---
+
+Your listen-server game works perfectly between two PCs in your flat. You send a friend your IP address, they type it in,
+and... nothing. The connection times out. Your game didn't break. The packets reached your router, and your router didn't
+know which machine to give them to, so it dropped them.
+
+That router is doing <Term id="nat">network address translation (NAT)</Term>, and it is the single biggest practical obstacle
+for player-hosted games. Dedicated servers in a data centre have public addresses and never hit this problem. Anything where a
+*player* accepts connections does.
+
+## What NAT does
+
+There aren't enough IPv4 addresses for every device, so a home router gets one public address from the ISP and gives every
+device behind it a **private** address from ranges reserved by RFC 1918: `192.168.x.x`, `10.x.x.x` or `172.16–31.x.x`. Private
+addresses aren't routable on the internet.
+
+When a device sends a packet out, the router rewrites the source address and keeps a note of it in a **mapping table**:
+
+| Inside (private) | Outside (public) | Remote | Expires |
+|---|---|---|---|
+| 192.168.1.20:7777 | 203.0.113.7:51004 | 198.51.100.9:7777 | in 30–120 s unless refreshed |
+
+Replies from `198.51.100.9:7777` to `203.0.113.7:51004` match the entry, so the router forwards them to `192.168.1.20:7777`.
+Packets that match **no** entry, such as a friend's unsolicited connection attempt, have nowhere to go and are dropped. NAT
+acts as a one-way door: you can call out, but nobody can call in first.
+
+It gets worse. Many mobile networks, and more and more home ISPs, put customers behind **carrier-grade NAT** (<Term id="cgnat">CGNAT</Term>):
+a second NAT inside the ISP, using the shared `100.64.0.0/10` range. Your router's "public" address is then not public either, and
+<Term id="port-forwarding">port forwarding</Term> on your own router can't help.
+
+## Not all NATs behave the same
+
+RFC 4787 describes NAT behaviour along two axes. The one that matters most for games is **mapping**: does the router reuse the same
+public port when the same inside socket talks to a *different* destination?
+
+- **Endpoint-independent mapping** (often called "cone" NAT): `192.168.1.20:7777` always appears as `203.0.113.7:51004`, whoever it talks to. Once someone learns that public endpoint, others can try to use it.
+- **Endpoint-dependent mapping** ("symmetric" NAT): each new destination gets a **new** public port. The endpoint a third party sees is useless for anyone else.
+
+**Filtering** is the other axis: whether the router accepts incoming packets on a mapping from any address, only from addresses it has
+sent to, or only from the exact address and port it sent to. Stricter filtering is fine for hole punching, as long as mapping is
+endpoint-independent, because both sides send to each other.
+
+## Discovering your public endpoint: STUN
+
+A machine behind NAT doesn't know its own public address and port. A <Term id="stun">STUN</Term> server tells it. The client sends
+a request to a public server, and the server replies with "your packet came from `203.0.113.7:51004`". Asking two STUN servers and
+comparing the answers also reveals whether mapping is endpoint-independent: if both servers see the same port, it is.
+
+## Hole punching
+
+<Term id="nat-punchthrough">Hole punching</Term> (also called NAT punch-through) uses the mapping table against itself. If **both** players send packets to each other's public endpoints at about the
+same time, each router sees its own outgoing packet first, creates a mapping, and then treats the other player's packets as replies.
+
+<Sequence
+  title="UDP hole punching through a rendezvous server"
+  actors={[
+    { id: 'a', label: 'Player A (behind NAT)', kind: 'client' },
+    { id: 'r', label: 'Rendezvous server', kind: 'service' },
+    { id: 'b', label: 'Player B (behind NAT)', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'a', to: 'r', label: 'Register: I want to join lobby 42', note: 'the server sees A’s public endpoint 203.0.113.7:51004', kind: 'reliable' },
+    { from: 'b', to: 'r', label: 'Register: I host lobby 42', note: 'the server sees B’s public endpoint 198.51.100.9:40122', kind: 'reliable' },
+    { from: 'r', to: 'a', label: 'Peer B is at 198.51.100.9:40122', kind: 'reliable' },
+    { from: 'r', to: 'b', label: 'Peer A is at 203.0.113.7:51004', kind: 'reliable' },
+    { from: 'a', to: 'b', label: 'Punch packet (dropped by B’s NAT)', note: 'but A’s NAT now has a mapping towards B', kind: 'unreliable' },
+    { from: 'b', to: 'a', label: 'Punch packet: accepted by A’s NAT', note: 'it looks like a reply to A’s punch', kind: 'unreliable' },
+    { from: 'a', to: 'b', label: 'Punch packet: now accepted by B’s NAT too', kind: 'unreliable' },
+    { from: 'a', to: 'b', label: 'Game traffic flows directly', note: 'keep-alives every 15 s hold the mappings open', kind: 'unreliable' },
+  ]}
+/>
+
+The **rendezvous server** (often the matchmaking or lobby service) is only needed to exchange addresses and coordinate timing. After
+the punch succeeds, game traffic flows directly between the players, with no extra latency and no relay bill.
+
+The approach works when both NATs use endpoint-independent mapping. In Ford, Srisuresh and Kegel's 2005 measurements, about **82%** of
+NATs supported UDP hole punching. Both NATs in a pair have to cooperate, so the share of player *pairs* that can connect directly is lower again, and lower still on mobile networks and behind CGNAT. In other words,
+**a game that relies only on hole punching will fail for some of its players**.
+
+## Try it
+
+Step through the punch with two cone NATs, then switch one side to a symmetric NAT.
+
+<Sim name="nat-traversal" preset="cone" caption="Hole punching between two cone NATs." />
+
+What you should notice:
+
+- With **cone NATs**, the first punch packet in each direction may be dropped, but once both sides have sent, both routers have mappings and traffic flows.
+- With a **symmetric NAT**, the port the rendezvous server saw isn't the port the router uses towards the other player, so the punch packets arrive at a port with no mapping and are dropped every time.
+- The **relay** path always works, because both players make outgoing connections to a public server, which every NAT allows.
+
+<Sim name="nat-traversal" preset="symmetric" caption="A symmetric NAT defeats hole punching, so a relay is needed." />
+
+## Relays: the path that always works
+
+When a direct path fails, both players connect **out** to a <Term id="relay">relay</Term>, and the relay forwards packets between
+them. The IETF standard for this is <Term id="turn">TURN</Term>, and the <Term id="ice">ICE</Term> protocol used by WebRTC tries every
+option in order: local network addresses, then STUN-discovered public addresses (hole punching), then TURN.
+
+Relays cost:
+
+- **Latency.** Packets take a detour. A relay in the same region as both players might add 5–20 ms. A badly placed one can add 100 ms.
+- **Money.** Every byte passes through the relay operator's servers, so someone pays for the bandwidth.
+
+Relays also have real benefits beyond connectivity:
+
+- **IP privacy.** Players only see the relay's address, never each other's. With direct P2P, any player can find another's IP and attack them with a flood of traffic (DDoS).
+- **Better routes.** Steam Datagram Relay routes traffic over Valve's own backbone, which can be faster than the public internet path. Valve also says its relayed traffic is authenticated, encrypted and rate-limited.
+- **Disconnect detection.** The relay knows when a host goes away, even when the host can't say so.
+
+The common production pattern, recommended in Unity's NGO docs, is **try direct, fall back to a relay**: attempt hole punching, and use
+the relay when it fails. Many games simply relay everything, for the IP privacy alone.
+
+## Keep the mapping alive
+
+NAT mappings expire when idle. RFC 4787 asks for at least two minutes for UDP, but many consumer routers drop them after 30–60 seconds.
+If your game goes quiet, for example in a lobby or on a pause screen, the mapping disappears and the next packet from the other side is
+dropped. Send a small keep-alive every 15–20 seconds on every connection. Netcode libraries usually do this for you as part of their
+heartbeat or timeout logic.
+
+## A hole punch in code
+
+```csharp title="HolePuncher.cs"
+// Engine-agnostic. Both peers run this after the rendezvous server has exchanged endpoints.
+public sealed class HolePuncher
+{
+    const float PunchInterval = 0.1f;      // send a punch every 100 ms...
+    const float Timeout = 5f;              // ...for up to 5 s, then fall back to the relay
+
+    readonly UdpSocket _socket;            // the SAME socket the server saw, so the NAT mapping matches
+    readonly Endpoint[] _candidates;       // peer's public endpoint, plus its LAN endpoint
+    float _elapsed, _nextPunch;
+    public Endpoint? Connected { get; private set; }
+
+    public HolePuncher(UdpSocket socket, Endpoint[] candidates) { _socket = socket; _candidates = candidates; }
+
+    public PunchResult Update(float dt)
+    {
+        _elapsed += dt;
+        while (_socket.TryReceive(out Endpoint from, out byte[] data))
+            if (IsPunch(data) && System.Array.IndexOf(_candidates, from) >= 0)
+            {
+                Connected = from;
+                _socket.Send(from, PunchAck);  // let the other side know too
+                return PunchResult.Direct;
+            }
+
+        if (_elapsed > Timeout) return PunchResult.UseRelay;
+
+        if (_elapsed >= _nextPunch)
+        {
+            foreach (Endpoint e in _candidates) _socket.Send(e, PunchPacket);
+            _nextPunch += PunchInterval;
+        }
+        return PunchResult.Pending;
+    }
+
+    static readonly byte[] PunchPacket = { 0x50, 0x55, 0x4E, 0x43 }, PunchAck = { 0x50, 0x41, 0x43, 0x4B };
+    static bool IsPunch(byte[] d) => d.Length == 4 && d[0] == 0x50;
+}
+public enum PunchResult { Pending, Direct, UseRelay }
+```
+
+A real implementation also authenticates punch packets with a token from the rendezvous server, so a third party can't hijack the session.
+
+<Callout type="unity" title="Preview: NAT traversal in Unity and Steam">
+  **Unity Relay** (part of Unity Gaming Services) gives the host an *allocation* and a short **join code**. Clients use the code to join through
+  the relay, and Unity Transport handles the rest. On **Steam**, you don't deal with IP addresses at all: you connect to a `SteamId`, and Steam Networking
+  Sockets finds a route through Steam Datagram Relay. That's why the NGO + Steam module never asks players for an IP.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Only testing on one network">
+  Two machines on the same LAN never touch NAT. Test with a second machine on a phone hotspot (which is usually behind CGNAT) before you decide your
+  connection flow works.
+</Callout>
+
+<Callout type="pitfall" title="Asking players to port forward">
+  Port forwarding requires router access, doesn't work behind CGNAT, and exposes the player's machine. It's acceptable for a community dedicated server,
+  not as your game's connection plan.
+</Callout>
+
+<Callout type="pitfall" title="Exposing player IPs in P2P">
+  In a direct P2P mesh, every player can see every other player's IP address, and streamers get attacked this way. If your audience includes streamers or
+  competitive players, relay all traffic.
+</Callout>
+
+<KeyTakeaways>
+
+- **NAT** lets many private devices share one public address, and drops unsolicited incoming packets. That's why players can't simply host.
+- **STUN** tells a client its public endpoint. **Hole punching** has both peers send to each other at once so both NATs create mappings.
+- Hole punching needs **endpoint-independent mapping**. **Symmetric NAT** and some CGNAT break it, so a significant share of player pairs (often a fifth to a third) need another path.
+- **Relays** (TURN, Unity Relay, Steam Datagram Relay) always work and hide IP addresses, at the cost of some latency and bandwidth.
+- Production games **try direct and fall back to a relay**, or relay everything. Send **keep-alives** so NAT mappings don't expire.
+
+</KeyTakeaways>

@@ -1,0 +1,228 @@
+---
+title: Client-Side Prediction and Reconciliation
+order: 7
+summary: How a client moves its own player instantly while the server stays authoritative, and how it corrects itself when the two disagree.
+durationMin: 30
+objectives:
+  - Explain why a server-authoritative game feels delayed without prediction, and by how much
+  - Implement client-side prediction with sequence-numbered inputs
+  - Implement server reconciliation by rewinding to the server state and replaying unacknowledged inputs
+  - Identify what causes mispredictions and how to hide the corrections
+  - Decide what to predict and what to leave to the server
+prerequisites: [theory/authority-models, theory/tick-rate, theory/state-sync]
+tags: [prediction, reconciliation, latency-hiding]
+sources:
+  - title: Gabriel Gambetta, Fast-Paced Multiplayer, Part II (client-side prediction and server reconciliation)
+    url: https://www.gabrielgambetta.com/client-side-prediction-server-reconciliation.html
+  - title: Gabriel Gambetta, Fast-Paced Multiplayer, live demo
+    url: https://www.gabrielgambetta.com/client-side-prediction-live-demo.html
+  - title: Valve Developer Wiki, Source Multiplayer Networking (input prediction)
+    url: https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking
+  - title: Timothy Ford, Overwatch Gameplay Architecture and Netcode (GDC 2017)
+    url: https://www.youtube.com/watch?v=W3aieHjyNvw
+  - title: 'NGO docs: Client anticipation'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/advanced-topics/client-anticipation.html
+---
+
+Lesson 4 left you with a dilemma. Server authority stops cheating, but if the client only shows what the server says, every
+keypress takes a full round trip to have any visible effect. At 100 ms RTT, plus up to a tick of waiting on the server and
+a little buffering, the player presses W and their character starts moving about 150 ms later. Nobody enjoys a game that
+feels like that.
+
+The fix is something you'd do naturally in single-player code: **just move the character**. The client already has the
+movement code, the collision geometry and the input. It can compute where the server *will* put the player, show that
+immediately, and then check the server's answer when it arrives. This is <Term id="client-side-prediction">client-side
+prediction</Term>. The other half, fixing things up when the guess was wrong without throwing away the player's recent input,
+is <Term id="server-reconciliation">server reconciliation</Term>.
+
+## Prediction: simulate your own input locally
+
+Every tick, the client:
+
+1. Samples the input for this tick: buttons held, movement vector, aim.
+2. Tags it with an increasing <Term id="sequence-number">sequence number</Term> (or the tick number).
+3. Sends it to the server.
+4. **Applies it locally** with exactly the same movement code the server runs, and stores it in an <Term id="input-buffer">input buffer</Term>.
+
+The player sees the result instantly. As long as the client and server run the same code on the same inputs from the same
+starting state, they'll get the same result, and when the server's state arrives, it will match what the client already shows.
+
+## Why prediction alone isn't enough
+
+The server's state is always **old** by the time it arrives. Say the client is at tick 110 and receives the server's state for
+tick 104, where the server has just processed input #104. The client has already predicted inputs 105 to 110. If it simply
+snapped the player to the server's position, it would jump **back in time** by six ticks. Then it would continue from there,
+then receive the state for tick 105 and snap back again... The player would visibly stutter backwards on every update, which is
+exactly the <Term id="rubber-banding">rubber-banding</Term> players hate.
+
+## Reconciliation: rewind and replay
+
+The server includes one extra number with each state: **the sequence number of the last input it processed** for that
+player. That tells the client exactly which of its predictions the state already includes. Reconciliation is then:
+
+<Steps>
+
+1. **Discard** stored inputs up to and including the acknowledged one. The server has applied them.
+2. **Reset** the local player to the server's authoritative state.
+3. **Replay** every input that is still in the buffer (105 to 110), using the same fixed tick `dt`.
+4. The result is the new predicted present. If the prediction was correct, it's the same position the player was already shown, and nothing visibly changes.
+
+</Steps>
+
+<Sequence
+  title="Prediction and reconciliation over a 100 ms round trip"
+  actors={[
+    { id: 'c', label: 'Client', kind: 'client' },
+    { id: 's', label: 'Server', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'c', to: 'c', label: 'Input #105: predict, x = 1.0', note: 'store input #105 in the buffer', kind: 'local' },
+    { from: 'c', to: 's', label: 'Input #105', kind: 'unreliable' },
+    { from: 'c', to: 'c', label: 'Inputs #106 to #108: predict, x = 4.0', kind: 'local' },
+    { from: 's', to: 's', label: 'Apply #105: x = 1.0', kind: 'local' },
+    { from: 's', to: 'c', label: 'State: x = 1.0, last input #105', kind: 'unreliable' },
+    { from: 'c', to: 'c', label: 'Drop #105, reset to x = 1.0, replay #106 to #108: x = 4.0', note: 'same answer as before, so no visible change', kind: 'local' },
+    { from: 's', to: 's', label: 'Apply #106: a crate blocks, x = 1.5', note: 'something the client did not know about', kind: 'local' },
+    { from: 's', to: 'c', label: 'State: x = 1.5, last input #106', kind: 'unreliable' },
+    { from: 'c', to: 'c', label: 'Reset to x = 1.5, replay #107 and #108: x = 3.5', note: 'misprediction: smoothly correct from 4.0 to 3.5', kind: 'local' },
+  ]}
+/>
+
+## Try it
+
+Move the player with the arrow keys under each preset. Keep an eye on the gap between the predicted position and the
+server's ghost.
+
+<Sim name="prediction" preset="reconciliation" caption="Move under latency with and without prediction and reconciliation." />
+
+What you should notice:
+
+- **No prediction**: the player starts and stops a full RTT after you press and release the key. It feels sluggish, but it's always correct.
+- **Prediction only**: movement is instant, but every server update snaps the player back. The faster you move, the worse the rubber-banding.
+- **Prediction + reconciliation**: instant **and** stable. The server ghost trails behind by about half the RTT, but the player you control never jumps unless something really did differ.
+- **250 ms RTT**: replay still works, but when the server disagrees (for example a collision with another player), the correction covers more ticks and becomes visible.
+
+## The input buffer in code
+
+This engine-agnostic sketch holds inputs in a ring buffer, predicts locally and reconciles when a state arrives. The
+simulation function must be **pure** with respect to its inputs: same state + same input + same `dt` = same result.
+
+```csharp title="PredictedPlayer.cs"
+public struct PlayerInput { public uint Sequence; public float MoveX, MoveY; public bool Jump; }
+public struct PlayerState { public Vec3 Position; public Vec3 Velocity; public bool Grounded; }
+
+public sealed class PredictedPlayer
+{
+    const int BufferSize = 128;                  // > max RTT in ticks, plus margin (128 ticks = 2.1 s at 60 Hz)
+    readonly PlayerInput[] _inputs = new PlayerInput[BufferSize];
+    uint _nextSequence = 1;
+    uint _oldestUnacked = 1;
+
+    public PlayerState State;                    // the predicted present, used for rendering
+    public Vec3 VisualOffset;                    // decays to zero, hides corrections
+
+    // Called once per fixed tick on the owning client.
+    public PlayerInput PredictTick(float moveX, float moveY, bool jump, float tickDt)
+    {
+        var input = new PlayerInput { Sequence = _nextSequence++, MoveX = moveX, MoveY = moveY, Jump = jump };
+        _inputs[input.Sequence % BufferSize] = input;
+        State = Movement.Simulate(State, input, tickDt);   // the SAME code the server runs
+        return input;                                       // caller sends it (plus a few older ones for redundancy)
+    }
+
+    // Called when an authoritative state for this player arrives.
+    public void Reconcile(PlayerState serverState, uint lastProcessedSequence, float tickDt)
+    {
+        if (lastProcessedSequence + 1 < _oldestUnacked) return; // older than what we already reconciled
+        _oldestUnacked = lastProcessedSequence + 1;
+
+        Vec3 before = State.Position;
+
+        State = serverState;                                         // rewind to the truth
+        for (uint seq = _oldestUnacked; seq < _nextSequence; seq++)  // replay what the server has not seen yet
+            State = Movement.Simulate(State, _inputs[seq % BufferSize], tickDt);
+
+        // If the replayed present differs, don't teleport: keep the old visual position and blend it away.
+        VisualOffset += before - State.Position;
+    }
+
+    // Called every rendered frame: the offset shrinks by about 90% per 100 ms, whatever the frame rate.
+    public Vec3 RenderPosition(float frameDt)
+    {
+        VisualOffset *= (float)System.Math.Pow(0.1, frameDt / 0.1);
+        return State.Position + VisualOffset;
+    }
+}
+```
+
+On the server, the matching code takes each input off the network, applies `Movement.Simulate` once per input and records
+`lastProcessedSequence` for that player.
+
+## What makes predictions wrong
+
+Prediction only fails when the client's simulation differs from the server's. The usual causes:
+
+- **Other players and server-owned objects.** The client doesn't know where they *really* are now (it sees them in the past, lesson 8), so collisions with them are guesses.
+- **Server-side rules.** The server applied a stun, a knock-back or a slow that the client hadn't heard about yet.
+- **Rejected input.** The server decided you couldn't jump because you were already dead.
+- **Different code paths.** Using `Time.deltaTime`, a random number or a physics query that behaves differently on client and server.
+- **Lost input packets.** The server never got input #106 and had to guess. Sending the last 3–5 inputs in every packet makes this rare.
+
+Mispredictions are normal and expected. The goal is to make them **rare** (by sharing code and sending inputs redundantly) and
+**invisible** (by smoothing small corrections over 100–200 ms, and only snapping when the error is large, such as a teleport).
+
+## Keeping the server fed
+
+The server needs input #N to simulate tick N. If inputs arrive with jitter, some are late and the server has nothing to apply.
+So servers keep a small **input buffer** per player, typically one to three ticks, and clients run slightly **ahead** of the
+server, by about RTT / 2 plus that buffer, so their inputs arrive just in time. Overwatch famously adjusts this per client:
+if a client's inputs arrive late, the server tells it to simulate slightly faster for a moment to build a bigger buffer, and
+slower again when conditions improve. That's why NGO's `LocalTime` runs ahead of the server: it is the "client's predicted
+present".
+
+## What to predict
+
+| Predict | Don't predict (wait for the server) |
+|---|---|
+| Your own movement, jumping, crouching | Other players' deaths and damage numbers |
+| Firing effects: muzzle flash, recoil, sound | Kills, score, match end |
+| Opening a door you're standing next to | Picking up a contested item |
+| Weapon switching and reload animations | Anything involving randomness the server owns |
+
+Cosmetic predictions are cheap to undo. Predicting irreversible outcomes, such as showing a kill feed entry that the server
+later rejects, is far more confusing than a short delay.
+
+<Callout type="unity" title="Preview: prediction in Unity">
+  Netcode for GameObjects doesn't ship full prediction with input replay. Its **client anticipation** features
+  (`AnticipatedNetworkVariable` and `AnticipatedNetworkTransform`) let a client show an anticipated value immediately and correct it when the
+  authoritative value arrives, with an `OnReanticipate` hook where you can add your own replay. Many NGO games instead give the owner
+  authority over its own movement (lesson 4) and validate on the server. Unity's Netcode for Entities has built-in prediction and rollback.
+  Re-simulating Unity physics for a replay requires stepping it yourself with `Physics.Simulate`, which is expensive.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Side effects during replay">
+  Replaying five inputs must not play five jump sounds or spawn five dust particles. Separate the pure simulation step from the effects, and
+  only trigger effects for **new** ticks, never during replay.
+</Callout>
+
+<Callout type="pitfall" title="Predicting with frame time">
+  If the client predicts in `Update` with `Time.deltaTime` while the server simulates fixed ticks, every prediction is slightly wrong and every
+  update causes a correction. Predict on the same fixed tick, with the same `dt`, as the server.
+</Callout>
+
+<Callout type="pitfall" title="Snapping on every correction">
+  Applying a 2 cm correction instantly makes the camera twitch. Blend small errors away over a few frames with a visual offset, and keep the
+  simulation state itself exact.
+</Callout>
+
+<KeyTakeaways>
+
+- Without prediction, a server-authoritative game delays every action by at least one **RTT**.
+- **Client-side prediction** runs the same simulation code on the client immediately, using sequence-numbered inputs kept in a buffer.
+- **Reconciliation** resets to the server state, discards acknowledged inputs and **replays** the rest, so correct predictions never cause visible changes.
+- Mispredictions come from things the client couldn't know. Make them rare with shared code and redundant inputs, and invisible with smoothing.
+- Predict your own movement and cosmetic effects. Leave contested and irreversible outcomes to the server.
+
+</KeyTakeaways>

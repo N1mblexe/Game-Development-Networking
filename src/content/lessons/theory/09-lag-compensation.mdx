@@ -1,0 +1,206 @@
+---
+title: Lag Compensation
+order: 9
+summary: How a server judges a shot against the world the shooter actually saw, and the fairness trade-offs that come with rewinding time.
+durationMin: 25
+objectives:
+  - Explain why a perfectly aimed shot misses without lag compensation, and by how much
+  - Describe server-side rewind and calculate how far back the server must rewind for a given shot
+  - Implement a per-entity history ring buffer and a rewind-and-test hit check
+  - Explain the "shot behind cover" and peeker's advantage effects and how games limit them
+prerequisites: [theory/prediction-reconciliation, theory/interpolation-extrapolation]
+tags: [lag-compensation, hit-detection, shooters, fairness]
+sources:
+  - title: Valve Developer Wiki, Lag Compensation
+    url: https://developer.valvesoftware.com/wiki/Lag_Compensation
+  - title: Yahn Bernier (Valve), Latency Compensating Methods in Client/Server In-game Protocol Design and Optimization
+    url: https://developer.valvesoftware.com/wiki/Latency_Compensating_Methods_in_Client/Server_In-game_Protocol_Design_and_Optimization
+  - title: Gabriel Gambetta, Fast-Paced Multiplayer, Part IV (lag compensation)
+    url: https://www.gabrielgambetta.com/lag-compensation.html
+  - title: Riot Games, Peeking into VALORANT's Netcode (peeker's advantage)
+    url: https://technology.riotgames.com/news/peeking-valorants-netcode
+  - title: Timothy Ford, Overwatch Gameplay Architecture and Netcode (GDC 2017)
+    url: https://www.youtube.com/watch?v=W3aieHjyNvw
+---
+
+You line up the crosshair perfectly on an enemy running left, click, and the server says you missed. You weren't wrong
+about what you saw. What you saw was **old**. The enemy on your screen is drawn from snapshots that left the server half an
+RTT ago and then waited in your interpolation buffer for another 100 ms (lesson 8). By the time your shot reaches the server,
+the enemy has moved on.
+
+Think about what that means in Unity terms: you'd be calling `Physics.Raycast` against colliders that are in a different place
+from the meshes the player is aiming at. <Term id="lag-compensation">Lag compensation</Term> fixes that by letting the server
+**move the colliders back** to where the shooter saw them, just for the duration of the hit test.
+
+## How far behind is the shooter's view?
+
+When the shooter clicks, the remote enemy on their screen is roughly:
+
+> view age ≈ one-way latency (server → shooter) + interpolation delay
+
+When the server receives the shot, another one-way trip has passed. So from the server's point of view, the shooter was aiming at the world as it was:
+
+> rewind ≈ RTT + interpolation delay
+
+Valve's version of the same formula is *command execution time = current server time − packet latency − client view interpolation*.
+With 80 ms RTT and a 100 ms interpolation delay, the server must rewind about **180 ms**. An enemy running at 6 m/s moved 1.08 m in
+that time, which is far more than the width of a head hitbox. Without compensation, players have to aim more than a body width ahead
+of the target, and how far ahead changes with their ping. That isn't a skill anyone can learn.
+
+## Server-side rewind
+
+The server keeps a short history of every player's <Term id="hitbox">hitboxes</Term>, with one record per tick. When a shot arrives:
+
+<Steps>
+
+1. Work out which moment the shooter saw. Either the client sends the tick (and interpolation fraction) it was rendering when it fired, or the server estimates it from that client's RTT and interpolation delay.
+2. **Clamp** that rewind to a maximum, so a client can't claim to have fired a second ago.
+3. **Move** every other player's hitboxes back to their recorded positions at that moment, interpolating between the two surrounding ticks.
+4. **Ray-cast** the shot against the rewound hitboxes.
+5. **Restore** every hitbox to the present.
+6. Apply damage in the **present**, and broadcast the result.
+
+</Steps>
+
+<Sequence
+  title="A lag-compensated shot"
+  actors={[
+    { id: 'a', label: 'Shooter', kind: 'client' },
+    { id: 's', label: 'Server', kind: 'server' },
+    { id: 'b', label: 'Target', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'a', to: 'a', label: 'Fire while rendering server tick 1200', note: 'muzzle flash and sound are predicted locally', kind: 'local' },
+    { from: 'a', to: 's', label: 'Fire command: tick 1200 + 0.4, aim ray', kind: 'reliable' },
+    { from: 's', to: 's', label: 'Now at tick 1211: rewind target hitboxes to 1200.4', note: 'rewind clamped to at most 200 ms', kind: 'local' },
+    { from: 's', to: 's', label: 'Ray-cast: hit head. Restore hitboxes to tick 1211', kind: 'local' },
+    { from: 's', to: 'b', label: 'You took 150 damage', kind: 'reliable' },
+    { from: 's', to: 'a', label: 'Hit confirmed', note: 'the hit marker appears after a full RTT', kind: 'reliable' },
+  ]}
+/>
+
+The shooter is judged against what they actually saw. If their crosshair was on the target, they hit. This is often called
+**favor the shooter**.
+
+## Try it
+
+Shoot at the moving target, first without compensation and then with server rewind. Watch where the server's hitbox is when your shot arrives.
+
+<Sim name="lag-compensation" preset="rewind" caption="The server rewinds hitboxes to the moment you fired." />
+
+What you should notice:
+
+- **No compensation**: shots aimed straight at the target miss behind it. You have to lead by roughly your ping times the target's speed, and the lead changes when your ping does.
+- **Server rewind**: shots that are on target on your screen hit. The server's present-time hitbox is somewhere else entirely, but the rewound one lines up with what you saw.
+- The **gap** between the drawn target and the server's current hitbox grows with RTT and with the interpolation delay.
+
+## The history buffer
+
+The history is a fixed-size <Term id="ring-buffer">ring buffer</Term> per entity: one slot per tick, overwritten in a circle, so it never
+allocates and lookups are constant-time. At 60 Hz, 64 slots cover just over a second.
+
+```csharp title="LagCompensation.cs"
+public struct HitboxPose { public uint Tick; public Vec3 Position; public Quat Rotation; }
+
+public sealed class PoseHistory
+{
+    const int Size = 64;                               // 64 ticks = 1.07 s at 60 Hz
+    readonly HitboxPose[] _poses = new HitboxPose[Size];
+
+    public void Record(uint tick, Vec3 position, Quat rotation) =>
+        _poses[tick % Size] = new HitboxPose { Tick = tick, Position = position, Rotation = rotation };
+
+    // Pose at a fractional tick, for example 1200.4, blended between the two recorded ticks.
+    public bool TryGet(double tick, out Vec3 position, out Quat rotation)
+    {
+        uint t0 = (uint)System.Math.Floor(tick);
+        HitboxPose a = _poses[t0 % Size], b = _poses[(t0 + 1) % Size];
+        position = default; rotation = default;
+        if (a.Tick != t0 || b.Tick != t0 + 1) return false;   // too old: already overwritten
+        float f = (float)(tick - t0);
+        position = Vec3.Lerp(a.Position, b.Position, f);
+        rotation = Quat.Slerp(a.Rotation, b.Rotation, f);
+        return true;
+    }
+}
+
+public sealed class HitScan
+{
+    const double MaxRewindSeconds = 0.2;   // 200 ms: beyond this, the shooter must lead targets
+
+    public bool ProcessShot(Player shooter, double viewTick, Ray aim, uint serverTick, double tickDt,
+                            System.Collections.Generic.IEnumerable<Player> others, out Player victim)
+    {
+        victim = null;
+        // Never trust the client's claim blindly: clamp the rewind window.
+        double oldest = serverTick - MaxRewindSeconds / tickDt;
+        viewTick = System.Math.Clamp(viewTick, oldest, serverTick);
+
+        float best = float.MaxValue;
+        foreach (Player p in others)
+        {
+            if (p == shooter || !p.IsAlive) continue;
+            if (!p.History.TryGet(viewTick, out Vec3 pos, out Quat rot)) continue;
+            // Test against the REWOUND pose. Nothing in the live scene moves, so nothing needs restoring.
+            if (p.Hitbox.Raycast(aim, pos, rot, out float distance) && distance < best)
+            {
+                best = distance;
+                victim = p;
+            }
+        }
+        return victim != null;
+    }
+}
+```
+
+This version tests the ray against each hitbox's *recorded* pose mathematically, so the live scene never changes. The alternative is
+to actually move the colliders, call `Physics.Raycast` and move them back. That's simpler with complex colliders, but you must call
+`Physics.SyncTransforms()` after moving them, restore them every time, and make sure nothing else runs while the world is rewound.
+
+## The cost: fairness for the target
+
+Lag compensation moves the unfairness from the shooter to the target. Two well-known effects:
+
+- **Shot behind cover.** You sprint behind a wall, and a moment later you die. On the shooter's screen you were still in the open, and the server agreed with them. The higher the shooter's ping, the further "around the corner" this reaches. Capping the rewind (often 200–250 ms) limits how bad it can get. Players over the cap have to lead their targets.
+- **Peeker's advantage.** A player who moves out from behind cover sees the defender before the defender sees them, because the defender's view of the peeker is delayed by RTT plus interpolation. Riot's VALORANT team describes cutting this with 128-tick servers, low interpolation delays and a network of data centres close to players, because the advantage shrinks as total latency shrinks.
+
+Most competitive games accept favor-the-shooter, because missing shots you clearly landed feels worse than occasionally dying behind a wall.
+
+## Beyond hit-scan
+
+- **Projectiles** (rockets, arrows) are often spawned on the server and then fast-forwarded by the shooter's latency, so they start where the shooter saw them leave the barrel.
+- **Melee and abilities** can use the same rewind check for their area.
+- **Client-side hit detection** (the client says "I hit", the server checks plausibility) is simpler and used in some co-op games, but it's essentially client authority (lesson 4) and much easier to cheat.
+
+<Callout type="unity" title="Preview: lag compensation in Unity">
+  Netcode for GameObjects has no built-in lag compensation. You record poses on the server each network tick (using
+  `NetworkManager.NetworkTickSystem.Tick`), send the tick the client was rendering (`NetworkManager.ServerTime` on that client) with the fire RPC,
+  and rewind as shown above. Netcode for Entities includes a physics history for exactly this. Nothing about it is specific to Steam.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Trusting the client's timestamp">
+  If the server rewinds to whatever tick the client sends, a cheater can claim to have fired two seconds ago, when the target was standing
+  still in the open. Clamp the rewind to a maximum, and compare the claim with the server's own RTT estimate for that client.
+</Callout>
+
+<Callout type="pitfall" title="Forgetting to restore">
+  If you physically move colliders back and an exception skips the restore, players are left standing in their old positions on the server.
+  Use `try`/`finally`, or test against recorded poses without moving anything.
+</Callout>
+
+<Callout type="pitfall" title="Recording at the wrong moment">
+  Record poses at the **end** of each server tick, after movement, so tick N's record matches what clients receive in snapshot N. Off-by-one-tick
+  history makes every shot slightly wrong in the direction of motion.
+</Callout>
+
+<KeyTakeaways>
+
+- Shooters see remote players about **RTT / 2 + interpolation delay** in the past, so the server receives each shot about **RTT + interpolation delay** late.
+- **Lag compensation** rewinds other players' hitboxes to the moment the shooter saw, tests the shot, then restores the present.
+- Keep a per-entity **ring buffer** of poses, one per tick, and blend between ticks for the exact moment.
+- **Clamp** the rewind (about 200 ms) to limit "shot behind cover" and to stop clients claiming arbitrary times.
+- Favor the shooter moves the unfairness to the target. **Peeker's advantage** shrinks only by lowering total latency.
+
+</KeyTakeaways>
