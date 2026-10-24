@@ -1,0 +1,212 @@
+---
+title: Network Topologies
+order: 3
+summary: Dedicated servers, listen servers, peer-to-peer, relays and distributed authority, and how to choose between them.
+durationMin: 20
+objectives:
+  - Describe who connects to whom in dedicated-server, listen-server, peer-to-peer, relayed and distributed-authority games
+  - Compare the topologies on cost, latency, cheating, scalability and what happens when a player leaves
+  - Estimate the upload bandwidth a host or peer needs
+  - Choose a topology for a given game and explain the trade-off
+prerequisites: [theory/packets-and-protocols, theory/latency-jitter-loss]
+tags: [fundamentals, topology, architecture]
+sources:
+  - title: 'NGO docs: Network topologies'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/terms-concepts/network-topologies.html
+  - title: 'NGO docs: Listen server and host architecture'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/learn/listenserverhostarchitecture.html
+  - title: 'NGO docs: Distributed authority topologies'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/terms-concepts/distributed-authority.html
+  - title: Gabriel Gambetta, Fast-Paced Multiplayer, Part I (client-server architecture)
+    url: https://www.gabrielgambetta.com/client-server-game-architecture.html
+  - title: 'Steamworks docs: Steam Datagram Relay'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+---
+
+In a single-player Unity game there is exactly one copy of the world, and every `Update` runs against it. In multiplayer,
+every player has a copy, and those copies drift apart the moment the first packet is late. So before you write any netcode,
+you have to decide two things: **which machines talk to which**, and **whose copy of the world is the real one**.
+
+That decision is the game's network topology. It affects your server bill, how laggy the game feels, how easy it is to
+cheat and what happens when someone rage-quits. Changing it late in a project is very expensive, so it's worth getting it
+right up front.
+
+## The vocabulary
+
+- A <Term id="server">server</Term> is the process that holds the authoritative copy of the game state (or most of it) and that other machines connect to.
+- A <Term id="client">client</Term> is a process that connects to a server, sends player input and renders the world it is told about.
+- A <Term id="dedicated-server">dedicated server</Term> is a server with no local player, usually a headless build running in a data centre.
+- A <Term id="listen-server">listen server</Term> is a server running inside a player's game. The player's game is then a <Term id="host">host</Term>: a server and a local client in the same process.
+- In <Term id="peer-to-peer">peer-to-peer (P2P)</Term>, every player's machine sends directly to the others and no machine is special.
+- A <Term id="relay">relay</Term> is a server that only forwards packets between players and doesn't run any game logic.
+
+## Dedicated server
+
+<Diagram name="topology" variant="dedicated" caption="Every client talks to one server in a data centre." />
+
+Each client opens one connection to a server that you (or a hosting provider) run. The server runs the simulation,
+and clients send input and receive state.
+
+- **Fair**: no player is "closer" to the server than the others by design, and the server has no local player with an advantage.
+- **Secure**: the server is on your hardware, so players can't modify it. This is the foundation of serious anti-cheat.
+- **Reliable**: the match continues when any player leaves, and data centres have public IP addresses, so there are no NAT problems (lesson 11).
+- **Costly**: you pay for CPU and bandwidth per match, plus the work of deploying, scaling and monitoring a fleet. You also need servers in several regions, or distant players get high RTT.
+
+Competitive shooters, MMOs and anything with ranked play or in-game purchases worth stealing use dedicated servers.
+
+## Listen server (host)
+
+<Diagram name="topology" variant="listen-server" caption="One player's game is also the server." />
+
+One player's game runs the server **and** a local client. Everyone else connects to that player. Unity developers know
+this as "Host" mode. It costs you nothing to run, and it's simple to set up, which is why most co-op and indie games
+start here.
+
+The trade-offs all come from one player being special:
+
+- **Host advantage**: the host's own client has 0 ms RTT to the server. In a shooter that's a large advantage.
+- **The host's connection is everyone's connection**: home upload bandwidth is often 5–20× smaller than download, and the host has to upload every update to every other player.
+- **Cheating is easy for the host**: they have the whole game state in memory and can modify the server.
+- **The game ends when the host leaves**, unless you implement *host migration*, which means transferring the full state to another player and having everyone reconnect. That's hard to do well.
+- **NAT**: players' home routers block incoming connections, so you need hole punching or a relay (lesson 11).
+
+How much upload does a host need? Suppose 8 players, a 30 Hz send rate and 400-byte snapshots per client:
+
+> 7 remote clients × 30 packets/s × (400 + 28 header bytes) ≈ 90 KB/s ≈ **0.72 Mbit/s** upload
+
+That fits on most connections. With 16 players and 1 KB snapshots it is about 3.6 Mbit/s, which a lot of home connections
+and mobile hotspots can't sustain while someone is also streaming video.
+
+## Peer-to-peer
+
+<Diagram name="topology" variant="p2p" caption="Full mesh: everyone connects to everyone." />
+
+In a full mesh, each of *n* players connects to the other *n − 1*, so there are n(n − 1) / 2 connections in total. That's
+6 connections for 4 players and 28 for 8. Each peer sends its own updates to every other peer, so each player's upload grows
+with the player count.
+
+P2P has a real advantage: a message goes straight from A to B, without a detour through a server, so latency between any
+two players is as low as it can be. That's why fighting games and many RTS games use it, together with lockstep or rollback
+(lesson 12), which keep peers consistent without anyone being in charge.
+
+The disadvantages: nobody is authoritative, so peers must agree through determinism or voting. Every peer sees every other
+peer's IP address, which makes DDoS attacks easier. NAT traversal has to succeed for **every pair** of players. And
+the approach doesn't scale beyond about 8 players.
+
+<Callout type="note" title="P2P sometimes means something different">
+  Platform SDKs, including Steam's, use "P2P" to mean "player-to-player, without a dedicated server", even when one of the
+  players is a host. A Steam "P2P game" is very often a listen server whose traffic goes over Steam's relay network. Pay attention
+  to who is authoritative, not just to the name.
+</Callout>
+
+## Relays
+
+<Diagram name="topology" variant="relay" caption="Traffic goes through a relay that forwards packets and runs no game logic." />
+
+A relay isn't a separate authority model. It changes the **path** that packets take. Each player opens an outgoing
+connection to the relay, so NAT never blocks anything, and the relay forwards packets between them. The authority model on
+top is usually a listen server, with the host's game still running the simulation.
+
+Relays solve connectivity and hide players' IP addresses from each other. They cost a little extra latency (typically
+5–30 ms, depending on how close the relay is), and someone pays for the bandwidth. Unity offers Relay as a service, and
+Steam offers the Steam Datagram Relay network, which can even *reduce* latency by routing over Valve's backbone instead of
+the public internet.
+
+## Distributed authority
+
+<Diagram name="topology" variant="distributed-authority" caption="Each client owns some objects; a cloud service routes traffic and keeps session state." />
+
+<Term id="distributed-authority">Distributed authority</Term> is a newer hybrid. There's no game server. Instead, each client
+has authority over the objects it owns and simulates them, and a lightweight cloud service routes messages and keeps a copy
+of session state. One client acts as the *session owner* for global tasks, and if it leaves, the service promotes another.
+
+Because there's no host, there's no host advantage, and there's no single point of failure. The service doesn't run game
+logic, so it is much cheaper than a dedicated server. The cost is trust: each client has the final say on the objects it
+owns, so cheating is easier. Physics interactions between objects owned by different players also need care, because no
+single machine simulates them together. Unity's own docs describe it as a poor fit for high-performance competitive games.
+
+## Comparing them
+
+| | Dedicated | Listen server | P2P mesh | Distributed authority |
+|---|---|---|---|---|
+| Running cost | High | None (plus relay) | None (plus relay) | Low (service fee) |
+| Who simulates | Server | Host | Every peer | Each object's owner |
+| Fairness | Best | Host advantage | Even | Even |
+| Cheat resistance | Strong | Weak for the host | Weak | Weak |
+| Player leaves | No effect | Host leaving ends the match | Manageable | Ownership moves to others |
+| NAT problems | None | Host must be reachable | Every pair | None (service) |
+| Scale | Hundreds of players | 2–16 | 2–8 | Tens |
+
+## Choosing
+
+<Steps>
+
+1. **Is there ranked play, real money or a competitive economy?** Use a dedicated server. Anything else invites cheating you can't fix later.
+2. **Is it a small co-op game with friends?** Use a listen server with a relay. It's cheap, simple and well supported by Unity and Steam.
+3. **Is it a fighting game or a small RTS?** Use P2P with rollback or lockstep, usually over a relay to hide IPs.
+4. **Is it a casual game with many interacting objects and no server budget?** Consider distributed authority.
+
+</Steps>
+
+## The same code, different roles
+
+Well-structured netcode doesn't hard-code a topology. The game logic asks "am I the server?" and "am I a client?", and a
+host answers yes to both. This engine-agnostic sketch shows the shape that NGO's `StartServer`, `StartHost` and
+`StartClient` follow:
+
+```csharp title="NetRole.cs"
+public enum NetRole { DedicatedServer, Host, Client }
+
+public sealed class Session
+{
+    public NetRole Role { get; }
+    public bool IsServer => Role != NetRole.Client;          // dedicated server or host
+    public bool IsClient => Role != NetRole.DedicatedServer; // host or client
+    public bool IsHost => IsServer && IsClient;
+
+    public Session(NetRole role) => Role = role;
+
+    public void Tick(float dt)
+    {
+        if (IsServer) SimulateWorld(dt);      // authoritative simulation
+        if (IsClient) SendLocalInput();       // a host "sends" to itself without a socket
+        if (IsServer) BroadcastState();       // to every remote client
+        if (IsClient) RenderLatestState();
+    }
+
+    void SimulateWorld(float dt) { /* ... */ }
+    void SendLocalInput() { /* ... */ }
+    void BroadcastState() { /* ... */ }
+    void RenderLatestState() { /* ... */ }
+}
+```
+
+<Callout type="unity" title="Preview: topologies in Unity and Steam">
+  In Netcode for GameObjects, `NetworkManager.StartServer()`, `StartHost()` and `StartClient()` choose the role. The Unity Relay
+  service plugs into Unity Transport for relayed listen servers, and NGO 2.x adds a distributed authority topology backed by Unity's
+  Multiplayer Services. With Steam, a lobby finds players and Steam Networking Sockets connects them through Steam Datagram Relay. You'll
+  build that in the NGO + Steam module.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Assuming server and client are different machines">
+  On a host, `IsServer` and `IsClient` are both true. Code written as `if (IsServer) ... else ...` silently skips the client half on the host,
+  so the host player sees no UI updates, no sounds, or double-applied effects. Test every feature as host, as client and on a dedicated server.
+</Callout>
+
+<Callout type="pitfall" title="Picking a listen server, then adding ranked play">
+  Once there's something to win, hosts will modify their game. Moving a listen-server game to dedicated servers later means re-checking every
+  place where the host's local player was trusted. Decide early.
+</Callout>
+
+<KeyTakeaways>
+
+- The topology decides **who talks to whom** and **whose copy of the world is the truth**.
+- **Dedicated servers** are fair, secure and robust, but cost money and operations work.
+- **Listen servers (hosts)** are free and simple, but give the host an advantage, depend on the host's upload, and end when the host leaves.
+- **P2P meshes** have the lowest latency between pairs, but need determinism, expose IP addresses and don't scale past about 8 players.
+- **Relays** change the path, not the authority: they solve NAT and hide IP addresses, at the cost of some latency.
+- **Distributed authority** spreads ownership across clients with a cloud service in the middle: cheap and robust, but with less protection against cheating.
+
+</KeyTakeaways>

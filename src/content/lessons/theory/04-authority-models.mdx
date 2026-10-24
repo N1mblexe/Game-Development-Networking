@@ -1,0 +1,202 @@
+---
+title: Authority Models
+order: 4
+summary: Who decides what is true, why "never trust the client" is the default, and when giving clients authority is a reasonable trade.
+durationMin: 20
+objectives:
+  - Define authority and ownership, and explain why every piece of state needs exactly one authority
+  - Compare server-authoritative, client-authoritative and mixed models on responsiveness, cheating and conflicts
+  - Design messages as intents ("I want to") rather than results ("I did")
+  - Write server-side checks that resolve conflicts and reject impossible requests
+prerequisites: [theory/topologies]
+tags: [authority, architecture, cheating]
+sources:
+  - title: Gabriel Gambetta, Fast-Paced Multiplayer, Part I (authoritative servers and dumb clients)
+    url: https://www.gabrielgambetta.com/client-server-game-architecture.html
+  - title: 'NGO docs: Authority'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/terms-concepts/authority.html
+  - title: 'NGO docs: NetworkTransform (server and owner authority modes)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/components/networktransform.html
+  - title: Glenn Fiedler, Networked Physics in Virtual Reality (authority and ownership for physics)
+    url: https://gafferongames.com/post/networked_physics_in_virtual_reality/
+---
+
+Two players both grab the last health pack in the same frame. On each screen, *you* got there first. Who actually gets it?
+In a single-player Unity game this question doesn't come up, because there is one `Update` loop and one copy of the
+`HealthPack` component. In multiplayer there are several copies of the world, all a little out of date, and they will
+disagree. Someone needs the final say.
+
+That final say is <Term id="authority">authority</Term>. For every piece of state in your game (a player's position, a door's
+open state, the score, who holds the flag) exactly one machine is the authority. The others hold **copies** that they
+display, predict and correct.
+
+## Why exactly one authority
+
+If two machines both believe they can write the same value, you get split-brain. Each applies its own change, broadcasts
+it, and receives the other's. Depending on arrival order, players see different final results, or the value flickers back
+and forth. Picking one authority per piece of state turns "who's right?" into a simple rule: **the authority's value wins,
+and everyone else converges to it**.
+
+Authority can be assigned at different levels:
+
+- **Whole world**: the server decides everything. This is the classic model.
+- **Per object**: each object has an owner who is its authority. A player's own character, for example, might be owned by their client.
+- **Per field**: the client is authoritative over its camera angle, but the server is authoritative over its health.
+
+## Server-authoritative
+
+In a <Term id="server-authoritative">server-authoritative</Term> game, clients don't change the world. They send **inputs**
+("W is held, aim yaw is 92°, fire was pressed"), the server simulates and sends back the results. Gabriel Gambetta calls this
+the *dumb client*: it is a terminal that shows what the server says.
+
+<Sequence
+  title="Server-authoritative: the client asks, the server decides"
+  actors={[
+    { id: 'c', label: 'Client A', kind: 'client' },
+    { id: 's', label: 'Server', kind: 'server' },
+    { id: 'b', label: 'Client B', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'c', to: 's', label: 'Input #412: move forward, fire', kind: 'unreliable' },
+    { from: 's', to: 's', label: 'Validate: alive? ammo? cooldown ready?', kind: 'local' },
+    { from: 's', to: 's', label: 'Simulate tick: move A, spawn projectile', kind: 'local' },
+    { from: 's', to: 'c', label: 'State: A at (10.2, 0, 4.1), projectile #77', note: 'includes "last input processed: #412"', kind: 'unreliable' },
+    { from: 's', to: 'b', label: 'State: A at (10.2, 0, 4.1), projectile #77', kind: 'unreliable' },
+  ]}
+/>
+
+The advantages are huge:
+
+- **Cheating is limited to what inputs can do.** A speed hack that edits the client's position does nothing, because the client's position isn't used. An aimbot is still possible, because aiming *is* an input, but teleporting and infinite ammo are not.
+- **Conflicts resolve naturally.** The server processes requests one at a time. Whoever's input reaches the server first gets the health pack.
+- **One simulation.** Physics, AI and game rules run in one place, so there's no need for every client to agree on them.
+
+The cost is **latency**. Without further work, pressing W does nothing until the input has travelled to the server, been
+simulated and the result has come back: a full RTT, plus up to a tick of waiting on the server. At 100 ms RTT that feels like
+moving through syrup. Client-side prediction (lesson 7) exists precisely to remove that delay while keeping the server in
+charge.
+
+## Client-authoritative
+
+In a <Term id="client-authoritative">client-authoritative</Term> design, a client simulates something itself and tells
+everyone the **result**: "my character is at (10.2, 0, 4.1)", "I hit player 3 for 40 damage". It feels perfectly
+responsive, because there's no round trip, and it's much simpler to build.
+
+It also hands every player the keys to the game:
+
+- **Speed and teleport hacks**: the client reports any position it likes.
+- **Damage hacks**: "I hit everyone for 9,999" is just another message.
+- **Conflicts**: two clients both report that they picked up the health pack. Each was authoritative over its own claim, so who wins?
+
+Client authority isn't always wrong. For a co-op game among friends, giving each client authority over its own movement
+is a common, pragmatic choice: it's responsive without prediction code, and the only person a cheater spoils the game for
+is their friends. Cosmetic state (emotes, camera pitch, flashlight direction) is fine to trust in any game.
+
+## Intents, not results
+
+The single most useful habit in multiplayer design is phrasing client messages as **intents**:
+
+| Result (trusts the client) | Intent (server decides) |
+|---|---|
+| "I'm now at (10, 0, 4)" | "I'm holding forward this tick" |
+| "I picked up item 7" | "I'd like to pick up item 7" |
+| "I hit player 3 for 40 damage" | "I fired at tick 1820 with this aim direction" |
+| "I bought the sword, I have 50 gold left" | "I'd like to buy the sword" |
+
+An intent can be refused. A result can only be believed or disbelieved, and disbelieving it means rebuilding the logic on
+the server anyway.
+
+## Mixed and distributed models
+
+Most shipped games mix models per piece of state. A typical co-op game might use:
+
+- **Owner-authoritative** movement for each player's own character, for responsiveness without prediction code.
+- **Server-authoritative** health, inventory, enemies, doors and pickups, which are the things that matter.
+- **Client-local** cosmetics that are never synchronized at all, such as footstep sounds and particles.
+
+<Term id="ownership">Ownership</Term> is how per-object authority is expressed. In a server-authoritative game, the server
+owns everything by default and can grant ownership of some objects to clients. In distributed authority, ownership is the
+whole model. Objects can change owner at runtime, for example when a player picks up a ball, and the system must handle a
+request to take ownership of an object that someone else is in the middle of changing.
+
+## Try it
+
+Use the cheat buttons to send a speed hack and a teleport, first against a client-authoritative game, then against a
+server-authoritative one.
+
+<Sim name="authority-cheat" preset="client-authority" caption="The same cheats against two authority models." />
+
+What you should notice:
+
+- With **client authority**, the cheat is accepted instantly and every other player sees the cheater teleport. Nothing even notices.
+- With **server authority**, the client's local copy might jump, but the next server update snaps it back. Other players never see it.
+- Server authority doesn't stop everything: pressing a valid input faster or more accurately (botting) is still accepted, because those are legal inputs.
+
+## Server-side checks
+
+A server-authoritative server still needs to check intents, because a hacked client can send any intent. Here is the
+health-pack race, resolved on the server:
+
+```csharp title="PickupSystem.cs"
+// Engine-agnostic server code. Runs only on the authority.
+public sealed class PickupSystem
+{
+    const float MaxPickupRange = 2.5f;   // metres, a little generous to allow for latency
+
+    public bool TryPickUp(Player requester, Pickup pickup)
+    {
+        // 1. Is the request even possible?
+        if (!requester.IsAlive) return false;
+        if (pickup.IsTaken) return false; // the second request in the same tick lands here
+
+        // 2. Does it match the server's own world? Use the server's positions, never the client's claim.
+        float distance = (pickup.Position - requester.Position).Length();
+        if (distance > MaxPickupRange) return false;
+
+        // 3. Apply. Because the server handles requests one at a time, exactly one player wins.
+        pickup.IsTaken = true;
+        requester.Health = System.Math.Min(requester.MaxHealth, requester.Health + pickup.Amount);
+        return true; // health and the pickup's state replicate to everyone as normal state
+    }
+}
+```
+
+The client only sends "I'd like to pick up pickup #7". If both players ask in the same tick, the server picks whichever request
+it processes first, and the loser's client sees the pack disappear on the next update.
+
+<Callout type="unity" title="Preview: authority in Unity">
+  In Netcode for GameObjects, the server owns every `NetworkObject` unless you spawn it with an owner or change ownership. A
+  `NetworkVariable` is writable by the server by default (`NetworkVariableWritePermission.Server`), and you can opt into owner
+  writes. `NetworkTransform` is server-authoritative by default and also supports an owner-authoritative mode, and NGO 2.x adds a
+  whole distributed authority topology. Steam itself has no notion of game authority: it moves bytes, and you decide what
+  they mean.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Client-reported damage">
+  "The client already knows it hit, so let it tell the server" is the fastest way to ship a game where every lobby has a cheater.
+  Clients may *request* a shot. The server decides whether it hit (lesson 9 shows how to do that fairly).
+</Callout>
+
+<Callout type="pitfall" title="Trusting the client's copy of server state">
+  Validation must use the server's own data. Checking "is the player near the pickup?" against a position the client reported
+  checks nothing.
+</Callout>
+
+<Callout type="pitfall" title="Two authorities by accident">
+  A common bug is a client that writes a value locally for responsiveness *and* receives the server's value, without a rule
+  for which wins. You get flicker or permanent divergence. If the client must change something early, treat it as a prediction
+  that the authority's next value overwrites.
+</Callout>
+
+<KeyTakeaways>
+
+- Every piece of state needs **exactly one authority**. Everyone else holds copies that converge to it.
+- **Server-authoritative** games limit cheating to what inputs can do and resolve conflicts naturally, but add a round trip of latency that prediction must hide.
+- **Client-authoritative** state is responsive and simple, but trusts every player. It's acceptable for co-op movement and cosmetics.
+- Send **intents** ("I'd like to") rather than **results** ("I did"), so the authority can refuse them.
+- Authority can be per world, per object (**ownership**) or per field. Most games mix them.
+- The authority must still **validate** every request against its own state.
+
+</KeyTakeaways>
