@@ -1,0 +1,61 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getFlashcards, getLessons, getModules, lessonUrl, moduleUrl } from '../lib/content/nav';
+import { withBase } from '../lib/url';
+
+const modules = await getModules();
+const lessons = await getLessons();
+const cards = await getFlashcards();
+const byModule = (id: string) => lessons.filter((l) => l.id.startsWith(`${id}/`));
+---
+
+<BaseLayout title="NetLearn" wide>
+  <section class="mb-12 max-w-3xl">
+    <p class="mb-2 text-sm font-semibold text-accent">Multiplayer for Unity developers</p>
+    <h1 class="text-4xl font-extrabold tracking-tight sm:text-5xl">Learn game networking by watching it happen.</h1>
+    <p class="mt-4 text-lg text-muted">
+      Start with the theory every multiplayer game relies on, then build with Unity Netcode for GameObjects and
+      Steamworks through Facepunch, and finally combine them into a Steam-lobby game. You can change the latency and
+      watch the result, test yourself, and keep what you learn with spaced-repetition flashcards.
+    </p>
+    <div class="mt-6 flex flex-wrap gap-3">
+      {lessons[0] && <a class="btn btn-primary" href={lessonUrl(lessons[0])}>Start the course</a>}
+      <a class="btn" href={withBase('/playground/')}>Open the playground</a>
+      <a class="btn" href={withBase('/review/')}>
+        Review cards · <span data-cards-due data-card-ids={cards.map((c) => c.globalId).join(',')}></span>
+      </a>
+    </div>
+  </section>
+
+  <section aria-labelledby="modules-heading">
+    <h2 id="modules-heading" class="mb-4 text-xl font-bold">Modules</h2>
+    <div class="grid gap-4 md:grid-cols-2">
+      {
+        modules.map((m) => {
+          const ls = byModule(m.id);
+          return (
+            <a href={moduleUrl(m.id)} class="card group flex flex-col p-5 hover:border-accent" style={`--module:${m.data.color}`}>
+              <div class="mb-3 flex items-center gap-3">
+                <span class="grid h-10 w-10 place-items-center rounded-lg font-bold text-white" style={`background:${m.data.color}`}>{m.data.badge}</span>
+                <div>
+                  <p class="text-xs text-muted">Module {m.data.order}</p>
+                  <h3 class="text-lg font-bold group-hover:text-accent">{m.data.title}</h3>
+                </div>
+              </div>
+              <p class="flex-1 text-sm text-muted">{m.data.summary}</p>
+              <div class="mt-4" data-module-progress data-lesson-keys={ls.map((l) => l.id).join(',')}>
+                <div class="h-1.5 overflow-hidden rounded-full bg-surface-2">
+                  <div class="h-full rounded-full transition-[width]" style="width: var(--pct, 0%); background: var(--module)" />
+                </div>
+                <div class="mt-1.5 flex justify-between text-xs text-muted">
+                  <span data-progress-text>0/{ls.length} lessons</span>
+                  <span data-exam-status={m.id}>Not attempted</span>
+                </div>
+              </div>
+            </a>
+          );
+        })
+      }
+    </div>
+  </section>
+</BaseLayout>

@@ -1,0 +1,11 @@
+---
+/** <KeyTakeaways> wraps a Markdown bullet list. Every lesson ends with one. */
+---
+
+<section class="not-prose my-10 rounded-xl border border-border bg-surface p-5" aria-label="Key takeaways">
+  <h2 class="mb-3 flex items-center gap-2 text-lg font-bold">
+    <svg viewBox="0 0 24 24" class="h-5 w-5 text-ok" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="m5 12 5 5 9-10"></path></svg>
+    Key takeaways
+  </h2>
+  <div class="prose max-w-none [&_ul]:space-y-1"><slot /></div>
+</section>

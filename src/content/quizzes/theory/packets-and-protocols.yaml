@@ -1,0 +1,72 @@
+passPct: 70
+questions:
+  - id: port-purpose
+    type: single
+    prompt: A dedicated server and a voice-chat app run on the same PC. What lets incoming packets reach the right program?
+    options:
+      - The IP address
+      - The port number
+      - The MTU
+      - The TCP handshake
+    answer: 1
+    explanation: >-
+      The IP address gets the packet to the machine; the **port** identifies which program on that machine receives it.
+      Together they form an endpoint.
+  - id: hol-blocking
+    type: single
+    prompt: Why does a single lost TCP segment cause a visible hitch in a game, even when newer updates have already arrived?
+    options:
+      - TCP drops all packets after a loss
+      - TCP must deliver bytes in order, so newer data waits for the lost segment to be retransmitted
+      - UDP packets are prioritised over TCP by routers
+      - The TCP handshake has to be repeated after every loss
+    answer: 1
+    explanation: >-
+      This is **head-of-line blocking**. TCP is one ordered stream, so data behind a gap is held back until the gap is filled.
+      The game receives the stale update and the fresh one in a late burst.
+  - id: udp-guarantees
+    type: multi
+    prompt: Which of these does plain UDP guarantee? Select all that apply.
+    options:
+      - Delivery
+      - Ordering
+      - That each datagram arrives intact or not at all (checksum)
+      - No duplicates
+      - Congestion control
+    answers: [2]
+    explanation: >-
+      UDP only guarantees that a datagram that *does* arrive is intact, because a corrupted one fails the checksum and is dropped.
+      Delivery, ordering, de-duplication and congestion control are up to the application, which is exactly what game
+      netcode layers add.
+  - id: delivery-choice
+    type: order
+    prompt: Order these delivery modes from the fewest guarantees to the most.
+    items:
+      - Unreliable
+      - Unreliable sequenced
+      - Reliable (unordered)
+      - Reliable ordered
+    explanation: >-
+      Each step adds a guarantee and a cost. Sequenced delivery drops stale packets, reliable delivery retransmits until acknowledged,
+      and ordered delivery can also block later messages while waiting for a missing one.
+  - id: unreliable-position
+    type: truefalse
+    prompt: A player's position, sent 30 times per second, is a good candidate for **unreliable** delivery.
+    answer: true
+    explanation: >-
+      A newer position replaces the old one 33 ms later, so retransmitting a lost one would only deliver stale data.
+      Use reliable delivery for events that must happen exactly once.
+  - id: wrong-delivery-line
+    type: codeline
+    prompt: One of these RPCs uses a delivery type that will cause gameplay bugs on a lossy connection. Click the line that needs to change.
+    code: |-
+      [Rpc(SendTo.Server, Delivery = RpcDelivery.Unreliable)]
+      void PickUpKeyRpc(ulong keyId) { /* give the key to the player */ }
+
+      [Rpc(SendTo.NotServer, Delivery = RpcDelivery.Unreliable)]
+      void AimPreviewRpc(Vector3 aim) { /* cosmetic gun rotation */ }
+    answerLines: [1]
+    explanation: >-
+      Picking up a key is a one-time gameplay event. If that packet is lost, the player never gets the key. It needs reliable
+      delivery, which is the default when you leave out `Delivery`. The aim preview is cosmetic and resent constantly, so
+      unreliable delivery is fine there.

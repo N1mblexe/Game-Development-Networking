@@ -1,0 +1,11 @@
+---
+// Phase 0: Pagefind's default UI. Agent C styles it to match the site and adds the Ctrl/⌘+K modal.
+import Search from 'astro-pagefind/components/Search.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Search">
+  <h1 class="mb-6 text-3xl font-extrabold tracking-tight">Search</h1>
+  <Search className="block" />
+  <p class="mt-4 text-sm text-muted">The search index is built by <code>pnpm build</code>, so it is empty in dev mode.</p>
+</BaseLayout>

@@ -1,0 +1,13 @@
+---
+/**
+ * One-off sequence diagram, no registration needed:
+ * <Sequence title="Join" actors={[{ id: 'c', label: 'Client', kind: 'client' }, ...]}
+ *           steps={[{ from: 'c', to: 's', label: 'ConnectionRequest', kind: 'reliable' }, ...]} />
+ */
+import SequenceFlow from '../diagrams/SequenceFlow';
+import type { SequenceProps } from '../diagrams/types';
+
+type Props = SequenceProps;
+---
+
+<SequenceFlow client:visible {...Astro.props} />

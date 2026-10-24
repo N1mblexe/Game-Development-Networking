@@ -1,0 +1,10 @@
+title: NGO + Steam Together
+short: NGO+Steam
+order: 4
+summary: >-
+  Combine everything: Steam lobbies for matchmaking, FacepunchTransport for NGO's traffic, invites,
+  SteamId to clientId mapping, auth-ticket approval, disconnect handling, and a shipping checklist.
+color: '#e8833a'
+badge: N+S
+prerequisites: [ngo, steam]
+estimatedHours: 6

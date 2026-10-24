@@ -1,0 +1,20 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import ProgressManager from '../components/progress/ProgressManager';
+import { getLessons, getModules } from '../lib/content/nav';
+
+const lessons = await getLessons();
+const modules = (await getModules()).map((m) => ({
+  id: m.id,
+  title: m.data.title,
+  lessonKeys: lessons.filter((l) => l.id.startsWith(`${m.id}/`)).map((l) => l.id),
+}));
+---
+
+<BaseLayout title="Your progress">
+  <h1 class="mb-2 text-3xl font-extrabold tracking-tight">Your progress</h1>
+  <p class="mb-8 text-muted">
+    Progress is saved only in this browser. Export it to move it to another device or keep a backup.
+  </p>
+  <ProgressManager client:load modules={modules} />
+</BaseLayout>

@@ -1,0 +1,33 @@
+cards:
+  - id: packet
+    lesson: theory/packets-and-protocols
+    front: What is a packet?
+    back: A small, independent chunk of bytes with an address label. Packets can be delayed, reordered, duplicated or lost.
+  - id: endpoint
+    lesson: theory/packets-and-protocols
+    front: What does an IP address + port identify?
+    back: An endpoint. The IP address identifies the machine, and the port identifies the program on it.
+  - id: tcp-guarantees
+    lesson: theory/packets-and-protocols
+    front: What does TCP guarantee?
+    back: A connected byte stream with reliable, in-order delivery, plus built-in congestion control.
+  - id: udp-guarantees
+    lesson: theory/packets-and-protocols
+    front: What does UDP guarantee?
+    back: Only that a datagram which arrives is intact. It guarantees no delivery, no ordering and no de-duplication.
+  - id: hol-blocking
+    lesson: theory/packets-and-protocols
+    front: What is head-of-line blocking?
+    back: In an ordered stream, one lost packet stalls delivery of every packet behind it until the lost one is retransmitted.
+  - id: why-udp
+    lesson: theory/packets-and-protocols
+    front: Why do real-time games use UDP?
+    back: So each message can choose its guarantees. Fresh state is sent unreliably and never waits behind stale data, while events use a custom reliable layer.
+  - id: unreliable-use
+    lesson: theory/packets-and-protocols
+    front: What kind of data should be sent unreliably?
+    back: High-frequency state that is constantly refreshed, such as positions, rotations and aim, where the newest value replaces the old one.
+  - id: reliable-use
+    lesson: theory/packets-and-protocols
+    front: What kind of data needs reliable delivery?
+    back: One-time events that must arrive exactly once, such as pickups, deaths, chat messages and match start.

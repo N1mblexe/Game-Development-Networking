@@ -1,0 +1,14 @@
+---
+/** <Sim name="prediction" preset="high-latency" caption="Optional caption" /> (see sim/registry.ts) */
+import SimHost from '../sim/SimHost';
+
+interface Props {
+  name: string;
+  preset?: string;
+  caption?: string;
+  compact?: boolean;
+  seed?: number;
+}
+---
+
+<SimHost client:visible {...Astro.props} />

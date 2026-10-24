@@ -1,0 +1,159 @@
+---
+title: Packets, Ports, and Protocols
+order: 1
+summary: What actually travels between players, and why almost every real-time game is built on UDP rather than TCP.
+durationMin: 15
+objectives:
+  - Explain what a packet is and what IP addresses and ports identify
+  - Compare TCP and UDP guarantees and their costs
+  - Describe head-of-line blocking and why it hurts real-time games
+  - Explain why game netcode builds its own reliability on top of UDP
+tags: [fundamentals, udp, tcp]
+sources:
+  - title: RFC 768, User Datagram Protocol
+    url: https://www.rfc-editor.org/rfc/rfc768
+  - title: RFC 9293, Transmission Control Protocol
+    url: https://www.rfc-editor.org/rfc/rfc9293
+  - title: Glenn Fiedler, UDP vs. TCP
+    url: https://gafferongames.com/post/udp_vs_tcp/
+---
+
+In single-player Unity code, "where is the enemy?" is a field you read in memory. In multiplayer, the answer lives
+on another computer, possibly on another continent, and the only way to learn it is to **send bytes and wait**.
+Everything in this course, from NetworkVariables to Steam lobbies, is a way of managing that one fact.
+
+## What travels: packets
+
+The internet doesn't send your game state as a continuous stream. It moves **packets**: small, independent
+chunks of bytes, each carrying an address label. Every router a packet passes through looks at the label and sends it
+one hop closer to its destination. Packets on the same journey can take different routes, arrive out of order,
+arrive twice, or not arrive at all.
+
+<Diagram name="packet-journey" />
+
+Two numbers on the label matter to you as a game developer:
+
+- An <Term id="ip-address">IP address</Term> identifies a **machine** (more precisely, a network interface), such as `203.0.113.7`.
+- A <Term id="port">port</Term> identifies a **program** on that machine, such as `7777`. That is why a dedicated server
+  and a voice-chat client can run on the same PC without stealing each other's packets.
+
+Together, IP address and port form an **endpoint**. When a Unity Transport, Steam or any other netcode
+library "connects", it is really agreeing on a pair of endpoints and a set of rules for the bytes exchanged between them.
+
+<Callout type="note">
+  Packets have a size limit, the <Term id="mtu">MTU</Term>, usually around 1500 bytes on Ethernet. Netcode libraries split
+  (fragment) larger messages and reassemble them on the other side, which is one reason you'll want small messages.
+  We go deeper in the next lesson.
+</Callout>
+
+## The two transport protocols
+
+On top of IP, almost all traffic uses one of two **transport protocols**. They make very different promises.
+
+| | <Term id="tcp">TCP</Term> | <Term id="udp">UDP</Term> |
+|---|---|---|
+| Connection | Handshake before any data | None, just send |
+| Delivery | Guaranteed (retransmits lost data) | Best effort, may be lost |
+| Ordering | Guaranteed, in send order | None, may arrive out of order |
+| Unit | A byte **stream** | Independent **datagrams** |
+| Congestion control | Built in, slows down on loss | None, the app decides |
+| Typical use | Web, file transfer, chat, login | Games, voice, video calls |
+
+TCP sounds strictly better: who wouldn't want guaranteed, in-order delivery? The catch is **how** it keeps
+that promise.
+
+<Sequence
+  title="TCP: the connection handshake and a lost segment"
+  actors={[
+    { id: 'c', label: 'Client', kind: 'client' },
+    { id: 's', label: 'Server', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'c', to: 's', label: 'SYN', note: 'I want to connect', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'SYN-ACK', kind: 'reliable' },
+    { from: 'c', to: 's', label: 'ACK', note: 'one full round trip before the first byte of game data', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'Segment 1 (position @ t=0)', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'Segment 2 (position @ t=50ms), LOST', kind: 'unreliable' },
+    { from: 's', to: 'c', label: 'Segment 3 (position @ t=100ms), arrives but is held back', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'Segment 2 retransmitted after a timeout', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'Segments 2 and 3 are finally released to the game, both already stale', kind: 'local' },
+  ]}
+/>
+
+## Head-of-line blocking
+
+Because TCP is a single ordered stream, a lost segment blocks **everything behind it** until it has been
+retransmitted and received. This is called <Term id="head-of-line-blocking">head-of-line blocking</Term>.
+
+For a file download that's exactly right, since you need every byte in order. For a game it's a disaster. Your client
+already *has* the newer position update (segment 3) sitting in its buffer, but TCP won't hand it over until the
+**obsolete** update (segment 2) arrives. With a 100 ms round trip, a single lost packet can freeze the world for
+200 ms or more, and players see it as a hitch.
+
+Try it: set the loss rate to around 5% and compare the two lanes.
+
+<Sim name="tcp-vs-udp" preset="lossy" />
+
+What you should notice:
+
+- **UDP** delivers each update independently. A lost update simply never arrives, and the next one replaces it a moment later.
+  Most game state is like this: newer always beats older.
+- **TCP** delivers *everything*, but stalls whenever something is lost, and then releases a burst of stale data at once.
+
+## So games use UDP, plus their own rules
+
+Not every message is disposable, though. If a player picks up the last key, that event *must* arrive, and arrive
+exactly once. Game netcode therefore builds a thin layer on top of UDP that lets **each message choose its guarantees**:
+
+<Steps>
+
+1. **Unreliable**: fire and forget. Use it for state that is resent constantly, such as positions, rotations and aim direction.
+2. **Unreliable sequenced**: drop anything older than what was already received. Use it for "latest value wins" streams.
+3. **Reliable**: retransmit until acknowledged. Use it for events such as "player died", "item picked up" or chat messages.
+4. **Reliable ordered**: reliable *and* in order, but only within one channel, so a lost chat message never blocks movement.
+
+</Steps>
+
+This is exactly what you'll configure later. In Netcode for GameObjects, RPCs and NetworkVariables choose a
+**delivery type**, and Steam Networking Sockets offers the same choice as **send flags**:
+
+<CodeTabs labels={['Netcode for GameObjects', 'Facepunch.Steamworks']}>
+
+```csharp title="PlayerShooting.cs"
+// Gameplay event: must arrive, so the default reliable delivery is right.
+[Rpc(SendTo.Server)]
+void FireRpc(Vector3 aimDirection) { /* validate and spawn the projectile on the server */ }
+
+// Cosmetic, high-frequency, and safe to lose: opt out of reliability.
+[Rpc(SendTo.NotServer, Delivery = RpcDelivery.Unreliable)]
+void AimPreviewRpc(Vector3 aimDirection) { /* rotate the remote player's gun */ }
+```
+
+```csharp title="SteamMessages.cs"
+// Facepunch.Steamworks: the same choice, expressed as a SendType flag on a connection.
+connection.SendMessage(fireEventBytes, SendType.Reliable);
+connection.SendMessage(aimPreviewBytes, SendType.Unreliable);
+```
+
+</CodeTabs>
+
+<Callout type="pitfall">
+  "I'll just use TCP, it's simpler" works on your LAN, where nothing is ever lost, and falls apart on players' Wi-Fi.
+  Always test with simulated loss and latency. Unity's Network Simulator and the simulators on this site exist for exactly
+  that.
+</Callout>
+
+<Callout type="unity" title="You rarely touch sockets in Unity">
+  NGO's **Unity Transport** and the **Facepunch transport** both run on UDP and implement the delivery types above for you.
+  Understanding the trade-offs is what lets you pick the right delivery type for each message.
+</Callout>
+
+<KeyTakeaways>
+
+- The network moves independent **packets** that can be delayed, reordered, duplicated or lost.
+- An **IP address + port** (an endpoint) identifies a program on a machine.
+- **TCP** guarantees ordered delivery but suffers **head-of-line blocking**: one loss stalls everything behind it.
+- Real-time games use **UDP** with a custom layer so each message can choose **unreliable vs reliable** delivery.
+- Use unreliable delivery for state that is constantly refreshed, and reliable delivery for events that must happen exactly once.
+
+</KeyTakeaways>

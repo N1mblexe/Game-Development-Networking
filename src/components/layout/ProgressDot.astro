@@ -1,0 +1,17 @@
+---
+/** Completion indicator; filled in by scripts/progress-dom.ts via data-lesson-key. */
+interface Props {
+  lessonKey: string;
+}
+---
+
+<span class="progress-dot mt-1 h-3.5 w-3.5 shrink-0 rounded-full border-2 border-border" data-lesson-key={Astro.props.lessonKey}>
+  <span class="sr-only" data-sr-done>not completed</span>
+</span>
+
+<style>
+  .progress-dot[data-done='true'] {
+    background: var(--ok);
+    border-color: var(--ok);
+  }
+</style>

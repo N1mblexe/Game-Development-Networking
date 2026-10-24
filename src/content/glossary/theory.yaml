@@ -1,0 +1,37 @@
+terms:
+  - id: ip-address
+    term: IP address
+    short: The address that identifies a machine (network interface) on a network, for example 203.0.113.7.
+    lesson: theory/packets-and-protocols
+    seeAlso: [port]
+  - id: port
+    term: Port
+    short: A 16-bit number that identifies a program on a machine. IP address + port = endpoint.
+    lesson: theory/packets-and-protocols
+    seeAlso: [ip-address]
+  - id: mtu
+    term: MTU
+    aliases: [Maximum Transmission Unit]
+    short: The largest packet a link can carry without fragmentation, typically about 1500 bytes on Ethernet.
+    lesson: theory/latency-jitter-loss
+  - id: tcp
+    term: TCP
+    aliases: [Transmission Control Protocol]
+    short: A connection-based transport protocol that provides a reliable, ordered byte stream with congestion control.
+    lesson: theory/packets-and-protocols
+    seeAlso: [udp, head-of-line-blocking]
+  - id: udp
+    term: UDP
+    aliases: [User Datagram Protocol]
+    short: A connectionless transport protocol that sends independent datagrams with no delivery or ordering guarantees. It is the basis of game netcode.
+    lesson: theory/packets-and-protocols
+    seeAlso: [tcp]
+  - id: head-of-line-blocking
+    term: Head-of-line blocking
+    short: When one lost packet in an ordered stream delays delivery of every packet queued behind it.
+    long: >-
+      In TCP, data must be delivered in order, so newer data that has already arrived is held back until a lost
+      segment is retransmitted. For games this means fresh state waits behind stale state. Per-channel ordering in
+      game netcode keeps the blocking inside one channel.
+    lesson: theory/packets-and-protocols
+    seeAlso: [tcp]

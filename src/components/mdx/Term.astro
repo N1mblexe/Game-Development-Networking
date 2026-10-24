@@ -1,0 +1,43 @@
+---
+/**
+ * <Term id="jitter">jitter</Term>: glossary term with a hover/focus tooltip.
+ * The slot is the visible text; it defaults to the glossary term name.
+ * Unknown ids fail scripts/validate-content.ts and render with a red underline.
+ */
+import { getGlossary } from '../../lib/content/nav';
+import { withBase } from '../../lib/url';
+
+interface Props {
+  id: string;
+}
+const { id } = Astro.props;
+const term = (await getGlossary()).get(id);
+const slot = await Astro.slots.render('default');
+---
+
+{
+  term ? (
+    <span class="group relative inline">
+      <a
+        href={withBase(`/glossary/#${id}`)}
+        class="cursor-help underline decoration-muted decoration-dotted underline-offset-4 hover:decoration-accent"
+        aria-describedby={`term-tip-${id}`}
+        data-term={id}
+      >
+        {slot ? <Fragment set:html={slot} /> : term.term}
+      </a>
+      <span
+        id={`term-tip-${id}`}
+        role="tooltip"
+        class="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-64 max-w-[80vw] -translate-x-1/2 rounded-lg border border-border bg-surface p-3 text-left text-sm leading-snug font-normal text-text shadow-lg group-focus-within:block group-hover:block"
+      >
+        <span class="mb-1 block font-semibold">{term.term}</span>
+        {term.short}
+      </span>
+    </span>
+  ) : (
+    <span class="underline decoration-danger decoration-wavy" title={`Unknown glossary term: ${id}`}>
+      <Fragment set:html={slot || id} />
+    </span>
+  )
+}

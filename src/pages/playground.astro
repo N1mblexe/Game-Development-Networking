@@ -1,0 +1,36 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import SimHost from '../components/sim/SimHost';
+import { sims } from '../components/sim/registry';
+import { lessonUrlFromKey } from '../lib/content/nav';
+import { getEntry } from 'astro:content';
+
+// Everything in the registry shows up here automatically.
+const entries = await Promise.all(
+  Object.entries(sims).map(async ([name, def]) => ({
+    name,
+    def,
+    lessons: (await Promise.all(def.lessons.map((k) => getEntry('lessons', k)))).filter((l) => l !== undefined),
+  })),
+);
+---
+
+<BaseLayout title="Playground" wide>
+  <h1 class="mb-2 text-3xl font-extrabold tracking-tight">Simulator playground</h1>
+  <p class="mb-6 text-muted">Every simulator from the course in one place. Change the network and see what breaks.</p>
+  <nav class="mb-8 flex flex-wrap gap-2" aria-label="Simulators">
+    {entries.map((e) => <a class="rounded-full bg-surface-2 px-3 py-1 text-sm hover:text-accent" href={`#${e.name}`}>{e.def.title}</a>)}
+  </nav>
+  {
+    entries.map((e) => (
+      <section id={e.name} class="scroll-mt-20">
+        <SimHost client:visible name={e.name} />
+        {e.lessons.length > 0 && (
+          <p class="-mt-5 mb-10 text-sm text-muted">
+            Used in: {e.lessons.map((l, i) => (<>{i > 0 && ', '}<a class="text-accent underline" href={lessonUrlFromKey(l.id)}>{l.data.title}</a></>))}
+          </p>
+        )}
+      </section>
+    ))
+  }
+</BaseLayout>

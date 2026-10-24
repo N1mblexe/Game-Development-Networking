@@ -1,0 +1,9 @@
+title: Networking for Games
+short: Theory
+order: 1
+summary: >-
+  The ideas behind every multiplayer game, independent of engine: packets and protocols, latency, authority,
+  tick rate, snapshots, prediction, interpolation, lag compensation, NAT and cheating.
+color: '#0e9aa7'
+badge: NT
+estimatedHours: 8

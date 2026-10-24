@@ -1,0 +1,11 @@
+---
+import { withBase } from '../../lib/url';
+// Phase 0: links to the search page. Agent C replaces this with an inline Pagefind modal (Ctrl/⌘+K).
+---
+
+<a href={withBase('/search/')} class="btn px-2.5 text-sm text-muted" aria-label="Search">
+  <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+    <circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path>
+  </svg>
+  <span class="hidden lg:inline">Search</span>
+</a>

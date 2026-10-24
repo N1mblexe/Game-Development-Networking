@@ -1,0 +1,50 @@
+---
+/** <Steps> wraps a Markdown ordered list and renders it as numbered steps. */
+---
+
+<div class="steps not-prose my-6"><slot /></div>
+
+<style>
+  .steps :global(ol) {
+    counter-reset: step;
+    list-style: none;
+    padding: 0;
+  }
+  .steps :global(ol > li) {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 1.25rem 2.75rem;
+    border-left: 2px solid var(--border);
+    margin-left: 0.9rem;
+    line-height: 1.7;
+  }
+  .steps :global(ol > li:last-child) {
+    border-left-color: transparent;
+    padding-bottom: 0;
+  }
+  .steps :global(ol > li::before) {
+    content: counter(step);
+    position: absolute;
+    left: -0.95rem;
+    top: 0;
+    width: 1.8rem;
+    height: 1.8rem;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--module);
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .steps :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: var(--surface-2);
+    border-radius: 0.3rem;
+    padding: 0.1em 0.35em;
+  }
+  .steps :global(.expressive-code) {
+    margin-top: 0.75rem;
+  }
+</style>

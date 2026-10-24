@@ -1,0 +1,10 @@
+title: Unity Netcode for GameObjects
+short: NGO
+order: 2
+summary: >-
+  Unity's official netcode (NGO 2.x on Unity 6): NetworkManager, NetworkObjects, NetworkVariables, RPCs,
+  network components, scene management, anticipation, distributed authority, and debugging tools.
+color: '#7c4dff'
+badge: NGO
+prerequisites: [theory]
+estimatedHours: 10

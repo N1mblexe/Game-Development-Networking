@@ -1,0 +1,10 @@
+title: Steamworks with Facepunch
+short: Steam
+order: 3
+summary: >-
+  Steam's multiplayer services through Facepunch.Steamworks: initialization and callbacks, friends, lobbies,
+  invites and rich presence, Steam Networking Sockets over the Steam Datagram Relay, and auth tickets.
+color: '#1b7fc4'
+badge: ST
+prerequisites: [theory]
+estimatedHours: 7

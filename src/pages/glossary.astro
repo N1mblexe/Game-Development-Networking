@@ -1,0 +1,32 @@
+---
+// Phase 0: plain alphabetical list. Agent C adds filtering, letter jump links, and inline formatting.
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { getGlossary, getModules, lessonUrlFromKey } from '../lib/content/nav';
+
+const terms = [...(await getGlossary()).values()].sort((a, b) => a.term.localeCompare(b.term));
+const modules = new Map((await getModules()).map((m) => [m.id, m.data]));
+---
+
+<BaseLayout title="Glossary">
+  <h1 class="mb-2 text-3xl font-extrabold tracking-tight">Glossary</h1>
+  <p class="mb-8 text-muted">{terms.length} terms used across the course.</p>
+  <dl class="grid gap-3">
+    {
+      terms.map((t) => (
+        <div id={t.id} class="card scroll-mt-24 p-4 target:border-accent">
+          <dt class="flex flex-wrap items-baseline gap-2">
+            <span class="font-bold">{t.term}</span>
+            {t.aliases.length > 0 && <span class="text-sm text-muted">also: {t.aliases.join(', ')}</span>}
+            <span class="ml-auto text-xs" style={`color:${modules.get(t.module)?.color}`}>{modules.get(t.module)?.short}</span>
+          </dt>
+          <dd class="mt-1 text-muted">{t.long ?? t.short}</dd>
+          {t.lesson && (
+            <dd class="mt-2 text-sm">
+              <a class="text-accent underline" href={lessonUrlFromKey(t.lesson)}>Taught in this lesson →</a>
+            </dd>
+          )}
+        </div>
+      ))
+    }
+  </dl>
+</BaseLayout>

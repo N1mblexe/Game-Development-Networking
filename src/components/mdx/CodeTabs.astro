@@ -1,0 +1,53 @@
+---
+/**
+ * <CodeTabs labels={['NGO 2.x', 'Legacy']}> with one fenced code block per label, in order.
+ * Without JS every block is shown stacked.
+ */
+interface Props {
+  labels: string[];
+}
+const { labels } = Astro.props;
+---
+
+<div class="code-tabs not-prose my-6" data-code-tabs data-labels={JSON.stringify(labels)}>
+  <div class="mb-[-1px] hidden gap-1" role="tablist" data-tablist></div>
+  <div data-panels><slot /></div>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>('[data-code-tabs]').forEach((root, n) => {
+    const labels: string[] = JSON.parse(root.dataset.labels ?? '[]');
+    const panels = [...root.querySelector('[data-panels]')!.children] as HTMLElement[];
+    const list = root.querySelector<HTMLElement>('[data-tablist]')!;
+    if (panels.length < 2) return;
+    list.classList.replace('hidden', 'flex');
+    const buttons = panels.map((panel, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.role = 'tab';
+      b.id = `codetab-${n}-${i}`;
+      b.textContent = labels[i] ?? `Tab ${i + 1}`;
+      b.className = 'rounded-t-md border border-border px-3 py-1.5 text-sm font-medium';
+      panel.role = 'tabpanel';
+      panel.setAttribute('aria-labelledby', b.id);
+      b.addEventListener('click', () => select(i));
+      list.append(b);
+      return b;
+    });
+    function select(i: number) {
+      panels.forEach((p, j) => (p.hidden = j !== i));
+      buttons.forEach((b, j) => {
+        b.setAttribute('aria-selected', String(j === i));
+        b.style.background = j === i ? 'var(--surface)' : 'var(--surface-2)';
+        b.style.borderBottomColor = j === i ? 'var(--surface)' : 'var(--border)';
+      });
+    }
+    select(0);
+  });
+</script>
+
+<style>
+  .code-tabs :global(.expressive-code) {
+    margin: 0;
+  }
+</style>

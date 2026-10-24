@@ -1,0 +1,44 @@
+---
+import { lessonUrl, moduleUrl, examUrl, type LessonEntry, type ModuleEntry } from '../../lib/content/nav';
+import ProgressDot from './ProgressDot.astro';
+
+interface Props {
+  module: ModuleEntry;
+  lessons: LessonEntry[];
+  currentId: string;
+}
+const { module, lessons, currentId } = Astro.props;
+---
+
+<nav aria-label={`${module.data.title} lessons`} class="text-sm">
+  <a href={moduleUrl(module.id)} class="mb-3 flex items-center gap-2 font-semibold hover:text-accent">
+    <span class="grid h-7 w-7 place-items-center rounded-md text-xs font-bold text-white" style={`background:${module.data.color}`}>
+      {module.data.badge}
+    </span>
+    {module.data.title}
+  </a>
+  <ol class="space-y-0.5">
+    {
+      lessons.map((l) => (
+        <li>
+          <a
+            href={lessonUrl(l)}
+            class:list={[
+              'flex items-start gap-2 rounded-md px-2 py-1.5',
+              l.id === currentId ? 'bg-surface-2 font-semibold text-text' : 'text-muted hover:bg-surface-2 hover:text-text',
+            ]}
+            aria-current={l.id === currentId ? 'page' : undefined}
+          >
+            <ProgressDot lessonKey={l.id} />
+            <span>{l.data.title}</span>
+          </a>
+        </li>
+      ))
+    }
+    <li class="mt-2 border-t border-border pt-2">
+      <a href={examUrl(module.id)} class="flex items-center gap-2 rounded-md px-2 py-1.5 text-muted hover:bg-surface-2 hover:text-text">
+        <span aria-hidden="true">🎓</span> Module exam
+      </a>
+    </li>
+  </ol>
+</nav>

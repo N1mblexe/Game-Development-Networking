@@ -1,0 +1,12 @@
+---
+/** <Diagram name="topology" variant="relay" caption="Optional caption" /> (see diagrams/registry.ts) */
+import DiagramHost from '../diagrams/DiagramHost';
+
+interface Props {
+  name: string;
+  variant?: string;
+  caption?: string;
+}
+---
+
+<DiagramHost client:visible {...Astro.props} />
