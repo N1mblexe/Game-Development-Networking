@@ -205,7 +205,7 @@ public sealed class LinkStats
 ```
 
 You'll rarely write this yourself, but you'll read these numbers constantly. Netcode for GameObjects exposes the
-transport's RTT per client through `NetworkTransport.GetCurrentRtt(clientId)`, and Steam's connection status reports
+transport's RTT per client through the `NetworkTransport` method `GetCurrentRtt(clientId)`, and Steam's connection status reports
 ping and quality per connection.
 
 <Callout type="unity" title="Simulate bad networks in Unity">
