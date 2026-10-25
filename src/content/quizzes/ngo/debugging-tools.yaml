@@ -1,0 +1,73 @@
+passPct: 70
+questions:
+  - id: obsolete-simulator
+    type: codeline
+    prompt: This script is supposed to add 150 ms of latency for a test, but the game behaves exactly as on loopback. Click the line that has no effect in NGO 2.13.
+    code: |-
+      void Awake()
+      {
+          var transport = GetComponent<UnityTransport>();
+          transport.SetConnectionData("127.0.0.1", 7777);
+          transport.SetDebugSimulatorParameters(150, 20, 5);
+      }
+    answerLines: [5]
+    explanation: >-
+      The UnityTransport debug simulator is obsolete ("no longer supported and has no effect"). Add the Network Simulator
+      component from Multiplayer Tools and choose a preset or call its API instead.
+  - id: profiler-modules
+    type: multi
+    prompt: Which of these does the NGO Objects profiler module break down per NetworkObject? Select all that apply.
+    options:
+      - RPC bytes sent and received
+      - NetworkVariable bytes sent and received
+      - Scene event bytes
+      - Ownership change bytes
+      - Frame time spent in OnNetworkSpawn
+    answers: [0, 1, 3]
+    explanation: >-
+      NGO Objects reports RPC, NetworkVariable, spawn, destroy and ownership-change bytes per object. Scene event bytes are in
+      the NGO Messages module, and CPU time is the regular CPU profiler's job.
+  - id: rnsm-release
+    type: truefalse
+    prompt: The Runtime Network Stats Monitor is included in release builds by default.
+    answer: false
+    explanation: >-
+      It's included in the Editor and in development builds only. Enable it for release in the Multiplayer Tools project
+      settings or with the `UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE` define.
+  - id: host-only-testing
+    type: single
+    prompt: Every test passes when you play as the host, but players report rubber-banding. What's the most useful next test?
+    options:
+      - Raise the tick rate to 120 and test as the host again
+      - Run a remote client in Multiplayer Play Mode with a Network Simulator preset such as Mobile 4G
+      - Disable interpolation on every NetworkTransform
+      - Test in a release build as the host
+    answer: 1
+    explanation: >-
+      The host has zero latency to the server and shares one process with it, so delay-dependent bugs can't appear there.
+      Reproduce them from a remote client under simulated network conditions.
+  - id: debug-order
+    type: order
+    prompt: You suspect the arena uses too much bandwidth. Order the steps.
+    items:
+      - Run a repeatable scenario with four players using Multiplayer Play Mode
+      - Add the NGO Messages and NGO Objects modules in the Profiler
+      - Find the objects and message types with the most bytes, using filters such as dir:out
+      - Change one thing, such as excluding a per-frame Animator parameter
+      - Profile the same scenario again and compare
+    explanation: >-
+      Measure first with a repeatable setup, find the biggest cost, change one thing, then measure again. Optimizing without a
+      before-and-after comparison is guessing.
+  - id: tags-start
+    type: codeline
+    prompt: In an MPPM scenario, the instance tagged "host" never starts. Click the line responsible.
+    code: |-
+      var tags = CurrentPlayer.ReadOnlyTags();
+      var nm = NetworkManager.Singleton;
+      if (tags.Contains("Server")) nm.StartServer();
+      else if (tags.Contains("Host")) nm.StartHost();
+      else if (tags.Contains("Client")) nm.StartClient();
+    answerLines: [4]
+    explanation: >-
+      Tag matching with `Contains` is case-sensitive, so "host" doesn't match "Host". Use the same casing in the scenario and
+      the code, or compare case-insensitively.

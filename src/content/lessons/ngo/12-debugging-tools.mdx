@@ -1,0 +1,273 @@
+---
+title: Debugging and Testing Tools
+order: 12
+summary: Test under real network conditions with Multiplayer Play Mode and the Network Simulator, measure traffic with the network profiler and the Runtime Network Stats Monitor, and diagnose the most common NGO bugs.
+durationMin: 30
+objectives:
+  - Run repeatable multi-player test sessions with Multiplayer Play Mode scenarios and player tags
+  - Simulate latency, jitter, loss, lag spikes and disconnects with the Network Simulator, in the Editor and from code
+  - Find what uses bandwidth with the NGO Messages and NGO Objects profiler modules
+  - Show live network stats with the Runtime Network Stats Monitor, and use NGO's logging to diagnose problems
+prerequisites: [ngo/setup, ngo/network-components, ngo/prediction-anticipation, theory/latency-jitter-loss]
+tags: [ngo, debugging, testing, profiling, tools]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+    - { name: com.unity.multiplayer.tools, version: '2.2.12' }
+    - { name: com.unity.multiplayer.playmode, version: '1.6.x (Unity 6.0 to 6.2) / 2.0+ (Unity 6.3+)' }
+sources:
+  - title: 'Multiplayer Tools 2.2 manual: Network Simulator'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.tools@2.2/manual/network-simulator.html
+  - title: 'Multiplayer Tools 2.2 manual: Network Profiler'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.tools@2.2/manual/profiler.html
+  - title: 'Multiplayer Tools 2.2 manual: Runtime Network Stats Monitor'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.tools@2.2/manual/runtime-stats-monitor.html
+  - title: 'Multiplayer Tools 2.2 manual: Network Scene Visualization'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.tools@2.2/manual/network-scene-vis.html
+  - title: 'Multiplayer Tools 2.2 manual: Hierarchy Network Debug View'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.tools@2.2/manual/hierarchy-network-debug.html
+  - title: 'Multiplayer Play Mode 1.6 manual: Create a play mode scenario'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@1.6/manual/play-mode-scenario/play-mode-scenario-create.html
+  - title: 'Multiplayer Play Mode 2.0 manual'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@2.0/manual/index.html
+  - title: 'Multiplayer Play Mode: target an instance with Player Tags'
+    url: https://mp-docs.dl.it.unity3d.com/mppm/1.3.3/player-tags/target-instance
+  - title: 'Unity Scripting API: CurrentPlayer.Tags'
+    url: https://docs.unity3d.com/ScriptReference/Unity.Multiplayer.PlayMode.CurrentPlayer.Tags.html
+  - title: 'NGO source v2.13.3: UnityTransport.cs (DebugSimulator obsolete)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Transports/UTP/UnityTransport.cs
+---
+
+On your development machine, two Editor instances talk over loopback with essentially zero latency and no loss. That's the
+one network your players will never have. Almost every netcode bug either hides on a perfect link (a race that only
+shows up with 150 ms of delay) or hides inside a single process (a value that's only right on the host). This lesson is
+about the tools that drag those bugs into the open: <Term id="multiplayer-play-mode">Multiplayer Play Mode</Term> for
+several players at once, the <Term id="network-simulator">Network Simulator</Term> for bad networks, and the profiler
+and stats monitor from the Multiplayer Tools package for seeing what you actually send.
+
+## Start with a bad network on purpose
+
+Before opening any tool, feel what your players feel. The theory module's
+[latency, jitter and loss](../../theory/latency-jitter-loss/) lesson explains the numbers. Here's what they do to packets:
+
+<Sim name="link-playground" preset="bad-wifi" caption="A bad Wi-Fi link: bursty loss and jitter spikes. Compare it with the LAN preset you develop on." />
+
+What you should notice:
+
+- <Term id="jitter">Jitter</Term> spikes bunch packets together, then leave gaps. Interpolation buffers (lesson 7) exist to hide exactly this.
+- <Term id="packet-loss">Packet loss</Term> on Wi-Fi comes in bursts, not evenly spread. A reliable RPC sent in a burst arrives late,
+  and an unreliable one is simply gone.
+- None of this happens on loopback. If you only ever test on one machine, you've only tested the LAN preset.
+
+## Multiplayer Play Mode scenarios
+
+Lesson 1 used MPPM to run a host and a client. For daily work, make it repeatable with a **play mode scenario**: open
+the Play Mode Scenarios window (**Window > Multiplayer > Play Mode Scenarios** in MPPM 1.6, or from the Play Mode
+dropdown), add a scenario with **+**, and configure its instances.
+
+| Instance type | What it is | Use it for |
+|---|---|---|
+| Main Editor | The Editor you're working in | The player you debug with breakpoints |
+| Additional Editor instances | Lightweight Editor players sharing the project (up to three) | Quick multi-client tests on every change |
+| Local instances | Builds launched on your machine (Android devices too), with optional command-line arguments | Testing real builds, the dedicated server role |
+
+Typing "Host" in one window and "Client" in three others gets old fast. **Player tags** let each instance start itself.
+Give each instance a tag such as `Host` or `Client` in your scenario, then read the tags at startup. On MPPM 1.x the
+call is `CurrentPlayer.ReadOnlyTags()` in the package's `Unity.Multiplayer.Playmode` namespace. On Unity 6.3 and later,
+where MPPM moved into the engine, use the `CurrentPlayer.Tags` property in `Unity.Multiplayer.PlayMode` instead.
+
+```csharp title="ArenaAutoStart.cs"
+using System.Linq;
+using Unity.Netcode;
+using UnityEngine;
+#if UNITY_EDITOR
+using Unity.Multiplayer.Playmode; // MPPM 1.x package. On Unity 6.3+: Unity.Multiplayer.PlayMode and CurrentPlayer.Tags
+#endif
+
+/// On the NetworkManager GameObject in Bootstrap. Editor-only convenience: builds ignore it.
+public class ArenaAutoStart : MonoBehaviour
+{
+    void Start()
+    {
+#if UNITY_EDITOR
+        var tags = CurrentPlayer.ReadOnlyTags(); // Contains is case-sensitive
+        var nm = GetComponent<NetworkManager>();
+
+        if (tags.Contains("Server")) nm.StartServer();
+        else if (tags.Contains("Host")) nm.StartHost();
+        else if (tags.Contains("Client")) nm.StartClient();
+#endif
+    }
+}
+```
+
+<Callout type="unity" title="Editor instances can't edit the scene">
+
+Additional Editor instances are deliberately limited: you can't create GameObjects or change properties there, and
+Package Manager doesn't work in them. Make every change in the main Editor. That also means every instance runs
+exactly the same assets, which avoids lesson 1's "two builds, two projects" mismatch.
+
+</Callout>
+
+## The Network Simulator
+
+Install `com.unity.multiplayer.tools` and open **Window > Multiplayer > Multiplayer Tools**. Next to **Network
+Simulator**, select **Add to Scene**, or add the **Network Simulator** component yourself to a GameObject that persists
+across scenes. The NetworkManager GameObject in Bootstrap is a good place. It drives Unity Transport's simulator
+pipeline stage, and it works both in the Editor and in builds.
+
+<Callout type="pitfall" title="The old UnityTransport debug simulator does nothing">
+
+Older tutorials set **Debug Simulator** values on the Unity Transport component, or call `SetDebugSimulatorParameters`.
+In NGO 2.13, the `DebugSimulator` field is marked obsolete with the message "DebugSimulator is no longer supported and
+has no effect". Use the Network Simulator from Multiplayer Tools.
+
+</Callout>
+
+Each simulator instance shapes **that instance's** connection, so put the bad preset on the client you're testing,
+and leave the host on a clean link if you want to reproduce "one player on bad Wi-Fi".
+
+The component gives you:
+
+- **Connection Preset**: built-in presets with fixed delay, jitter and loss, from **Home Fiber** (10 ms, no loss)
+  through **Home Broadband** (32 ms delay, 12 ms jitter, 2% loss) to **Mobile 2G** (520 ms, 7% loss). Choose
+  **Custom** and assign a preset asset (**Create > Multiplayer > NetworkSimulatorPresetAsset**) for your own numbers.
+- **Connection**: set it to **Disconnected** to simulate a dropped connection, and back to reconnect.
+- **Lag spike**: set **Duration of the lag spike (ms)** and select **Trigger**.
+- **Scenarios**: **Connections Cycle** and **Random Connections Swap** change presets every interval until you pause
+  them. The package samples include lag-spike, disconnect, unstable-connection and curve-driven scenarios.
+
+You can drive all of it from code, which is how you reproduce a bug on demand:
+
+```csharp title="NetworkChaosKeys.cs"
+using System;
+using Unity.Multiplayer.Tools.NetworkSimulator.Runtime;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+/// Development helper: F5 lag spike, F6 mobile 4G, F7 clean link, F8 toggle disconnect.
+public class NetworkChaosKeys : MonoBehaviour
+{
+    [SerializeField] NetworkSimulator m_Simulator;
+
+    void Update()
+    {
+        var k = Keyboard.current;
+        if (k == null || m_Simulator == null || !m_Simulator.IsAvailable) return;
+
+        if (k.f5Key.wasPressedThisFrame) m_Simulator.TriggerLagSpike(TimeSpan.FromMilliseconds(800));
+        if (k.f6Key.wasPressedThisFrame) m_Simulator.ChangeConnectionPreset(NetworkSimulatorPresets.Mobile4G);
+        if (k.f7Key.wasPressedThisFrame) m_Simulator.ChangeConnectionPreset(NetworkSimulatorPresets.None);
+
+        if (k.f8Key.wasPressedThisFrame)
+        {
+            if (m_Simulator.IsConnected) m_Simulator.Disconnect();
+            else m_Simulator.Reconnect();
+        }
+    }
+}
+```
+
+`NetworkSimulatorPreset.Create(name, description, packetDelayMs, packetJitterMs, packetLossInterval, packetLossPercent)`
+builds a preset at runtime if the built-in ones don't match your target. The docs warn that the mobile presets can drop
+all packets in bursts, so your game needs to handle disconnects and reconnects gracefully.
+
+### A test plan for the arena
+
+<Steps>
+
+1. **Movement**: with **Mobile 4G** on one client, the owner-authoritative player (lesson 7) should still feel instant, and the other players should move smoothly, about one RTT late.
+2. **Prediction**: switch to lesson 10's predicted movement and trigger an 800 ms lag spike while running. You should see one correction, smoothed or snapped, not continuous jitter.
+3. **Shooting**: on **Home Broadband** (2% loss), fire 50 shots. The muzzle flash is unreliable, so a few may be missing. Every hit must still apply damage, because damage comes from reliable state.
+4. **Disconnects**: set **Connection** to **Disconnected** for 15 seconds. The client should show a message from `OnClientStopped` and `DisconnectReason` (lesson 2), not freeze.
+
+</Steps>
+
+## Measuring traffic: the network profiler
+
+Multiplayer Tools adds two modules to the Unity Profiler. Unity can't load them automatically, so open the Profiler and
+add **NGO Messages** and **NGO Objects** from the **Profiler Modules** list (turn the unrelated modules off).
+
+| Module | Counters |
+|---|---|
+| **NGO Messages** | Total bytes sent/received, named and unnamed message bytes, scene event bytes |
+| **NGO Objects** | Per NetworkObject: RPC bytes, NetworkVariable bytes, spawn and destroy bytes, ownership change bytes |
+
+The details view supports filters you'll use all the time: `t:RPC` filters by type, `dir:out` or `dir:in` by direction,
+and `b>100` by size, and you can combine them. Double-click a NetworkObject to select it in the Hierarchy. Messages a
+host sends to itself appear grayed out, because they never cross the network.
+
+Profile with four players moving and shooting, then ask the questions from
+[reliability and serialization](../../theory/reliability-serialization/): which object sends the most bytes per
+second, and is each of those bytes necessary? Typical arena findings are a NetworkAnimator parameter that changes every
+frame (lesson 7 excluded `Speed` for exactly this reason), NetworkTransform axes that never change, and an RPC that could
+have been a NetworkVariable update. Profile development builds on target hardware for real numbers. Play mode in the
+Editor is fine for quick comparisons before and after a change.
+
+<Callout type="tip" title="See ownership and traffic in the Editor">
+
+Two more views come with the package. **Network Scene Visualization** adds a toolbar to the Scene view that colors
+objects by bandwidth (filterable by NetworkVariables, RPCs, sent and received) or by owner. The **Hierarchy Network
+Debug View** (Multiplayer Tools 2.2.1+, enabled from the Multiplayer Tools window) marks networked objects in the
+Hierarchy, shows each owner's client id in Play mode, and puts a crown on objects you own, which is very handy in
+distributed authority.
+
+</Callout>
+
+## On-screen stats: the Runtime Network Stats Monitor
+
+The profiler needs the Editor. For playtests on real devices, add the **RuntimeNetStatsMonitor** component
+(**Component > Netcode > RuntimeNetStatsMonitor**, or **Add to Scene** in the Multiplayer Tools window). It draws
+configurable counters and graphs over the game.
+
+- **Configuration** decides what's displayed. The default is `DefaultNetStatsMonitorConfiguration`. Create your own with
+  **Create > Multiplayer > NetStatsMonitorConfiguration** and pick the stats per display element.
+- **Panel Settings Override** and **Custom Style Sheet** (USS) control layout and look.
+- It's included in the Editor and in development builds, but **not in release builds** by default. Change that under
+  **Edit > Project Settings > Multiplayer Tools > Net Stats Monitor**, or with the define
+  `UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE`.
+- You can also chart your own values (for example, the prediction error from lesson 10) by declaring a metric enum
+  with the `MetricTypeEnum` attribute and sending values with `AddCustomValue`.
+
+## NGO's own logging
+
+Set **Log Level** on the NetworkManager (`NetworkManager.LogLevel`) to **Developer** while debugging. NGO then logs
+much more about spawning, scene events and messages. Keep it at **Normal** or **Error** in builds you ship, because
+verbose logging costs CPU.
+
+| Symptom | First thing to check |
+|---|---|
+| Client logs that a prefab hash wasn't found | The prefab isn't in a Network Prefabs List on that build (lesson 3) |
+| Works on the host, broken on clients | Code in `Start` instead of `OnNetworkSpawn`, or logic gated on `IsServer` that clients also need (lesson 4) |
+| Object moves, then snaps back | Writing the transform on the non-authority side (lesson 7) |
+| Late joiners see wrong values | Missing initial apply after subscribing to `OnValueChanged` (lesson 5) |
+| Client stuck in the lobby | Scene loaded with Unity's `SceneManager`, or missing from the build list (lesson 8) |
+| Random garbage in a custom message | Read and write order mismatch (lesson 9) |
+| Constant jitter with prediction | Client and server step functions differ (lesson 10) |
+
+<Callout type="pitfall" title="Only testing with the host">
+
+The host has zero latency to the server, and the server's view and the host player's view live in one process. Bugs
+that depend on delay or on two separate processes can't happen there. Always test with at least one **remote client**
+under a Network Simulator preset, and do your debugging with breakpoints from that client's point of view.
+
+</Callout>
+
+<Callout type="pitfall" title="Breakpoints and timeouts">
+
+Pausing at a breakpoint stops the process from answering heartbeats. After a few seconds, the other side times the
+connection out, and you're debugging a disconnect you caused. Use logging or the profiler for timing-sensitive bugs,
+and expect a reconnect after long breaks.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Develop against bad networks: loopback hides latency, jitter and burst loss.
+- Use **Multiplayer Play Mode** scenarios with player tags so every run starts the same host and clients automatically.
+- The **Network Simulator** (Multiplayer Tools) shapes each instance's connection with presets, lag spikes, disconnects and scripted scenarios. The old UnityTransport debug simulator no longer has any effect.
+- Measure before optimizing: the **NGO Messages** and **NGO Objects** profiler modules show bytes per message type and per object.
+- The **Runtime Network Stats Monitor** shows live stats on devices, but only in development builds unless you enable it for release.
+
+</KeyTakeaways>
