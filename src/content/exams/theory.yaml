@@ -428,8 +428,8 @@ questions:
     tags: [lockstep-rollback]
     explanation: >-
       Fighting games need frame-exact inputs and both players seeing the same thing. Lockstep's delay is too long, and interpolating the
-      opponent puts them in the past. Rollback predicts the remote input and corrects mispredictions, and a 1–3 frame input delay
-      reduces how much it has to roll back.
+      opponent puts them in the past. Rollback predicts the remote input and corrects mispredictions, and a small, fixed input delay of a few
+      frames reduces how much it has to roll back.
   - id: lockstep-maphack
     type: single
     prompt: Why are map hacks so common in lockstep RTS games?
