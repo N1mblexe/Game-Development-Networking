@@ -125,7 +125,7 @@ Three facts matter to game developers:
    player hosts a game, their *upload* has to carry every other player's updates.
 2. **Bits, not bytes.** Link speeds are quoted in bits per second, and packet sizes in bytes. 1 KB/s = 8 kbit/s.
 3. **Saturation creates latency.** If you send more than the link can carry, packets queue in the router, and that queue
-   can add hundreds of milliseconds of delay before anything is dropped (this is called *bufferbloat*). A game that
+   can add hundreds of milliseconds of delay before anything is dropped (this is called <Term id="bufferbloat">bufferbloat</Term>). A game that
    floods its link makes its **own** latency worse.
 
 A useful budget: keep a client's steady-state traffic under about 64–256 kbit/s (8–32 KB/s) each way for most action

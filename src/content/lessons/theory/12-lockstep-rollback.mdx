@@ -83,7 +83,7 @@ A <Term id="desync">desync</Term> happens when two machines' simulations diverge
 | `Time.deltaTime`, `Update` order, coroutines | Frame timing differs per machine | Simulate only in the fixed tick, in a defined order |
 | Reading anything outside the simulation | Animation state, physics queries, UI | The simulation must only read its own state and the inputs |
 
-Because a desync is silent, lockstep games compute a **checksum** (a hash of the important simulation state) every few turns and
+Because a desync is silent, lockstep games compute a <Term id="checksum">checksum</Term> (a hash of the important simulation state) every few turns and
 exchange it. If checksums differ, the game knows immediately, and you can log both states to find the first field that disagreed. Without
 checksums, you only find out when players report that their friend "saw a different game".
 
@@ -104,7 +104,7 @@ about 12. Rollback, popularized by Tony Cannon's GGPO, removes most of that dela
 </Steps>
 
 That last step is why rollback needs a cheap simulation. NetherRealm's GDC talk on Mortal Kombat and Injustice 2 describes simulating
-up to 8 frames inside a single 16 ms frame. Most rollback games also add a small, fixed **input delay** (often 1–3 frames) for *both*
+up to 8 frames inside a single 16 ms frame. Most rollback games also add a small, fixed <Term id="input-delay">input delay</Term> (often 1–3 frames) for *both*
 players. Each frame of delay is a frame less to roll back, so a short delay plus rollback looks much better than either alone.
 
 ```csharp title="RollbackSession.cs"

@@ -80,7 +80,7 @@ The server keeps a short history of every player's <Term id="hitbox">hitboxes</T
 />
 
 The shooter is judged against what they actually saw. If their crosshair was on the target, they hit. This is often called
-**favor the shooter**.
+<Term id="favor-the-shooter">favor the shooter</Term>.
 
 ## Try it
 
@@ -162,7 +162,7 @@ to actually move the colliders, call `Physics.Raycast` and move them back. That'
 Lag compensation moves the unfairness from the shooter to the target. Two well-known effects:
 
 - **Shot behind cover.** You sprint behind a wall, and a moment later you die. On the shooter's screen you were still in the open, and the server agreed with them. The higher the shooter's ping, the further "around the corner" this reaches. Capping the rewind (often 200–250 ms) limits how bad it can get. Players over the cap have to lead their targets.
-- **Peeker's advantage.** A player who moves out from behind cover sees the defender before the defender sees them, because the defender's view of the peeker is delayed by RTT plus interpolation. Riot's VALORANT team describes cutting this with 128-tick servers, low interpolation delays and a network of data centres close to players, because the advantage shrinks as total latency shrinks.
+- **<Term id="peekers-advantage">Peeker's advantage</Term>.** A player who moves out from behind cover sees the defender before the defender sees them, because the defender's view of the peeker is delayed by RTT plus interpolation. Riot's VALORANT team describes cutting this with 128-tick servers, low interpolation delays and a network of data centres close to players, because the advantage shrinks as total latency shrinks.
 
 Most competitive games accept favor-the-shooter, because missing shots you clearly landed feels worse than occasionally dying behind a wall.
 

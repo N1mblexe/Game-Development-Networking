@@ -67,7 +67,7 @@ The trade-offs all come from one player being special:
 - **Host advantage**: the host's own client has 0 ms RTT to the server. In a shooter that's a large advantage.
 - **The host's connection is everyone's connection**: home upload bandwidth is often 5–20× smaller than download, and the host has to upload every update to every other player.
 - **Cheating is easy for the host**: they have the whole game state in memory and can modify the server.
-- **The game ends when the host leaves**, unless you implement *host migration*, which means transferring the full state to another player and having everyone reconnect. That's hard to do well.
+- **The game ends when the host leaves**, unless you implement <Term id="host-migration">host migration</Term>, which means transferring the full state to another player and having everyone reconnect. That's hard to do well.
 - **NAT**: players' home routers block incoming connections, so you need hole punching or a relay (lesson 11).
 
 How much upload does a host need? Suppose 8 players, a 30 Hz send rate and 400-byte snapshots per client:
