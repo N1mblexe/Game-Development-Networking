@@ -109,15 +109,6 @@ terms:
       remaining steps run from `OnClientStopped`, not on the line after `Shutdown()`.
     lesson: ngo-steam/disconnects
     seeAlso: [session-lifecycle]
-  - id: host-migration
-    term: Host migration
-    short: Moving the authoritative simulation to another player without ending the game. NGO's client-server mode doesn't provide it.
-    long: >-
-      In a listen-server session, the authoritative state and every connection live on the host, and NGO has no protocol to elect a new
-      server or hand state over. Steam migrates lobby ownership, but that doesn't move the NGO host. Your options are ending the session,
-      offering reconnects, rehosting from a snapshot, or using a dedicated server.
-    lesson: ngo-steam/disconnects
-    seeAlso: [rehost, lobby-owner, session-snapshot]
   - id: rehost
     term: Rehost
     short: A manual stand-in for host migration. A surviving player, usually the new lobby owner, starts a new NGO host from saved state and the others reconnect.

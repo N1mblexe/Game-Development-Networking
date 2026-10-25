@@ -200,8 +200,14 @@ terms:
   - id: host-migration
     term: Host migration
     short: Moving the server role to another player when a listen-server host leaves, by transferring the full game state and reconnecting everyone. Hard to do well.
+    long: >-
+      In a listen-server session the authoritative state and every connection live on the host, so when the host leaves
+      someone else must take over the simulation and everyone must reconnect to them. Unity's Netcode for GameObjects has
+      no built-in protocol to elect a new server or hand state over. Steam migrates **lobby** ownership, but that doesn't
+      move the NGO host. Practical options are ending the session, offering reconnects, rehosting from a saved snapshot,
+      or using a dedicated server.
     lesson: theory/topologies
-    seeAlso: [listen-server, host, distributed-authority]
+    seeAlso: [listen-server, host, distributed-authority, rehost, lobby-owner, session-snapshot]
 
   # ------------------------------------------------------------------ 04 authority-models
   - id: authority
