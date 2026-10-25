@@ -33,3 +33,29 @@ export {
   type TraversalPacket,
   type TraversalStep,
 } from './nat';
+export {
+  encodeDelta,
+  applyDelta,
+  deltaBits,
+  fullSnapshotBits,
+  entityBits,
+  BaselineHistory,
+  SnapshotStore,
+  ENTITY_COUNT_BITS,
+  ENTITY_ID_BITS,
+  type FieldDef,
+  type EntityState,
+  type WorldSnapshot,
+  type EntityDelta,
+  type SnapshotDelta,
+} from './snapshot';
+export {
+  estimateBandwidth,
+  fieldBits,
+  ID_BITS,
+  COUNT_BITS,
+  DEFAULT_MTU_PAYLOAD,
+  type BandwidthField,
+  type BandwidthInput,
+  type BandwidthResult,
+} from './bandwidth';

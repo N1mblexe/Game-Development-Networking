@@ -126,11 +126,19 @@ export const sims = {
     title: 'Snapshots & Delta Compression',
     description: 'Compare bytes sent for full snapshots vs deltas against the last acked state.',
     lessons: ['theory/state-sync'],
-    load: stub,
+    load: () => import('./SnapshotDelta'),
     defaultPreset: 'delta',
     presets: {
-      'full-snapshots': { label: 'Full snapshots', props: {} },
-      delta: { label: 'Delta vs last ack', props: {} },
+      'full-snapshots': {
+        label: 'Full snapshots',
+        description: 'Every snapshot re-sends every entity, moving or not.',
+        props: { mode: 'full', entities: 32, movingPct: 25, lossPct: 5, rttMs: 100, sendRateHz: 20 },
+      },
+      delta: {
+        label: 'Delta vs last ack',
+        description: 'Only what changed since the last acknowledged snapshot is sent; losses make the baseline older.',
+        props: { mode: 'delta', entities: 32, movingPct: 25, lossPct: 5, rttMs: 100, sendRateHz: 20 },
+      },
     },
   },
   'bandwidth-calculator': {
