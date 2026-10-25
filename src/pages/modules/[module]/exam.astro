@@ -3,23 +3,17 @@ import { getEntry } from 'astro:content';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import ExamRunner from '../../../components/quiz/ExamRunner';
 import { certificateUrl, getModules, moduleUrl } from '../../../lib/content/nav';
-import { FIXTURE_MODULE_ID, fixtureExam, fixturesEnabled } from '../../../lib/quiz/fixtures';
 
 export async function getStaticPaths() {
-  const real = (await getModules()).map((module) => ({
+  return (await getModules()).map((module) => ({
     params: { module: module.id },
-    props: { title: module.data.title, color: module.data.color, fixture: false },
+    props: { title: module.data.title, color: module.data.color },
   }));
-  // Test-only route for tests/e2e/engine.spec.ts (exams have no content yet). Never built by default.
-  const fixture = fixturesEnabled()
-    ? [{ params: { module: FIXTURE_MODULE_ID }, props: { title: 'Fixture module', color: '#7c3aed', fixture: true } }]
-    : [];
-  return [...real, ...fixture];
 }
 
-const { title, color, fixture } = Astro.props;
+const { title, color } = Astro.props;
 const moduleId = Astro.params.module;
-const exam = fixture ? { data: fixtureExam } : await getEntry('exams', moduleId);
+const exam = await getEntry('exams', moduleId);
 ---
 
 <BaseLayout title={`${title} exam`} accent={color}>

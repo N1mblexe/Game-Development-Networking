@@ -23,6 +23,20 @@ export interface ExamRunnerProps {
   seed?: number;
 }
 
+declare global {
+  interface Window {
+    /** Test hook: e2e tests set this (via addInitScript) to make every attempt's draw reproducible. */
+    __NETLEARN_EXAM_SEED__?: number;
+  }
+}
+
+/** Seed for a new attempt: the prop, then the test hook, then a fresh random one. */
+const attemptSeed = (fixed?: number) => {
+  if (fixed !== undefined) return fixed;
+  const hook = typeof window === 'undefined' ? undefined : window.__NETLEARN_EXAM_SEED__;
+  return Number.isInteger(hook) ? (hook as number) >>> 0 : randomSeed();
+};
+
 type Phase = 'start' | 'running' | 'review' | 'results';
 
 interface Attempt {
@@ -105,7 +119,7 @@ export default function ExamRunner({
   });
 
   const start = () => {
-    const seed = fixedSeed ?? randomSeed();
+    const seed = attemptSeed(fixedSeed);
     const picked = drawExam(questions, count, seed);
     setAttempt({ seed, questions: picked, orders: Object.fromEntries(picked.map((x) => [x.id, optionOrder(x, seed)])) });
     setResponses(Object.fromEntries(picked.map((x) => [x.id, initialResponse(x, seed)])));
@@ -383,7 +397,7 @@ export default function ExamRunner({
   // ------------------------------------------------------------------ running
   const last = index === drawn.length - 1;
   return (
-    <div className="not-prose card overflow-hidden" data-exam={moduleId} data-ready="true" data-phase="running">
+    <div className="not-prose card overflow-hidden" data-exam={moduleId} data-ready="true" data-phase="running" data-seed={attempt.seed}>
       <div className="border-b border-border bg-surface-2/60 px-4 py-3 sm:px-5">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm">
           <span className="font-semibold">
