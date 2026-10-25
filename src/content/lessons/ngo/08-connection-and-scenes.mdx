@@ -1,0 +1,373 @@
+---
+title: Connection Approval and Scenes
+order: 8
+summary: Accept or reject joining players with connection approval, move everyone from a lobby to the arena with NetworkSceneManager, and handle scene events and in-scene placed objects.
+durationMin: 30
+objectives:
+  - Follow the full connection sequence from request to synchronized client
+  - Write a connection approval callback that checks a payload, limits players and sets a rejection reason
+  - Load and unload scenes for every client with NetworkSceneManager and react to scene events
+  - Explain what happens to spawned and in-scene placed NetworkObjects when scenes change
+prerequisites: [ngo/network-manager, ngo/network-objects, ngo/network-components, theory/security]
+tags: [ngo, connection, approval, scenes]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: Connection approval'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/connection-approval.html
+  - title: 'NGO 2.13 manual: Connection events'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/connection-events.html
+  - title: 'NGO 2.13 manual: Using NetworkSceneManager'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/scenemanagement/using-networkscenemanager.html
+  - title: 'NGO 2.13 manual: Scene events'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/scenemanagement/scene-events.html
+  - title: 'NGO 2.13 manual: In-scene placed NetworkObjects'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/scenemanagement/inscene-placed-networkobjects.html
+  - title: 'NGO 2.13 API: NetworkSceneManager'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkSceneManager.html
+  - title: 'NGO source v2.13.3: NetworkManager.cs (host approval), NetworkSceneManager.cs (single-mode loads)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/tree/v2.13.3/com.unity.netcode.gameobjects/Runtime
+---
+
+So far, anyone who knows the host's address can join, and everyone starts in the arena the moment they connect.
+Real games need a door and a hallway: a **door** that decides who may come in (the right build, the right password,
+room for one more), and a **hallway**, a lobby scene where players gather before the match loads for everyone at once.
+In NGO, the door is <Term id="connection-approval">connection approval</Term>, and the hallway is built with the
+<Term id="network-scene-manager">NetworkSceneManager</Term>. Both are server-side tools: clients ask, and the server decides.
+
+## The connection sequence
+
+Lesson 2 showed `OnConnectionEvent`. Here's everything that happens before it fires on the server.
+
+<Sequence
+  title="A client joins a server that uses connection approval"
+  actors={[
+    { id: 'c', label: 'Joining client', kind: 'client' },
+    { id: 's', label: 'Server', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'c', to: 's', label: 'Transport connect, then connection request + ConnectionData payload', note: 'Includes the NetworkConfig hash, so a mismatched build is refused here.', kind: 'reliable' },
+    { from: 's', to: 's', label: 'ConnectionApprovalCallback(request, response)', note: 'Your code: check the payload, set Approved, CreatePlayerObject, Position, Reason.', kind: 'local' },
+    { from: 's', to: 'c', label: 'Approved: your client id', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'Synchronize: scenes to load, objects to spawn', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'Load scenes, spawn NetworkObjects', kind: 'local' },
+    { from: 'c', to: 's', label: 'SynchronizeComplete', kind: 'reliable' },
+    { from: 's', to: 's', label: 'Client is connected: OnConnectionEvent(ClientConnected)', note: 'The player object is spawned for the new client.', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- Approval happens **before** the client loads anything, so a rejected player never sees your scenes or objects.
+- The server only raises `ClientConnected` after the client finished synchronizing. That's why lesson 5's scoreboard can
+  add an entry there and know that the client will receive it.
+- Every step has a clock. If approval doesn't finish within **Client Connection Buffer Timeout**
+  (`NetworkConfig.ClientConnectionBufferTimeout`), the server drops the connection.
+
+## Connection approval
+
+Turn on **Connection Approval** on the NetworkManager (or set `NetworkConfig.ConnectionApproval = true`) and assign
+`NetworkManager.ConnectionApprovalCallback`, which has the type `Action<ConnectionApprovalRequest, ConnectionApprovalResponse>`.
+Only one callback can be registered at a time. The request carries:
+
+- `ClientNetworkId`: the joining client's id.
+- `Payload`: the bytes the client put in `NetworkConfig.ConnectionData` before calling `StartClient()`.
+
+You fill in the response:
+
+| Field | Meaning |
+|---|---|
+| `Approved` | `true` to let the client in |
+| `Reason` | Sent to a rejected client, where it appears in `NetworkManager.DisconnectReason` |
+| `CreatePlayerObject` | Spawn a player object for this client |
+| `PlayerPrefabHash` | A different player prefab's `GlobalObjectIdHash`, or `null` for the default |
+| `Position`, `Rotation` | Where the player object spawns |
+| `Pending` | `true` while an asynchronous check runs. Set it back to `false` when you've decided |
+
+Here's the arena's gatekeeper. It checks a build version and a room password, limits the room to four players, and
+picks a spawn point. Put it on the NetworkManager GameObject next to `ArenaConnection` from lesson 2.
+
+```csharp title="ArenaApproval.cs"
+using System;
+using System.Text;
+using Unity.Netcode;
+using UnityEngine;
+
+[Serializable]
+public class ConnectionPayload
+{
+    public string buildVersion;
+    public string password;
+    public string playerName;
+}
+
+/// Lives on the NetworkManager GameObject. The server runs the callback; clients only fill in the payload.
+public class ArenaApproval : MonoBehaviour
+{
+    [SerializeField] int m_MaxPlayers = 4;
+    [SerializeField] string m_RoomPassword = "";
+    [SerializeField] Vector3[] m_SpawnPoints =
+    {
+        new Vector3(-6f, 0f, -6f), new Vector3(6f, 0f, 6f), new Vector3(-6f, 0f, 6f), new Vector3(6f, 0f, -6f),
+    };
+
+    NetworkManager m_NetworkManager;
+
+    void Awake()
+    {
+        m_NetworkManager = GetComponent<NetworkManager>();
+        m_NetworkManager.NetworkConfig.ConnectionApproval = true;
+        m_NetworkManager.ConnectionApprovalCallback = ApprovalCheck;
+    }
+
+    void OnDestroy()
+    {
+        if (m_NetworkManager != null) m_NetworkManager.ConnectionApprovalCallback = null;
+    }
+
+    /// Call on every machine before StartHost or StartClient.
+    public void SetLocalPayload(string password, string playerName)
+    {
+        var payload = new ConnectionPayload
+        {
+            buildVersion = Application.version,
+            password = password,
+            playerName = playerName,
+        };
+        m_NetworkManager.NetworkConfig.ConnectionData = Encoding.UTF8.GetBytes(JsonUtility.ToJson(payload));
+    }
+
+    void ApprovalCheck(NetworkManager.ConnectionApprovalRequest request,
+                       NetworkManager.ConnectionApprovalResponse response)
+    {
+        // Never trust the payload: it may be missing, malformed or hostile.
+        ConnectionPayload payload = null;
+        try
+        {
+            payload = JsonUtility.FromJson<ConnectionPayload>(Encoding.UTF8.GetString(request.Payload ?? Array.Empty<byte>()));
+        }
+        catch (ArgumentException) { }
+
+        response.CreatePlayerObject = true;
+        int index = m_NetworkManager.ConnectedClientsIds.Count % m_SpawnPoints.Length;
+        response.Position = m_SpawnPoints[index];
+        response.Rotation = Quaternion.identity;
+
+        // The host's own client also passes through here (with the server's id) and is always approved.
+        if (request.ClientNetworkId == NetworkManager.ServerClientId)
+        {
+            response.Approved = true;
+            return;
+        }
+
+        if (payload == null)
+            Reject(response, "Invalid connection data.");
+        else if (payload.buildVersion != Application.version)
+            Reject(response, $"Version mismatch: server is {Application.version}.");
+        else if (!string.IsNullOrEmpty(m_RoomPassword) && payload.password != m_RoomPassword)
+            Reject(response, "Wrong password.");
+        else if (m_NetworkManager.ConnectedClientsIds.Count >= m_MaxPlayers)
+            Reject(response, "The room is full.");
+        else
+            response.Approved = true;
+    }
+
+    static void Reject(NetworkManager.ConnectionApprovalResponse response, string reason)
+    {
+        response.Approved = false;
+        response.CreatePlayerObject = false;
+        response.Reason = reason;
+    }
+}
+```
+
+Lesson 2's `HandleClientStopped` already shows `NetworkManager.DisconnectReason`, so a rejected player now sees
+"Wrong password." instead of a silent timeout.
+
+<Callout type="unity" title="The host goes through approval too">
+
+When you call `StartHost()` with approval enabled, NGO invokes your callback for the host's own client, with
+`ClientNetworkId` set to `NetworkManager.ServerClientId` and the host's own `ConnectionData` as the payload. The host
+can't be declined (NGO logs a warning and approves it anyway), but `CreatePlayerObject`, `Position` and `Rotation` are
+respected. That's why the code above handles the host first.
+
+</Callout>
+
+For checks that take time, such as validating a platform auth ticket with a web service (the
+[security lesson](../../theory/security/) explains why you'd want one), set `response.Pending = true`, keep the
+response object, and set `Approved` and then `Pending = false` when the answer arrives. Finish within the buffer timeout.
+
+<Callout type="pitfall" title="The payload isn't secret">
+
+The docs are explicit: NGO doesn't encrypt or authenticate anything sent in connection approval. A room password in the
+payload keeps out strangers who don't have your build, not attackers who can read traffic. For real authentication,
+send a short-lived ticket that the server verifies with the issuer. Also note that connection approval isn't supported
+in distributed-authority sessions (lesson 11).
+
+</Callout>
+
+## Scenes: the lobby-to-arena flow
+
+Restructure the project into three scenes, and add all three to the build's scene list:
+
+1. **Bootstrap**: the NetworkManager GameObject with `ArenaConnection` and `ArenaApproval`. It's first in the build list.
+   NGO moves the NetworkManager into `DontDestroyOnLoad`, so it survives every scene change.
+2. **Lobby**: a "waiting for players" screen with a **Start match** button that only the host sees.
+3. **Arena**: the floor, the crates, the `Scoreboard` and the `PickupSpawner`, all from earlier lessons.
+
+After `StartHost()` succeeds, the host loads the lobby **through NGO**, and from then on clients follow automatically:
+
+```csharp title="MatchFlow.cs"
+using System.Collections.Generic;
+using Unity.Netcode;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+/// On the NetworkManager GameObject in Bootstrap. Plain MonoBehaviour: it must exist before anything is spawned.
+public class MatchFlow : MonoBehaviour
+{
+    [SerializeField] string m_LobbyScene = "Lobby";
+    [SerializeField] string m_ArenaScene = "Arena";
+
+    NetworkManager m_NetworkManager;
+
+    void Awake()
+    {
+        m_NetworkManager = GetComponent<NetworkManager>();
+        m_NetworkManager.OnServerStarted += HandleServerStarted;
+    }
+
+    void OnDestroy()
+    {
+        if (m_NetworkManager != null) m_NetworkManager.OnServerStarted -= HandleServerStarted;
+    }
+
+    void HandleServerStarted()
+    {
+        // The SceneManager sub-system exists only after starting (lesson 2).
+        m_NetworkManager.SceneManager.OnLoadEventCompleted += HandleLoadEventCompleted;
+        m_NetworkManager.SceneManager.LoadScene(m_LobbyScene, LoadSceneMode.Single);
+    }
+
+    /// Called by the host's "Start match" button.
+    public void StartMatch()
+    {
+        if (!m_NetworkManager.IsServer) return;
+
+        SceneEventProgressStatus status = m_NetworkManager.SceneManager.LoadScene(m_ArenaScene, LoadSceneMode.Single);
+        if (status != SceneEventProgressStatus.Started)
+            Debug.LogWarning($"Could not load {m_ArenaScene}: {status}");
+    }
+
+    // Raised on the server and on every client once all clients have finished (or timed out).
+    void HandleLoadEventCompleted(string sceneName, LoadSceneMode mode, List<ulong> completed, List<ulong> timedOut)
+    {
+        if (!m_NetworkManager.IsServer || sceneName != m_ArenaScene) return;
+
+        foreach (ulong clientId in timedOut)
+            m_NetworkManager.DisconnectClient(clientId, "Took too long to load the arena.");
+
+        // Player objects survived the single-mode load. Move each one to a start position.
+        int i = 0;
+        foreach (ulong clientId in completed)
+        {
+            NetworkObject player = m_NetworkManager.SpawnManager.GetPlayerNetworkObject(clientId);
+            if (player == null) continue;
+            float angle = i++ * Mathf.PI * 0.5f;
+            var start = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * 6f;
+            player.GetComponent<PlayerMovement>().RespawnAtRpc(start); // owner-authoritative, see lesson 7
+        }
+    }
+}
+```
+
+`LoadScene` returns a `SceneEventProgressStatus` instead of throwing. `Started` means success. The others tell you what
+went wrong: `SceneEventInProgress` (another load or unload is still running), `InvalidSceneName` (misspelled, or not
+in the build list), `SceneFailedVerification` (your `VerifySceneBeforeLoading` handler said no), `SceneNotLoaded` and
+`InternalNetcodeError`.
+
+### What survives a single-mode load
+
+When the server loads a scene with `LoadSceneMode.Single`, NGO looks at every spawned NetworkObject:
+
+- **Dynamically spawned** objects whose `DestroyWithScene` is `false` (the default for `Spawn`, `InstantiateAndSpawn` and
+  player objects) are moved to `DontDestroyOnLoad` during the load and then into the new active scene. Your players survive.
+- Objects spawned with `destroyWithScene: true` are despawned. Lesson 3's pickups use that flag, so they disappear with
+  the arena when you go back to the lobby.
+- **In-scene placed** objects belong to their scene. The old scene's objects go away with it, and the new scene's
+  objects (the `Scoreboard`, the `PickupSpawner`, the crates) spawn when it loads on the server.
+
+## Scene events
+
+Every load and unload is a **scene event** with several phases, and NGO reports each phase. Subscribe to
+`SceneManager.OnSceneEvent` for everything, or to the per-phase events.
+
+| `SceneEventType` | Per-phase event | Raised when |
+|---|---|---|
+| `Load` / `Unload` | `OnLoad` / `OnUnload` | A load or unload starts |
+| `LoadComplete` / `UnloadComplete` | `OnLoadComplete` / `OnUnloadComplete` | One machine finished. The server gets one per client |
+| `LoadEventCompleted` / `UnloadEventCompleted` | `OnLoadEventCompleted` / `OnUnloadEventCompleted` | Everyone finished, with `ClientsThatCompleted` and `ClientsThatTimedOut` |
+| `Synchronize` | `OnSynchronize` | A newly approved client starts synchronizing |
+| `SynchronizeComplete` | `OnSynchronizeComplete` | That client has loaded every scene and spawned every object |
+| `ReSynchronize` | (only in `OnSceneEvent`) | Objects despawned while the client was synchronizing |
+
+Two more types handle objects rather than loads: `ActiveSceneChanged` (the server changed the active scene and
+**Active Scene Synchronization** is on) and `ObjectSceneChanged` (spawned objects migrated to another scene, with
+**Scene Migration Synchronization** on). Clients that time out (after `NetworkConfig.LoadSceneTimeOut`, 120 seconds
+by default) appear in `ClientsThatTimedOut`, which `MatchFlow` uses to kick them.
+
+<Callout type="pitfall" title="Using Unity's SceneManager while connected">
+
+`UnityEngine.SceneManagement.SceneManager.LoadScene("Arena")` on the server loads the scene **only there**. Connected
+clients stay where they are, and only late joiners would get it during synchronization. While a session is running, load
+networked scenes with `NetworkManager.SceneManager.LoadScene`. Also don't use Unity's `sceneLoaded` callback to decide
+that loading is done: it fires before NGO has finished, so RPCs or NetworkVariable writes made there can go to objects
+that don't exist yet on clients. Wait for `LoadEventCompleted` (or `SynchronizeComplete` for a late joiner).
+
+</Callout>
+
+## Additive scenes
+
+`LoadSceneMode.Additive` keeps the current scenes and adds another, for streaming a level section or adding a UI scene.
+Only the server can load, and it can only unload scenes that were loaded additively and aren't the active scene:
+
+```csharp title="BonusRoom.cs"
+// Server only. Store the Scene from the LoadComplete event where ClientId == ServerClientId.
+var status = NetworkManager.SceneManager.UnloadScene(m_LoadedBonusRoom);
+```
+
+`VerifySceneBeforeLoading`, a delegate that receives `(int sceneIndex, string sceneName, LoadSceneMode mode)` and returns
+`bool`, lets the server reject a load, and lets a client skip a scene it doesn't need, such as a server-only debug scene.
+
+## In-scene placed objects across scenes
+
+<Term id="in-scene-placed-object">In-scene placed</Term> NetworkObjects are identified by their scene plus their
+`GlobalObjectIdHash`, which is why they need no prefab registration. The rules that follow from that:
+
+- They spawn when their scene loads in a running session, in the order `Awake`, `Start`, `OnNetworkSpawn` (lesson 4).
+- Don't **destroy** them. To remove one temporarily, the server calls `Despawn(false)`, disables it in
+  `OnNetworkDespawn`, and later re-enables it and calls `Spawn()`. If something should be destroyed, make it a
+  dynamically spawned prefab instead.
+- You can't create more copies of an in-scene object at runtime. A second copy means loading the scene again additively.
+- Don't call `DontDestroyOnLoad` on them. Their identity is tied to the scene, and moving them breaks the hash lookup
+  for late joiners, typically with "NetworkPrefab hash was not found" errors.
+
+<Callout type="pitfall" title="The scene isn't in the build list">
+
+With scene management on, `LoadScene` refuses a scene that isn't in the build list and returns `InvalidSceneName`. A late
+joiner whose build lacks a scene can't synchronize at all. Add every networked scene to the build profile's scene list as
+soon as you create it, and keep the lists identical across builds.
+
+</Callout>
+
+<KeyTakeaways>
+
+- A joining client is approved, synchronized (scenes, then objects) and only then reported as `ClientConnected` on the server.
+- `ConnectionApprovalCallback` reads `request.Payload` and fills in `Approved`, `Reason`, `CreatePlayerObject`, `Position` and `Pending`. The host passes through it and is always approved.
+- The approval payload is neither encrypted nor authenticated: treat it as untrusted input.
+- Load networked scenes on the server with `NetworkManager.SceneManager.LoadScene`, check the `SceneEventProgressStatus`, and act on `LoadEventCompleted`.
+- Single-mode loads keep dynamically spawned objects unless they were spawned with `destroyWithScene: true`. In-scene placed objects live and die with their scene.
+
+</KeyTakeaways>
