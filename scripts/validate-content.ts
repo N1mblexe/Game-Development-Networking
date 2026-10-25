@@ -139,7 +139,9 @@ for (const [id, t] of terms) {
 // ------------------------------------------------------------------------------------ MDX usage
 const attr = (tag: string, name: string) => new RegExp(`\\b${name}=["']([^"']+)["']`).exec(tag)?.[1];
 for (const l of lessons.values()) {
-  const body = l.body.replace(/^(```|~~~)[\s\S]*?^\1/gm, ''); // ignore fenced code
+  const body = l.body
+    .replace(/^(```|~~~)[\s\S]*?^\1/gm, '') // ignore fenced code
+    .replace(/`[^`\n]*`/g, ''); // ignore inline code
   for (const m of body.matchAll(/<([A-Z][A-Za-z0-9]*)\b[^>]*>/g)) {
     const [tag, name] = m;
     if (!MDX_COMPONENTS.includes(name)) {
