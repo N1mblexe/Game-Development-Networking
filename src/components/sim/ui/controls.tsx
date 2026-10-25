@@ -4,9 +4,9 @@ import { SPEEDS } from '../../../lib/netsim';
 import type { SimHandle } from './useSim';
 
 const btn =
-  'inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm font-semibold text-text hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed';
+  'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm font-semibold text-text hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed';
 const btnPrimary =
-  'inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent px-3 py-1.5 text-sm font-semibold text-on-accent hover:opacity-90';
+  'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-accent bg-accent px-3 py-1.5 text-sm font-semibold text-on-accent hover:opacity-90';
 
 const Icon = ({ d, fill }: { d: string; fill?: boolean }) => (
   <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true" fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={fill ? 0 : 2} strokeLinecap="round" strokeLinejoin="round">
@@ -55,7 +55,11 @@ export function ControlBar({ sim, onReset, compact, extra, stepLabel = 'Step', s
     <div className="flex flex-wrap items-center gap-2">
       <button type="button" className={btnPrimary} onClick={sim.toggle} aria-label={sim.playing ? 'Pause' : 'Play'}>
         <Icon d={sim.playing ? PAUSE : PLAY} fill />
-        <span className="w-10 text-left">{sim.playing ? 'Pause' : 'Play'}</span>
+        {/* Both labels share one grid cell, so the button is always as wide as "Pause" and never jumps. */}
+        <span className="grid text-left" aria-hidden="true">
+          <span className="invisible col-start-1 row-start-1">Pause</span>
+          <span className="col-start-1 row-start-1">{sim.playing ? 'Pause' : 'Play'}</span>
+        </span>
       </button>
       <button type="button" className={btn} onClick={sim.stepOnce} title="Advance one step (pauses)">
         <Icon d={STEP} fill />
