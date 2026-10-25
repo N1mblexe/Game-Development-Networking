@@ -1,0 +1,76 @@
+passPct: 70
+questions:
+  - id: what-ngo-provides
+    type: truefalse
+    prompt: NGO 2.x includes a complete client-side prediction and rollback-and-replay system that works without extra code.
+    answer: false
+    explanation: >-
+      The manual says NGO provides **client anticipation**: anticipated variables and transforms, `OnReanticipate`, `Smooth`
+      and stale-data detection. A full rollback-and-replay loop is left to you.
+  - id: value-vs-authoritative
+    type: codeline
+    prompt: This server-side check lets a player fire with zero ammo if they click quickly. Click the buggy line.
+    code: |-
+      public bool ServerSpend()
+      {
+          if (!IsServer) return false;
+          if (Ammo.Value <= 0) return false;
+          Ammo.Anticipate(Ammo.AuthoritativeValue - 1);
+          return true;
+      }
+    answerLines: [4]
+    explanation: >-
+      Server decisions should use `AuthoritativeValue`, the real state. `Value` is the anticipated, display-side value.
+      Checking one and writing the other mixes the two, so check `Ammo.AuthoritativeValue <= 0`.
+  - id: write-transform
+    type: codeline
+    prompt: On a client, this anticipated movement keeps snapping back every update. Click the line responsible.
+    code: |-
+      void OnOwnerTick()
+      {
+          Vector2 move = ReadInput();
+          Vector3 next = Step(transform.position, move);
+          transform.position = next;
+          MoveInputRpc(move);
+      }
+    answerLines: [5]
+    explanation: >-
+      On a client, an AnticipatedNetworkTransform's transform is managed by the anticipation system, and direct writes are
+      overwritten by the next server update. Call `m_Transform.AnticipateMove(next)` instead, in the same frame as the RPC.
+  - id: stale-mode
+    type: single
+    prompt: Which StaleDataHandling fits an ammo counter that changes only when the player fires?
+    options:
+      - Reanticipate, so every server update recomputes the value
+      - Ignore, so updates produced before the server processed the shot don't undo the anticipated count
+      - Neither, because anticipated variables can't use StaleDataHandling
+      - Reanticipate, because Ignore stops AuthoritativeValue from updating
+    answer: 1
+    explanation: >-
+      One-off actions use `Ignore`: stale updates don't roll back the anticipation, while `AuthoritativeValue` still updates.
+      `Reanticipate` suits values that change constantly, such as movement, where you recompute in `OnReanticipate`.
+  - id: reconcile-order
+    type: order
+    prompt: Order the steps in OnReanticipate for server-authoritative movement with input replay.
+    items:
+      - Check that the transform's ShouldReanticipate is true
+      - Remember PreviousAnticipatedState (where the player was drawn)
+      - Start from AuthoritativeState.Position
+      - Replay the inputs the server can't have processed yet
+      - Call AnticipateMove with the replayed position
+      - Smooth from the previous state to the new one if the error is small
+    explanation: >-
+      Reconciliation rewinds to the server's state, reapplies the newer inputs and only then decides how to present the
+      correction: a short `Smooth` for small errors, a snap for large ones.
+  - id: same-step
+    type: multi
+    prompt: The predicted player jitters constantly even on a perfect LAN. Which causes are likely? Select all that apply.
+    options:
+      - The client steps with Time.deltaTime while the server steps with the tick length
+      - The server clamps the arena radius but the client doesn't
+      - The client anticipates and sends the input RPC in the same frame
+      - The client and server use different speed values
+    answers: [0, 1, 3]
+    explanation: >-
+      Replay only lands where the client already is if both sides run the same step with the same inputs. Anticipating and
+      sending in the same frame is correct, because that's what the anticipation counter expects.
