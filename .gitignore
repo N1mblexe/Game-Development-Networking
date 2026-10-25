@@ -26,3 +26,6 @@ pnpm-debug.log*
 # test output
 test-results/
 playwright-report/
+
+# agent worktrees
+.claude/
