@@ -226,8 +226,7 @@ namespace Campfire.Net
         public void QuitGame()
         {
             quitAfterTeardown = true;
-            EndSession();
-            if (tornDown) Application.Quit();            // nothing was running
+            EndSession();                                // quits from FinishTeardown
         }
 
         private void HandleConnectionEvent(NetworkManager manager, ConnectionEventData data)
