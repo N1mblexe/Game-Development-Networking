@@ -200,7 +200,7 @@ function drawLane(ctx: CanvasRenderingContext2D, p: Palette, now: number, m: Mod
   text(ctx, p, isTcp ? 'TCP: reliable + ordered' : 'UDP: unreliable, newest wins', pad, y0 + 14, { size: 12, weight: 700, color });
   const shown = isTcp ? m.tcpShown : m.udpShown;
   const age = shown ? now - shown.t : 0;
-  text(ctx, p, shown ? `showing data ${Math.round(age)} ms old` : 'waiting…', w - pad, y0 + 14, {
+  text(ctx, p, shown ? `${narrow ? '' : 'showing data '}${Math.round(age)} ms old` : 'waiting…', w - pad, y0 + 14, {
     align: 'right',
     size: 10.5,
     mono: true,
@@ -306,7 +306,7 @@ function drawLane(ctx: CanvasRenderingContext2D, p: Palette, now: number, m: Mod
 
 function drawChart(ctx: CanvasRenderingContext2D, p: Palette, now: number, m: Model, x: number, y: number, w: number, h: number) {
   fillRound(ctx, x, y, w, h, 6, p.surface2);
-  text(ctx, p, 'Age of what the client shows (ms), last 6 s', x + 8, y + 11, { size: 10, weight: 650, color: p.muted });
+  text(ctx, p, w < 420 ? 'Age shown (ms), last 6 s' : 'Age of what the client shows (ms), last 6 s', x + 8, y + 11, { size: 10, weight: 650, color: p.muted });
   const top = y + 20;
   const bottom = y + h - 6;
   let maxAge = 100;

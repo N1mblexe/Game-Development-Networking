@@ -257,7 +257,7 @@ export default function Prediction(props: PredictionProps) {
     stepMs: 1000 / TICK_HZ,
     step: (now) => model.current.step(now),
     draw: (ctx, w, h, p, now) => draw(ctx, w, h, p, now, model.current),
-    height: (w) => Math.round(Math.min(560, (w - 24) * (H / W)) + (w < 520 ? 92 : 78)),
+    height: (w) => Math.round(Math.min(440, (w - 24) * (H / W)) + (w < 520 ? 92 : 78)),
     onStats: () => {
       const m = model.current;
       const pending = m.history.pending.length;
@@ -515,11 +515,17 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, p: Palette, n
   text(
     ctx,
     p,
-    m.mode === 'none'
-      ? 'You only move when the server says so: every input waits a full round trip.'
-      : m.mode === 'predict'
-        ? 'Moves instantly, but never replays: when the server disagrees, you snap to its old position.'
-        : 'Server state + replay of unacked inputs (blue) = corrected prediction.',
+    narrow
+      ? m.mode === 'none'
+        ? 'You move only when the server says so (1 RTT late).'
+        : m.mode === 'predict'
+          ? 'Instant, but no replay: disagreements snap you back.'
+          : 'Server state + replayed unacked inputs = prediction.'
+      : m.mode === 'none'
+        ? 'You only move when the server says so: every input waits a full round trip.'
+        : m.mode === 'predict'
+          ? 'Moves instantly, but never replays: when the server disagrees, you snap to its old position.'
+          : 'Server state + replay of unacked inputs (blue) = corrected prediction.',
     w / 2,
     legendY,
     { align: 'center', size: narrow ? 9.5 : 10.5, color: p.muted },

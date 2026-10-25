@@ -167,7 +167,7 @@ export default function LagCompensation(props: LagCompensationProps) {
     stepMs: 1000 / SERVER_HZ,
     step: (now) => model.current.step(now),
     draw: (ctx, w, h, p, now) => draw(ctx, w, h, p, now, model.current, modeRef.current),
-    height: (w) => (w < 520 ? 300 : 290),
+    height: (w) => layout(w).height,
     onStats: (now) => {
       const m = model.current;
       const rs = m.results;
@@ -225,7 +225,7 @@ export default function LagCompensation(props: LagCompensationProps) {
         onPointerDown={onPointerDown}
         label="Top: your screen, where you click to shoot the moving target. Bottom: the server when your shot arrives, showing where the target is now and where it was when you fired (the rewound hitbox)."
       >
-        <div className="pointer-events-none absolute top-2 right-2 rounded bg-surface/85 px-1.5 py-0.5 text-[0.7rem] text-muted">
+        <div className="pointer-events-none absolute right-2 bottom-1 rounded bg-surface/85 px-1.5 py-0.5 text-[0.7rem] text-muted">
           {autoFire ? 'Auto-firing · click the top view to shoot yourself' : 'Click the top view to shoot'}
         </div>
       </SimCanvas>
@@ -296,12 +296,14 @@ export default function LagCompensation(props: LagCompensationProps) {
 
 function layout(w: number) {
   const narrow = w < 520;
-  const ox = 12;
-  const scale = (w - 24) / W;
+  // Cap the scale so both panels fit on wide screens; centre the world horizontally.
+  const scale = Math.min((w - 24) / W, 26);
+  const pw = W * scale;
+  const ox = (w - pw) / 2;
   const panelH = H * scale;
   const clientY = 22;
   const serverY = clientY + panelH + 30;
-  return { narrow, ox, scale, panelH, clientY, serverY };
+  return { narrow, ox, pw, scale, panelH, clientY, serverY, height: Math.round(serverY + panelH + 28) };
 }
 
 function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, now: number, m: Model, mode: CompMode) {
@@ -313,8 +315,8 @@ function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, 
   // Client panel
   const cy0 = L.clientY;
   text(ctx, p, 'Your screen (client)', ox, cy0 - 10, { size: 11, weight: 700, color: p.accent });
-  text(ctx, p, `target shown ${Math.round(m.rttMs / 2 + m.interpDelayMs)} ms in the past`, w - 12, cy0 - 10, { align: 'right', size: 10, color: p.muted });
-  fillRound(ctx, ox, cy0, w - 24, panelH, 8, p.surface2, p.border);
+  text(ctx, p, L.narrow ? `${Math.round(m.rttMs / 2 + m.interpDelayMs)} ms in the past` : `target shown ${Math.round(m.rttMs / 2 + m.interpDelayMs)} ms in the past`, ox + L.pw, cy0 - 10, { align: 'right', size: 10, color: p.muted });
+  fillRound(ctx, ox, cy0, L.pw, panelH, 8, p.surface2, p.border);
   const Yc = (y: number) => cy0 + y * scale;
   const real = m.serverPos(now);
   circle(ctx, X(real.x), Yc(real.y), rr, undefined, alpha(p.text, 0.35), 1.25);
@@ -337,7 +339,7 @@ function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, 
   // Server panel
   const sy0 = L.serverY;
   text(ctx, p, 'Server', ox, sy0 - 10, { size: 11, weight: 700, color: p.text });
-  fillRound(ctx, ox, sy0, w - 24, panelH, 8, p.surface2, p.border);
+  fillRound(ctx, ox, sy0, L.pw, panelH, 8, p.surface2, p.border);
   const Ys = (y: number) => sy0 + y * scale;
   const last = m.results[0];
   const showLast = last && now - last.arrivedAt < 2600;
@@ -360,12 +362,12 @@ function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, 
     if (last.rewound) line(ctx, X(last.rewound.x), Ys(H / 2), X(last.serverNow.x), Ys(H / 2), alpha(p.muted, 0.6), 1, [2, 3]);
     cross(ctx, X(last.point.x), Ys(last.point.y), 7, p.danger, 2.5);
     const hit = mode === 'rewind' ? last.hitRewind : last.hitNoComp;
-    text(ctx, p, hit ? 'HIT' : 'MISS', w - 20, sy0 + 14, { align: 'right', size: 13, weight: 800, color: hit ? p.ok : p.danger, bg: hit ? p.okSoft : p.dangerSoft, pad: 6 });
-    text(
+    text(ctx, p, hit ? 'HIT' : 'MISS', ox + L.pw - 8, sy0 + 14, { align: 'right', size: 13, weight: 800, color: hit ? p.ok : p.danger, bg: hit ? p.okSoft : p.dangerSoft, pad: 6 });
+    if (!L.narrow) text(
       ctx,
       p,
       mode === 'rewind' ? 'tested against the rewound hitbox' : 'tested against where the target is now',
-      w - 20,
+      ox + L.pw - 8,
       sy0 + panelH - 12,
       { align: 'right', size: 9.5, color: p.muted },
     );
@@ -373,6 +375,6 @@ function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, 
   } else {
     const cur = m.serverPos(now);
     circle(ctx, X(cur.x), Ys(cur.y), rr, alpha(p.text, 0.08), p.text, 2);
-    text(ctx, p, 'waiting for a shot…', w / 2, sy0 + panelH - 12, { align: 'center', size: 10, color: p.muted });
+    text(ctx, p, 'waiting for a shot…', ox + L.pw / 2, sy0 + panelH - 12, { align: 'center', size: 10, color: p.muted });
   }
 }

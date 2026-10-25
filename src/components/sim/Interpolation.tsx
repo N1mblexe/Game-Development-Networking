@@ -348,8 +348,12 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, p: Palette, n
     const label = bad
       ? sample.status === 'waiting'
         ? 'waiting for first snapshots'
-        : 'buffer ran dry: nothing newer to blend toward!'
-      : `render time: ${c.renderDelayMs} ms behind the newest data`;
+        : narrow
+          ? 'buffer ran dry!'
+          : 'buffer ran dry: nothing newer to blend toward!'
+      : narrow
+        ? `render time (−${c.renderDelayMs} ms)`
+        : `render time: ${c.renderDelayMs} ms behind the newest data`;
     text(ctx, p, label, x, ty + stripH - 30 + 18, { align: x > (tx0 + tx1) / 2 ? 'right' : 'left', size: 9.5, weight: 650, color: bad ? p.danger : p.accent });
   } else {
     text(ctx, p, mode === 'raw' ? 'draws the newest snapshot as soon as it arrives' : 'predicts from the newest snapshot + its velocity', tx0 + 8, ty + stripH - 30 + 18, {
