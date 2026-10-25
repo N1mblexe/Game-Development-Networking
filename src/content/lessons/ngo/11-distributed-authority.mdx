@@ -96,16 +96,25 @@ public class DistributedSessionStarter : MonoBehaviour
 
     async Task JoinAsync()
     {
-        m_Status = "Signing in…";
-        await UnityServices.InitializeAsync();
-        if (!AuthenticationService.Instance.IsSignedIn)
-            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+        try
+        {
+            m_Status = "Signing in…";
+            await UnityServices.InitializeAsync();
+            if (!AuthenticationService.Instance.IsSignedIn)
+                await AuthenticationService.Instance.SignInAnonymouslyAsync();
 
-        var options = new SessionOptions { MaxPlayers = 4 }.WithDistributedAuthorityNetwork();
+            var options = new SessionOptions { MaxPlayers = 4 }.WithDistributedAuthorityNetwork();
 
-        // The first client creates the session (and becomes session owner); later ones join it.
-        m_Session = await MultiplayerService.Instance.CreateOrJoinSessionAsync(m_SessionName, options);
-        m_Status = $"In session {m_Session.Id}";
+            // The first client creates the session (and becomes session owner); later ones join it.
+            m_Session = await MultiplayerService.Instance.CreateOrJoinSessionAsync(m_SessionName, options);
+            m_Status = $"In session {m_Session.Id}";
+        }
+        catch (System.Exception e)
+        {
+            // The button discards the Task (_ = JoinAsync()), so an uncaught exception here would vanish silently.
+            m_Status = $"Failed: {e.Message}";
+            Debug.LogException(e);
+        }
     }
 
     async void OnDestroy()
@@ -236,7 +245,10 @@ public class CarryableCrate : NetworkBehaviour
 ```
 
 By default, requests are approved automatically. Assigning `OnOwnershipRequested` lets the current owner refuse, here
-while it's still carrying the crate. For a `Transferable` object you skip the request and call
+while it's still carrying the crate. Because the crate is also `Distributable`, NGO may hand it to another client when
+someone joins or leaves, and only a lock prevents that. A sturdier version calls `NetworkObject.SetOwnershipLock(true)`
+when the owner picks it up and `SetOwnershipLock(false)` in `Drop`, accepting that other clients' requests then come
+back as `Locked` instead of reaching `OnOwnershipRequested`. For a `Transferable` object you skip the request and call
 `ChangeOwnership` with `NetworkManager.LocalClientId`. If the flags don't allow it,
 `OnOwnershipPermissionsFailure` reports why.
 
