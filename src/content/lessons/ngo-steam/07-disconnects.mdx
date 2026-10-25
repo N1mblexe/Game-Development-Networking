@@ -91,7 +91,7 @@ transport to at least log it.
 What you should notice:
 
 - **`Shutdown()` doesn't finish immediately on a host.** In NGO 2.13, a host with connected clients first calls
-  `DisconnectClient(id, "Disconnected due to host shutting down.")` for each of them, then waits until they're gone or 5 seconds
+  `DisconnectClient(id, reason)` for each of them, then waits until they're gone or 5 seconds
   have passed, and only then runs its internal shutdown. So your teardown must continue in `OnClientStopped` or `OnServerStopped`,
   not on the line after `Shutdown()`.
 - **The client doesn't call `Shutdown()` itself.** When a client's NGO receives a disconnect for the server, it shuts down on its own
@@ -321,7 +321,7 @@ Steam has already solved the hardest part, which is choosing a successor: when t
    leave in `FinishTeardown`.
 3. The new lobby owner calls `StartHost()`, restores the latest snapshot and writes its own SteamId into the
    <Term id="host-key">host key</Term>. Because it's now the owner, it's allowed to write lobby data.
-4. The others watch `SteamMatchmaking.OnLobbyDataChanged`. When the `host` key changes to the current owner, they get a fresh ticket and
+4. The others watch `OnLobbyDataChanged`. When the `host` key changes to the current owner, they get a fresh ticket and
    call `StartClient()`, which is lesson 4's `JoinGame` without the lobby join.
 5. Give up after a timeout (say 20 seconds) and fall back to "end the session".
 

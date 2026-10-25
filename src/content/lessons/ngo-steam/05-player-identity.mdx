@@ -211,7 +211,7 @@ namespace Campfire.Net
 
 What you should notice:
 
-- **`NetworkVariableWritePermission.Server`** makes the host the only writer. If a client sets `steamId.Value`, NGO logs a
+- **`WritePermission.Server`** makes the host the only writer. If a client sets `steamId.Value`, NGO logs a
   write-permission error and ignores the write.
 - **Fixed strings, not `string`.** The NGO manual recommends the `Unity.Collections` fixed string types because a managed
   `string` would allocate on every update. Steam's `k_cchPersonaNameMax` is 128 UTF-8 bytes, `FixedString128Bytes` stores
@@ -315,7 +315,7 @@ object exists. Each answers different questions:
 | "My friend Alex is in this session: where?" | Everyone | `PlayerIdentity.TryGetBySteamId(alexId, ...)` |
 | "Kick SteamId X" | Host | `TryGetBySteamId`, then `NetworkManager.DisconnectClient(player.OwnerClientId, reason)` |
 
-Why not just call `NetworkManager.SpawnManager.GetPlayerNetworkObject(clientId)`? Because in client-server mode only the
+Why not just call `GetPlayerNetworkObject(clientId)`? Because in client-server mode only the
 server may look up **other** players' objects that way. On a client it logs "Only the server can find player objects
 from other clients" and returns `null`. The registry above works on every peer because each peer builds it from the
 objects it has spawned.
@@ -358,7 +358,7 @@ message arrived on, and broadcasts the SteamId so every peer can show the name a
 
 <Callout type="pitfall" title="Letting the owner write its own identity">
 
-`NetworkVariableWritePermission.Owner` plus "set my SteamId in `OnNetworkSpawn` if `IsOwner`" looks neat and works in testing.
+`WritePermission.Owner` plus "set my SteamId in `OnNetworkSpawn` if `IsOwner`" looks neat and works in testing.
 It also lets any modified client claim to be anyone. Identity is written by the host from verified data, or it isn't identity.
 
 </Callout>

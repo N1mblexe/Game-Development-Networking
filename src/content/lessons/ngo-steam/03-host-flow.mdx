@@ -51,7 +51,7 @@ This lesson builds the host half of two scripts, `SteamLobbyService` and `Networ
 
 What you should notice:
 
-- **The lobby starts invisible.** Facepunch's `SteamMatchmaking.CreateLobbyAsync(maxMembers)` creates a lobby of type
+- **The lobby starts invisible.** Facepunch's `CreateLobbyAsync(maxMembers)` creates a lobby of type
   *Invisible*, which no search returns and no friend can see. That gives you a safe window to do everything else.
 - **NGO starts before the lobby becomes visible.** By the time anyone can join, `StartHost()` has opened the relay socket.
 - **The `host` key is written by the host about itself.** Clients never guess the host. They read it.

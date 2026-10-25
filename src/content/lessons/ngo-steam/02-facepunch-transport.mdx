@@ -220,7 +220,7 @@ before sending them.
 
 On the host, the transport identifies each peer by its Steam **connection handle** (`connection.Id`). That number is the
 <Term id="transport-client-id">transport client id</Term>. NGO maps it to its own <Term id="client-id">client id</Term> (0 for the host, then 1, 2, 3 and so on), and you can
-convert between them with `NetworkManager.GetClientIdFromTransportId` and `GetTransportIdFromClientId`.
+convert between them with `GetClientIdFromTransportId` and `GetTransportIdFromClientId`.
 
 The **SteamId** is a third id. The transport stores it in a private `Client` class (`steamId = info.Identity.SteamId`) and
 never exposes it. With the bundled 2.3.2 DLLs, it's reportedly **always 0** anyway (issue 217, fixed by newer Facepunch.Steamworks
@@ -253,8 +253,8 @@ public override void Shutdown()
 
 <Steps>
 
-1. **Embed the package.** Copy the folder `Library/PackageCache/com.community.netcode.transport.facepunch@…` to
-   `Packages/com.community.netcode.transport.facepunch`, then remove the git entry from `Packages/manifest.json`. Unity treats
+1. **Embed the package.** Copy the folder `Library/PackageCache/<package>@…` to
+   `Packages/<package>`, then remove the git entry from `Packages/manifest.json`. Unity treats
    a package inside `Packages/` as embedded, which means it's editable and versioned with your project. This is now your
    <Term id="vendored-transport">vendored transport</Term>.
 2. **Replace the bundled Steamworks build.** Delete the package's `Runtime/Facepunch` folder and install **Facepunch.Steamworks 2.5.2**
@@ -309,7 +309,7 @@ public override ulong GetCurrentRtt(ulong clientId)
 </CodeTabs>
 
 `Connection.QuickStatus()` returns Facepunch's `ConnectionStatus`, whose `Ping` property is Steam's current ping estimate
-in milliseconds. The transport's interfaces (`IConnectionManager`, `ISocketManager`, `Connection.SendMessage(byte[], int, int, SendType)`) have the same
+in milliseconds. The transport's interfaces (`IConnectionManager`, `ISocketManager`, `SendMessage(byte[], int, int, SendType)`) have the same
 signatures in Facepunch.Steamworks 2.5.2, so the rest of the file compiles unchanged against the newer DLLs.
 
 ## SteamBootstrap: one owner for Steam
@@ -425,7 +425,7 @@ With `SteamBootstrap` initializing first, it's ignored, but keep it in sync anyw
 
 <KeyTakeaways>
 
-- Install from `…multiplayer-community-contributions.git?path=/Transports/com.community.netcode.transport.facepunch`. The package bundles Facepunch.Steamworks 2.3.2 DLLs and declares no NGO dependency.
+- Install from `…/multiplayer-community-contributions.git?path=…`. The package bundles Facepunch.Steamworks 2.3.2 DLLs and declares no NGO dependency.
 - Despite a stale CHANGELOG, `main` overrides `OnEarlyUpdate` and therefore **requires NGO 2.2.0 or later**.
 - The transport uses relay sockets, accepts every connection, maps reliable deliveries to `SendType.Reliable` and unreliable ones to `SendType.Unreliable`, and hides the peer's SteamId.
 - Out of the box, `GetCurrentRtt` returns 0 and `Shutdown` calls `SteamClient.Shutdown()`. Embed the package, swap in Facepunch.Steamworks 2.5.2 and patch both methods.

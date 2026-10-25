@@ -87,7 +87,7 @@ Always filter on a key that is unique to your project (`game = campfire` here), 
 What you should notice:
 
 - **Game already running:** Steam posts `GameLobbyJoinRequested_t`, which Facepunch exposes as
-  `SteamFriends.OnGameLobbyJoinRequested(Lobby lobby, SteamId friend)`. Valve's docs add that "it's up to your game to decide to obey it or not".
+  `OnGameLobbyJoinRequested(Lobby, SteamId)`. Valve's docs add that "it's up to your game to decide to obey it or not".
 - **Game not running:** Steam launches it with `+connect_lobby <64-bit lobby id>` on the command line. No callback fires.
 - **Rich presence joins** use whatever you put in the `connect` key. Because the host set it to `+connect_lobby <id>` in lesson 3,
   a cold start through the friends list produces the same command line as a cold start from an invite.
@@ -121,7 +121,7 @@ public static bool TryGetLaunchLobby(out SteamId lobbyId)
 }
 ```
 
-`HandleJoinRequested` is the handler that part 1 of the service already subscribed to `SteamFriends.OnGameLobbyJoinRequested` in `OnEnable`.
+`HandleJoinRequested` is the handler that part 1 of the service already subscribed to `OnGameLobbyJoinRequested` in `OnEnable`.
 
 <Callout type="steam" title="The command-line warning popup">
 
@@ -266,7 +266,7 @@ What you should notice:
 
 <Callout type="pitfall" title="Calling StartClient before targetSteamId is set">
 
-FacepunchTransport reads `targetSteamId` **inside** `StartClient()`, when it calls `SteamNetworkingSockets.ConnectRelay(targetSteamId)`.
+FacepunchTransport reads `targetSteamId` **inside** `StartClient()`, when it calls `ConnectRelay(targetSteamId)`.
 If the field is still 0, or still holds the host from your *previous* session, the transport happily dials the wrong peer,
 `StartClient()` still returns `true`, and the player stares at "Connecting…" until Steam's initial connection timeout expires. Set
 the field on every join, right before starting. A typical way to get this wrong is an `async` gap: kicking off `StartClient()` and
@@ -293,7 +293,7 @@ before calling `JoinGame`. Starting a client on a NetworkManager that's still sh
 
 <KeyTakeaways>
 
-- A client arrives through the **browser**, a **hot invite** (`SteamFriends.OnGameLobbyJoinRequested`) or a **cold start** (`+connect_lobby <id>`). Route all three into one `JoinGame`.
+- A client arrives through the **browser**, a **hot invite** (`OnGameLobbyJoinRequested`) or a **cold start** (`+connect_lobby <id>`). Route all three into one `JoinGame`.
 - Filter searches on a project-unique `game` key plus `version`, and remember that `RequestAsync()` returns `null` when nothing matches.
 - Use `Lobby.Join()` and check for `RoomEnter.Success`, then **re-validate game, version and host** because invites bypass filters.
 - Set `targetSteamId`, `NetworkTransport`, `ProtocolVersion` and `ConnectionData` **before** `StartClient()`.

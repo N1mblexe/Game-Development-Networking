@@ -126,8 +126,8 @@ Three small changes connect it to the earlier scripts:
 
 1. **SteamBootstrap**: at the top of `Awake`, after the singleton check, add `if (!TransportSwitcher.UsesSteam) return;`. Editor players
    on Unity Transport then never initialize Steam, so `SteamBootstrap.IsReady` is `false` and every Steam-dependent call already bails out.
-2. **NetworkLauncher.HostGame** (lesson 3): replace `Net.NetworkConfig.NetworkTransport = GetFacepunch();` with `TransportSwitcher.Apply(Net);`,
-   and start the method with `if (!TransportSwitcher.UsesSteam) { HostLocal(); return; }`.
+2. **NetworkLauncher.HostGame** (lesson 3): replace the `NetworkTransport = GetFacepunch();` line with `TransportSwitcher.Apply(Net);`,
+   and start the method with an early `HostLocal(); return;` when `TransportSwitcher.UsesSteam` is false.
 3. **SteamAuthApproval** (lesson 6) already approves everyone when `UsesSteam` is false. That branch can't exist in a release build, because
    `Resolve` always returns `Steam` there.
 
@@ -176,7 +176,7 @@ namespace Campfire.Net
 }
 ```
 
-`UnityTransport.SetConnectionData(address, port, listenAddress)` sets the address a client connects to and, on the host, the address
+`SetConnectionData(address, port, listenAddress)` sets the address a client connects to and, on the host, the address
 it listens on. Teardown from lesson 7 works unchanged: `OnClientStopped` fires on Unity Transport too, and the Steam steps inside it
 skip themselves because there's no lobby and no ticket.
 
@@ -259,8 +259,8 @@ What you should notice:
 
 <Callout type="unity" title="Simulating a bad network">
 
-`UnityTransport.SetDebugSimulatorParameters` is marked obsolete in NGO 2.13 and "has no effect". Use the **Network Simulator** from the
-Multiplayer Tools package for the fast loop. For Steam builds, Facepunch exposes Steam's own simulator as `SteamNetworkingUtils.FakeSendPacketLag`
+`SetDebugSimulatorParameters` is marked obsolete in NGO 2.13 and "has no effect". Use the **Network Simulator** from the
+Multiplayer Tools package for the fast loop. For Steam builds, Facepunch exposes Steam's own simulator as `FakeSendPacketLag`
 (milliseconds) and `FakeSendPacketLoss` (percent, 0 to 100), plus the matching `Recv` properties. Guard them with `#if DEVELOPMENT_BUILD`.
 
 </Callout>
@@ -286,7 +286,7 @@ friend on a call). Here's a setup that works:
 
 <Callout type="pitfall" title="RestartAppIfNecessary in a copied dev build">
 
-`SteamBootstrap` calls `SteamClient.RestartAppIfNecessary(appId)` in player builds. Started directly from a folder, the exe isn't running "through
+`SteamBootstrap` calls `RestartAppIfNecessary(appId)` in player builds. Started directly from a folder, the exe isn't running "through
 Steam", so the call returns `true`, Steam relaunches the copy **installed in your library**, and your fresh build quits. On App ID 480, that means
 Steam launches Spacewar. Valve's docs give the escape hatch: if a `steam_appid.txt` file is present, the call returns `false` "regardless". Put one
 next to dev builds you launch directly, or untick `restartThroughSteam` for them, and make sure neither reaches your depot (lesson 9).
@@ -358,8 +358,8 @@ Facepunch's docs for `DebugLevel` warn against setting the highest level and fil
 strings costs frame time. Steam queues the messages from its own threads, and Facepunch delivers them during `RunCallbacks`, so the
 handler runs on the main thread.
 
-Where the logs end up: a Unity player writes `Player.log` to a per-platform folder (on Windows, under
-`%USERPROFILE%\AppData\LocalLow\CompanyName\ProductName\`), and the `-logFile` command-line argument redirects it. On the Steam side, Valve's
+Where the logs end up: a Unity player writes `Player.log` to a per-platform folder (on Windows, a folder named after your
+company and product under `%USERPROFILE%\AppData\LocalLow`), and the `-logFile` command-line argument redirects it. On the Steam side, Valve's
 debugging page documents the `-lognetapi` Steam client parameter, which writes P2P networking details to the Steam client's logs folder.
 
 <Callout type="pitfall" title="Testing only the fast loop">

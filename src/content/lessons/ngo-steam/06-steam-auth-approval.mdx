@@ -65,12 +65,12 @@ Valve's authentication docs describe the peer-to-peer flow in four steps:
 
 So a valid ticket proves three things the payload can't prove by itself: **the SteamId is real, it belongs to the sender,
 and the account owns the game.** Current Steamworks SDKs also bind a ticket to the identity of whoever will verify it:
-`GetAuthSessionTicket` takes a `pIdentityRemote` parameter, which for peer-to-peer is "the user steam ID" of the other side. Facepunch 2.5.2 exposes that as `SteamUser.GetAuthSessionTicketAsync(NetIdentity identity)`. The client passes the
+`GetAuthSessionTicket` takes a `pIdentityRemote` parameter, which for peer-to-peer is "the user steam ID" of the other side. Facepunch 2.5.2 exposes that as `GetAuthSessionTicketAsync(NetIdentity)`. The client passes the
 host's SteamId, and if someone forwards the ticket to a different host, Steam answers `AuthTicketNetworkIdentityFailure`.
 
 <Callout type="note" title="Older Facepunch builds">
 
-Facepunch 2.3.2, the version bundled with FacepunchTransport, has `GetAuthSessionTicketAsync(double timeoutSeconds)` with **no**
+Facepunch 2.3.2, the version bundled with FacepunchTransport, has `GetAuthSessionTicketAsync(double)` with **no**
 identity parameter. If code from an old tutorial doesn't compile, that's why. Lesson 2 replaced the bundled DLLs with 2.5.2.
 
 </Callout>
@@ -428,7 +428,7 @@ for every connection attempt, which is what `PrepareClientPayloadAsync` does.
 
 <Callout type="pitfall" title="An auth timeout longer than NGO's">
 
-NGO drops a pending connection after `NetworkConfig.ClientConnectionBufferTimeout` seconds (10 by default), counted from the
+NGO drops a pending connection after `ClientConnectionBufferTimeout` seconds (10 by default), counted from the
 transport connection. If your own timeout is longer, NGO silently drops the client first and your `Reason` never reaches it.
 Keep your timeout a couple of seconds shorter.
 
@@ -453,7 +453,7 @@ Transport in the editor, treat the payload as plain text, which is fine because 
 <KeyTakeaways>
 
 - FacepunchTransport accepts **every** connection, so connection approval is your only gate. Turn it on for host **and** clients, because it's part of NGO's config hash.
-- The client sends a versioned payload with its SteamId and a **fresh, single-use** ticket from `GetAuthSessionTicketAsync(hostSteamId)`, set before `StartClient`.
+- The client sends a versioned payload with its SteamId and a **fresh, single-use** ticket from `GetAuthSessionTicketAsync(host)`, set before `StartClient`.
 - The host runs cheap checks, calls `BeginAuthSession`, sets `response.Pending = true`, and finishes in `OnValidateAuthTicketResponse`. Set `Approved` and `Reason` before clearing `Pending`.
 - Keep the auth timeout below `ClientConnectionBufferTimeout`, and give every denial a `Reason` the client can show.
 - Pair every `BeginAuthSession` with `EndAuthSession`, and have clients `Cancel()` their ticket when they leave.

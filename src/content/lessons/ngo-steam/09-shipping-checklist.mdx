@@ -59,7 +59,7 @@ because someone shipped without it.
    first. Valve's docs note that the default branch "can not be set live automatically", which is a useful last checkpoint.
 3. **No `steam_appid.txt` in the build.** Valve: "You should not ship this with your builds." It overrides the App ID Steam provides, and while it's
    present, `RestartAppIfNecessary` returns `false` "regardless", which silently disables the next item.
-4. **The restart check on.** `SteamBootstrap` calls `SteamClient.RestartAppIfNecessary(appId)` before `Init` in player builds and quits if it returns
+4. **The restart check on.** `SteamBootstrap` calls `RestartAppIfNecessary(appId)` before `Init` in player builds and quits if it returns
    `true`. Valve calls this "optional but highly recommended", and says it should be the first Steamworks call you make. Skip it only if you use
    Steam's DRM wrapper, which does the same check.
 5. **Version keys bumped together.** Every build that can't play with the previous one bumps `SessionKeys.BuildVersion` (the
@@ -68,7 +68,7 @@ because someone shipped without it.
    must fit together, and every wait has a visible cancel button (below).
 7. **Release logging.** NetworkManager Log Level *Normal*, Steam networking debug output at *Warning*, the patched transport logging its
    `EndReason`, and an "Open log folder" button so players can send you a `Player.log` (lesson 8).
-8. **Relay access ready before the first session.** Call `SteamNetworkingUtils.InitRelayNetworkAccess()` at boot and check
+8. **Relay access ready before the first session.** Call `InitRelayNetworkAccess()` at boot and check
    `SteamNetworkingUtils.Status` before enabling Host and Join. Make sure no fake lag or loss setting survives into release (below).
 9. **A test matrix passed on the release build**, installed through Steam on two machines with two accounts, ideally on two different home
    networks (below).
@@ -167,7 +167,7 @@ Four timers decide how long a player stares at a spinner:
 | Timer | Where | Covers |
 |---|---|---|
 | Steam initial connect timeout | `SteamNetworkingUtils.ConnectionTimeout` (ms) | `StartClient` to "relay connection established" |
-| NGO pending approval | `NetworkConfig.ClientConnectionBufferTimeout` (s, default 10) | Transport connected to approval decided |
+| NGO pending approval | `ClientConnectionBufferTimeout` (s, default 10) | Transport connected to approval decided |
 | Auth timeout | `SteamAuthApproval.authTimeoutSeconds` (8 s, lesson 6) | Waiting for `ValidateAuthTicketResponse` |
 | Steam connected timeout | `SteamNetworkingUtils.Timeout` (ms) | How long a silent peer counts as alive: crash detection |
 
@@ -285,7 +285,7 @@ or with a `steam://run/<appid>` link, for the final test pass.
 
 <Callout type="pitfall" title="Shipping the transport from a moving git URL">
 
-A package installed from `...multiplayer-community-contributions.git?path=...` without a commit hash resolves to whatever `main` is on the day you
+A package installed from `...contributions.git?path=...` without a commit hash resolves to whatever `main` is on the day you
 reimport. This module embedded and patched the transport in lesson 2, so it's in your repository. If you didn't, pin the git URL to a commit.
 
 </Callout>
