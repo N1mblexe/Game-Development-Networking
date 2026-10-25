@@ -141,7 +141,12 @@ for (const file of htmlFiles) {
     .replace(/<pre\b[\s\S]*?<\/pre>/gi, '')
     .replace(/<template\b[\s\S]*?<\/template>/gi, '');
   const from = pageUrl(file);
-  for (const m of html.matchAll(attrRe)) checkRef(file, from, m[2] ?? m[3]);
+  for (const m of html.matchAll(attrRe)) {
+    const value = m[2] ?? m[3];
+    // Pagefind's bundle-path is a directory: check the files the UI actually fetches from it.
+    if (m[1] === 'bundle-path') for (const f of ['pagefind.js', 'pagefind-entry.json']) checkRef(file, from, value.replace(/\/?$/, '/') + f);
+    else checkRef(file, from, value);
+  }
   for (const m of html.matchAll(/\ssrcset\s*=\s*"([^"]*)"/g))
     for (const part of m[1].split(',')) checkRef(file, from, part.trim().split(/\s+/)[0]);
 }

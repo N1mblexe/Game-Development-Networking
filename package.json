@@ -13,9 +13,10 @@
     "preview": "astro preview",
     "check": "astro check",
     "validate:content": "tsx scripts/validate-content.ts",
+    "check:links": "tsx scripts/check-links.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "verify": "pnpm validate:content && pnpm check && pnpm test && pnpm build",
+    "verify": "pnpm validate:content && pnpm check && pnpm test && pnpm build && pnpm check:links",
     "astro": "astro"
   },
   "dependencies": {
