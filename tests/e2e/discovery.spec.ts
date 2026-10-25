@@ -106,12 +106,14 @@ test.describe('Term tooltip', () => {
 });
 
 test.describe('Sequence stepper', () => {
+  // The island is server-rendered with enabled buttons, so a click can land before React hydrates and be
+  // dropped. Always wait for data-ready (set after hydration) before interacting.
   test('next / previous / reset move through the steps', async ({ page }) => {
     await page.goto(LESSON);
     const seq = page.locator('[data-sequence]').first();
     await seq.scrollIntoViewIfNeeded();
+    await expect(seq).toHaveAttribute('data-ready', 'true');
     const next = seq.locator('[data-testid="dg-next"]');
-    await expect(next).toBeEnabled(); // hydrated
     await expect(seq).toHaveAttribute('data-step-index', '-1');
 
     await next.click();
@@ -129,10 +131,24 @@ test.describe('Sequence stepper', () => {
   });
 
   test('play advances on its own', async ({ page }) => {
+    // A fake clock makes the autoplay timers (200 ms to the first step, then stepMs per step) deterministic.
+    await page.clock.install();
     await page.goto(LESSON);
     const seq = page.locator('[data-sequence]').first();
     await seq.scrollIntoViewIfNeeded();
+    await expect(seq).toHaveAttribute('data-ready', 'true');
     await seq.locator('[data-testid="dg-play"]').click();
-    await expect(seq).not.toHaveAttribute('data-step-index', '-1', { timeout: 5000 });
+    await expect(seq).toHaveAttribute('data-playing', 'true');
+    await expect(seq).toHaveAttribute('data-step-index', '-1');
+
+    await page.clock.runFor(250);
+    await expect(seq).toHaveAttribute('data-step-index', '0');
+    await page.clock.runFor(2300);
+    await expect(seq).toHaveAttribute('data-step-index', '1');
+
+    await seq.locator('[data-testid="dg-play"]').click(); // pause
+    await expect(seq).toHaveAttribute('data-playing', 'false');
+    await page.clock.runFor(5000);
+    await expect(seq).toHaveAttribute('data-step-index', '1');
   });
 });

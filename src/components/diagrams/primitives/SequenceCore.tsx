@@ -77,7 +77,11 @@ export default function SequenceCore({ actors, steps, intro, footer, stepMs = 22
   };
 
   return (
-    <div className="space-y-3" data-sequence data-step-index={s.index} onKeyDown={onKeyDown}>
+    <div className="space-y-3" data-sequence
+      data-step-index={s.index}
+      data-playing={s.playing ? 'true' : 'false'}
+      data-ready={s.hydrated ? 'true' : undefined}
+      onKeyDown={onKeyDown}>
       {/* ------------------------------------------------ visual diagram (hidden from screen readers) */}
       <div className="dg-scroll -mx-1 overflow-x-auto px-1 pb-1" aria-hidden="true">
         <div ref={boxRef} style={{ minWidth: `${n * 72}px` }}>
