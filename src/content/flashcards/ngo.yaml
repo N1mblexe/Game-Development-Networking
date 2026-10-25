@@ -375,7 +375,7 @@ cards:
   - id: da-netvar
     lesson: ngo/distributed-authority
     front: What happens to a NetworkVariable with Server write permission in distributed authority?
-    back: NGO treats it as Owner write: only the owner writes, and everyone can read.
+    back: NGO treats it as Owner write. Only the owner writes, and everyone can read.
   - id: da-session-owner
     lesson: ngo/distributed-authority
     front: What does the session owner do?
