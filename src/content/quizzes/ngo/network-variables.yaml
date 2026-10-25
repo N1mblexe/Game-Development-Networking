@@ -1,0 +1,87 @@
+passPct: 70
+questions:
+  - id: client-write
+    type: codeline
+    prompt: This runs on a **client** when it presses the heal key. Health stays the same and an error is logged. Click the line responsible.
+    code: |-
+      public NetworkVariable<int> Health = new NetworkVariable<int>(100);
+
+      void Update()
+      {
+          if (!IsOwner) return;
+          if (Input.GetKeyDown(KeyCode.H))
+              Health.Value += 10;
+      }
+    answerLines: [7]
+    explanation: >-
+      The default write permission is `Server`. A client writing `Value` logs a permission error and nothing changes. Send
+      a request RPC to the server instead, and let the server validate and write the value.
+  - id: late-joiner
+    type: codeline
+    prompt: Players who join mid-match see full health bars on damaged players until the next hit. Which line is missing its counterpart?
+    code: |-
+      public override void OnNetworkSpawn()
+      {
+          Health.OnValueChanged += OnHealthChanged;
+          base.OnNetworkSpawn();
+      }
+
+      void OnHealthChanged(int previous, int current) => ApplyHealth(current);
+    answerLines: [3]
+    explanation: >-
+      A late joiner receives the current value with the spawn data, before anyone subscribed, so `OnValueChanged` doesn't
+      fire for it. After subscribing, also call `ApplyHealth(Health.Value)` once in `OnNetworkSpawn`.
+  - id: netlist-awake
+    type: codeline
+    prompt: Unity reports a native memory leak in this scoreboard. Click the line to move.
+    code: |-
+      public class Scoreboard : NetworkBehaviour
+      {
+          NetworkList<ScoreEntry> m_Entries = new NetworkList<ScoreEntry>();
+
+          public override void OnNetworkSpawn()
+          {
+              m_Entries.OnListChanged += OnListChanged;
+          }
+      }
+    answerLines: [3]
+    explanation: >-
+      Unlike a NetworkVariable, a `NetworkList` can't be initialized at the declaration. The docs say to create it in
+      `Awake`, and warn that initializing it at the declaration causes memory leak errors.
+  - id: netvar-or-rpc
+    type: multi
+    prompt: Which of these belong in a NetworkVariable rather than an RPC? Select all that apply.
+    options:
+      - A player's current health
+      - A one-off muzzle flash
+      - Whether the arena gate is open
+      - A chat message
+      - Each player's kill count
+    answers: [0, 2, 4]
+    explanation: >-
+      Health, gate state and kill counts are persistent state a late joiner must see. A muzzle flash and a chat line are
+      momentary events, so RPCs fit them better.
+  - id: same-frame
+    type: single
+    prompt: On the server, in one frame, you set `Health.Value = 0` and then `Health.Value = 100`. What do clients see?
+    options:
+      - 0 followed by 100
+      - Only 100
+      - Only 0
+      - An error, because the value changed twice in one frame
+    answer: 1
+    explanation: >-
+      NetworkVariables send the latest value when changes are collected at the end of the frame. Intermediate values are
+      lost, because the variable syncs state, not history.
+  - id: string-type
+    type: single
+    prompt: You want an owner-written display name. Which declaration works?
+    options:
+      - NetworkVariable of string
+      - NetworkVariable of FixedString32Bytes with NetworkVariableWritePermission.Owner
+      - NetworkVariable of char[] with NetworkVariableReadPermission.Owner
+      - NetworkList of string
+    answer: 1
+    explanation: >-
+      `string` isn't supported directly because each update would allocate. Use a fixed string type from
+      Unity.Collections, and owner write permission so the owning client can set it.

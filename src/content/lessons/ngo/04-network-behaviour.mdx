@@ -1,0 +1,308 @@
+---
+title: NetworkBehaviour and the Network Lifecycle
+order: 4
+summary: Write networked scripts with NetworkBehaviour, use the spawn and despawn callbacks instead of Start, and branch on IsServer, IsOwner and HasAuthority.
+durationMin: 25
+objectives:
+  - Explain what NetworkBehaviour adds to MonoBehaviour and how it attaches to a NetworkObject
+  - Use OnNetworkPreSpawn, OnNetworkSpawn, OnNetworkPostSpawn and the despawn callbacks correctly
+  - Choose the right context check (IsServer, IsClient, IsOwner, HasAuthority, IsLocalPlayer)
+  - Enable local-only components (input, camera) for the owning player only
+prerequisites: [ngo/network-objects]
+tags: [ngo, networkbehaviour, lifecycle]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: NetworkBehaviour (spawning and despawning)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkbehaviour.html
+  - title: 'NGO 2.13 manual: NetworkBehaviour synchronization and order of operations'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkbehaviour-synchronize.html
+  - title: 'NGO 2.13 manual: NetworkBehaviour ownership'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkbehaviour-ownership.html
+  - title: 'NGO 2.13 manual: PlayerObjects and player prefabs'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/playerobjects.html
+  - title: 'NGO 2.13 API: NetworkBehaviour'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkBehaviour.html
+---
+
+Every Unity developer has a mental model of `Awake`, `Start` and `Update`. In multiplayer, that model has a gap: when
+`Start` runs on a freshly instantiated player, the object might not be **networked** yet. Is this my player or someone
+else's? Am I the server? Has the health value arrived? A <Term id="network-behaviour">NetworkBehaviour</Term> fills the gap
+with a second lifecycle, the **network spawn lifecycle**, that runs once the object is linked across machines. Learning
+which callback to use for what removes a whole class of "works for the host, broken for clients" bugs.
+
+## What NetworkBehaviour adds
+
+`NetworkBehaviour` is an abstract class that derives from `MonoBehaviour`, so everything you know still works. It adds:
+
+- **Context**: who am I, and what is my relationship to this object?
+- **Network callbacks**: spawn, despawn and ownership events.
+- The ability to declare **NetworkVariables** and **RPCs** (the next two lessons).
+
+A NetworkBehaviour needs a NetworkObject on the same GameObject or on a parent. If you add one to a GameObject that has
+neither, NGO adds a NetworkObject for you. Internally, an RPC or NetworkVariable update is addressed to
+"NetworkObject *id*, behaviour *index*", where the index is the behaviour's position under that NetworkObject. That's
+why **every build must have the same NetworkBehaviours in the same order** on a given prefab.
+
+## Context properties
+
+| Property | True when | Typical use |
+|---|---|---|
+| `IsServer` | This process is the server or host | Gameplay rules, spawning, damage |
+| `IsClient` | This process has a local client (client or host) | Visuals, UI, audio |
+| `IsHost` | Both server and client | Rarely needed directly |
+| `IsOwner` | The local client owns this object | Reading local input |
+| `IsLocalPlayer` | This is the local client's player object | Camera, HUD binding |
+| `IsOwnedByServer` | The server owns this object | NPCs, world objects |
+| `HasAuthority` | This instance is the authority (server in client-server, owner in distributed authority) | Topology-agnostic code |
+| `IsSpawned` | The object is currently spawned | Guarding `Update` |
+
+`OwnerClientId`, `NetworkObjectId`, `NetworkObject` and `NetworkManager` are also available. All of these are only
+meaningful **while spawned**. In `Awake` and (for dynamically spawned objects) `Start`, they aren't set yet.
+
+<Callout type="tip" title="IsServer or HasAuthority?">
+
+In client-server, `HasAuthority` is the same as `IsServer`. In distributed authority (lesson 11), it means "I own this
+object". If you might switch topologies later, write authority checks with `HasAuthority` and server-only checks with
+`IsServer`.
+
+</Callout>
+
+## The spawn lifecycle
+
+When a NetworkObject spawns, each of its NetworkBehaviours goes through three stages, in Inspector order.
+
+| Stage | Callback | What's valid | Use it for |
+|---|---|---|---|
+| Prespawning | `OnNetworkPreSpawn(ref NetworkManager)` | Nothing netcode-related yet (you get the manager as a parameter) | Caching components, initial NetworkVariable values |
+| Spawning | `OnNetworkSpawn()` | `IsServer`, `IsOwner`, NetworkVariable values | Most netcode initialization, subscriptions |
+| Spawned | `OnNetworkPostSpawn()` | Every behaviour on this object has finished `OnNetworkSpawn` | Logic that depends on sibling behaviours |
+
+Two more are invoked at special moments:
+
+- `OnNetworkSessionSynchronized()` runs on a **joining client** after it has loaded all scenes and spawned all
+  objects, so everything else in the world is ready. It isn't invoked on the server or host.
+- `OnInSceneObjectsSpawned()` runs on in-scene placed objects after all in-scene objects in the loaded scenes are spawned.
+
+Despawning mirrors spawning: `OnNetworkPreDespawn()` runs while the object is still fully spawned (a good place to
+unsubscribe), then `OnNetworkDespawn()` runs while it's being torn down.
+
+<Sequence
+  title="A dynamically spawned player on a joining client"
+  actors={[
+    { id: 's', label: 'Server', kind: 'server' },
+    { id: 'c', label: 'Client', kind: 'client' },
+  ]}
+  steps={[
+    { from: 's', to: 'c', label: 'Create message: PlayerAvatar, state, owner', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'Instantiate prefab, then Awake()', note: 'Netcode properties are not set yet.', kind: 'local' },
+    { from: 'c', to: 'c', label: 'OnNetworkPreSpawn(ref networkManager)', kind: 'event' },
+    { from: 'c', to: 'c', label: 'OnNetworkSpawn(), behaviour 1 then behaviour 2', note: 'IsOwner and IsServer are set, and NetworkVariable values from the create message are already applied.', kind: 'event' },
+    { from: 'c', to: 'c', label: 'OnNetworkPostSpawn() on every behaviour', kind: 'event' },
+    { from: 'c', to: 'c', label: 'Start(), later, before its first Update', note: 'For in-scene placed objects, Start runs before OnNetworkSpawn instead.', kind: 'local' },
+  ]}
+/>
+
+What you should notice:
+
+- For **dynamically spawned** objects the order is `Awake`, `OnNetworkSpawn`, `Start`. For **in-scene placed**
+  objects it's `Awake`, `Start`, `OnNetworkSpawn`. Code that relies on `Start` running first breaks for one of them.
+- NetworkVariable values travel in the create message and are applied before `OnNetworkSpawn`, so reading `health.Value`
+  there gives the synchronized value.
+- Behaviours spawn in Inspector order. If behaviour 1 reads something that behaviour 2 sets in its `OnNetworkSpawn`,
+  move that read to `OnNetworkPostSpawn`.
+
+## Start vs OnNetworkSpawn
+
+<CodeTabs labels={['Wrong: decide in Start', 'Right: decide in OnNetworkSpawn']}>
+
+```csharp title="PlayerInputToggle.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+public class PlayerInputToggle : NetworkBehaviour
+{
+    [SerializeField] Behaviour m_Input;
+
+    void Start()
+    {
+        // For an in-scene placed object, IsOwner isn't set yet when Start runs.
+        // For a dynamically spawned one this happens to work, which hides the bug.
+        m_Input.enabled = IsOwner;
+    }
+}
+```
+
+```csharp title="PlayerInputToggle.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+public class PlayerInputToggle : NetworkBehaviour
+{
+    [SerializeField] Behaviour m_Input;
+
+    void Awake()
+    {
+        m_Input.enabled = false; // safe default until we know who we are
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        m_Input.enabled = IsOwner;
+        base.OnNetworkSpawn();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        m_Input.enabled = false;
+        base.OnNetworkDespawn();
+    }
+}
+```
+
+</CodeTabs>
+
+The docs recommend exactly this pattern for `PlayerInput` and `CharacterController`: disable them on the prefab (or in
+`Awake`) and enable them only on the owner's instance. Otherwise input events can be routed to the most recently
+spawned player instead of yours.
+
+## The arena player setup
+
+Add this to the `PlayerAvatar` prefab, below the NetworkObject. It colors each player, names the instance, enables
+owner-only components, and points the camera at the local player.
+
+```csharp title="PlayerSetup.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+public class PlayerSetup : NetworkBehaviour
+{
+    [SerializeField] Renderer m_BodyRenderer;
+    [SerializeField] Color[] m_Palette = { Color.red, Color.cyan, Color.green, Color.yellow };
+
+    // Components that only make sense on the owning player's machine (movement input, shooting input).
+    [SerializeField] Behaviour[] m_OwnerOnly;
+
+    protected override void OnNetworkPreSpawn(ref NetworkManager networkManager)
+    {
+        // Netcode context isn't valid yet: only do local setup here.
+        if (m_BodyRenderer == null) m_BodyRenderer = GetComponentInChildren<Renderer>();
+        foreach (var component in m_OwnerOnly) component.enabled = false;
+        base.OnNetworkPreSpawn(ref networkManager);
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        ApplyOwnership();
+
+        // Every machine computes the same color from the same OwnerClientId: no message needed.
+        int index = (int)(OwnerClientId % (ulong)m_Palette.Length);
+        m_BodyRenderer.material.color = m_Palette[index];
+
+        name = IsLocalPlayer ? $"Player {OwnerClientId} (local)" : $"Player {OwnerClientId}";
+        if (IsLocalPlayer) CameraFollow.Target = transform;
+
+        base.OnNetworkSpawn();
+    }
+
+    protected override void OnOwnershipChanged(ulong previous, ulong current)
+    {
+        ApplyOwnership();
+        base.OnOwnershipChanged(previous, current);
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        foreach (var component in m_OwnerOnly) component.enabled = false;
+        if (IsLocalPlayer) CameraFollow.Target = null;
+        base.OnNetworkDespawn();
+    }
+
+    void ApplyOwnership()
+    {
+        foreach (var component in m_OwnerOnly) component.enabled = IsOwner;
+    }
+}
+```
+
+```csharp title="CameraFollow.cs"
+using UnityEngine;
+
+/// Plain MonoBehaviour on the Main Camera. It isn't networked: each machine follows its own player.
+public class CameraFollow : MonoBehaviour
+{
+    public static Transform Target;
+    [SerializeField] Vector3 m_Offset = new Vector3(0f, 14f, -8f);
+
+    void LateUpdate()
+    {
+        if (Target == null) return;
+        transform.position = Target.position + m_Offset;
+        transform.LookAt(Target);
+    }
+}
+```
+
+Notice what is **not** networked here. The color, the object name and the camera are derived locally from replicated
+facts (`OwnerClientId`, `IsLocalPlayer`). Deriving presentation from state you already have is cheaper and more robust
+than sending it.
+
+## Ownership callbacks
+
+From the ownership docs, in invocation order:
+
+1. `OnLostOwnership()`: on the client that lost ownership (and on the server).
+2. `OnGainedOwnership()`: on the client that gained ownership (and on the server).
+3. `OnOwnershipChanged(ulong previous, ulong current)`: on every instance.
+
+`OnGainedOwnership` and `OnLostOwnership` are `public override`, and `OnOwnershipChanged` is `protected override`.
+Keep owner-only state consistent in **one** method (like `ApplyOwnership` above) and call it from both `OnNetworkSpawn`
+and `OnOwnershipChanged`.
+
+## Update runs before spawn
+
+`Update`, `FixedUpdate` and `LateUpdate` run on any active GameObject, **spawned or not**, including during the gap
+between instantiation and spawn, and after despawn with `Despawn(false)`. Guard them:
+
+```csharp title="GuardedUpdate.cs"
+void Update()
+{
+    if (!IsSpawned || !IsOwner) return;
+    // Owner-only, spawned-only logic: read input, send it.
+}
+```
+
+<Callout type="pitfall" title="Forgetting base.OnDestroy()">
+
+`NetworkBehaviour.OnDestroy` is virtual and does internal clean-up. If you override it, write `public override void OnDestroy()`
+and call `base.OnDestroy()` at the end. A plain `void OnDestroy()` hides the base method and the compiler only warns you.
+
+</Callout>
+
+<Callout type="pitfall" title="Disabling child GameObjects before spawning">
+
+If a child GameObject with NetworkBehaviours is **inactive** when the NetworkObject spawns, its behaviours aren't
+included in the spawn for the object's whole lifetime. Disable the *component* instead of the GameObject if you need it
+off at spawn time.
+
+</Callout>
+
+<Callout type="pitfall" title="Reading input without an IsOwner check">
+
+Every machine runs `Update` on every player. Without `if (!IsOwner) return;`, pressing W on one machine moves **all**
+players locally, and the network updates for the other players then snap them back, which looks like jitter. Gate
+input on `IsOwner`, or enable input components only for the owner as above.
+
+</Callout>
+
+<KeyTakeaways>
+
+- `NetworkBehaviour` is a `MonoBehaviour` that adds context (`IsServer`, `IsOwner`, `HasAuthority`, …), network callbacks, NetworkVariables and RPCs.
+- Do netcode initialization in `OnNetworkSpawn`, not `Start`. Use `OnNetworkPreSpawn` for local caching and `OnNetworkPostSpawn` for cross-behaviour dependencies.
+- Dynamic objects run `Awake`, `OnNetworkSpawn`, `Start`. In-scene objects run `Awake`, `Start`, `OnNetworkSpawn`.
+- Guard `Update` with `IsSpawned` and `IsOwner`, and enable input and camera components only for the local owner.
+- Override `OnDestroy` with `base.OnDestroy()`, keep behaviour order identical across builds, and disable components rather than child GameObjects.
+
+</KeyTakeaways>

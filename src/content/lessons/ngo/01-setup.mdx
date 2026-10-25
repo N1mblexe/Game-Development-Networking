@@ -1,0 +1,269 @@
+---
+title: Setting Up Netcode for GameObjects
+order: 1
+summary: Install NGO 2.x on Unity 6, build the smallest working host/client project, and run two players on one machine.
+durationMin: 20
+objectives:
+  - Install Netcode for GameObjects 2.x, Unity Transport and Multiplayer Play Mode on Unity 6
+  - Create a NetworkManager, a player prefab with a NetworkObject, and a scene that NGO can synchronize
+  - Start a host and a client from code and from the Inspector
+  - Run two players side by side with Multiplayer Play Mode
+prerequisites: [theory/packets-and-protocols, theory/topologies]
+tags: [ngo, setup, unity]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+    - { name: com.unity.transport, version: '2.7.4' }
+    - { name: com.unity.multiplayer.playmode, version: '1.6.3 (Unity 6.0 to 6.2) / 3.0.0 (Unity 6.3+)' }
+sources:
+  - title: 'NGO 2.13 manual: Install Netcode for GameObjects'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/install.html
+  - title: 'NGO 2.13 manual: Client-server quickstart'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/tutorials/get-started-with-ngo.html
+  - title: 'NGO 2.13 manual: NetworkManager'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkmanager.html
+  - title: 'NGO changelog (2.13.3 and 3.0.0)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@3.0/changelog/CHANGELOG.html
+  - title: 'Multiplayer Play Mode 1.6 manual'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@1.6/manual/index.html
+  - title: 'Multiplayer Play Mode 3.0 manual'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@3.0/manual/index.html
+  - title: 'Multiplayer Center'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.center@1.0/manual/index.html
+---
+
+You already know how a Unity game boots: a scene loads, `Awake` and `Start` run, and every object lives in one
+process. <Term id="netcode-for-gameobjects">Netcode for GameObjects</Term> (NGO) keeps that GameObject and prefab
+workflow, but adds a second axis: **which machine is running this copy of the object, and who is in charge of it?**
+In this lesson you install the packages, wire up the three things every NGO project needs, and watch two players
+appear in the same arena. Every later lesson in this module builds on this project.
+
+## What you are installing
+
+NGO is a high-level library. It sits on top of a **transport**, the layer that actually moves bytes over
+<Term id="udp">UDP</Term>, and below your gameplay code.
+
+| Layer | Package | What it does for you |
+|---|---|---|
+| Your game | your scripts | Movement, health, scoring |
+| High-level netcode | `com.unity.netcode.gameobjects` | Spawning, state sync, RPCs, scenes, ownership |
+| Transport | `com.unity.transport` | Connections, reliable and unreliable pipelines, fragmentation |
+| Testing | `com.unity.multiplayer.playmode`, `com.unity.multiplayer.tools` | Extra Editor players, network simulation, profiling |
+
+This course targets **Unity 6 (6000.x) with NGO 2.13.3**, the latest 2.x release, and
+<Term id="unity-transport">Unity Transport</Term> 2.7. NGO pulls in a compatible Unity Transport automatically.
+
+<Callout type="note" title="What about NGO 3.0?">
+
+NGO 3.0.0 shipped in September 2026. According to its changelog, it adds Netcode for Entities (`com.unity.netcode`) as a
+required dependency, which also installs Entities, Burst and Collections. It moves `NetworkTime`, `NetworkTimeSystem` and
+`NetworkTickSystem` into the `Unity.Netcode.GameObjects.Timing` namespace, and APIs that were already marked
+`[Obsolete]` become compile errors. Everything in this module uses non-obsolete 2.13 APIs, so it carries forward,
+but stay on 2.x unless you want those extra dependencies.
+
+</Callout>
+
+## Install the packages
+
+<Steps>
+
+1. Create a project from a Unity 6 3D template. The templates enable the **Input System** package, which the code in this module uses.
+2. Open **Window > Package Manager**, choose **+ > Add package by name…**, enter `com.unity.netcode.gameobjects`, and select **Add**. Unity Transport comes with it.
+3. Add `com.unity.multiplayer.playmode` the same way. On Unity 6.0 to 6.2 you get **1.6.x**. On Unity 6.3 LTS and later, use **2.0 or 3.0**, which moved most features into the engine's Play Mode framework.
+4. Optionally, add `com.unity.multiplayer.tools` now. You need it for the Network Simulator and the profiler modules in the debugging lesson.
+
+</Steps>
+
+<Callout type="tip" title="The Multiplayer Center">
+
+Unity 6 includes a **Multiplayer Center** window (under the **Window > Multiplayer** menu). It asks what kind of game you're
+making and recommends a package set. It's a good sanity check, but you don't need it for this course.
+
+</Callout>
+
+## The three things every NGO project needs
+
+NGO refuses to do anything until three pieces exist. Read this list twice, because most "nothing happens" bugs
+come from a missing piece.
+
+1. **One <Term id="network-manager">NetworkManager</Term>** in the first scene. It holds all netcode settings
+   (transport, tick rate, prefab list) and is what you *start* as a server, host or client.
+2. **A <Term id="network-prefab">network prefab</Term>** for the player: an ordinary prefab with a
+   <Term id="network-object">NetworkObject</Term> component on its root. NGO identifies prefabs across machines by a hash
+   stored in that component, so every machine must have the same prefab registered.
+3. **A synchronizable scene.** With scene management enabled (the default), every scene NGO loads must be in the
+   build's scene list, so the server can tell clients which scene to load.
+
+### Build the arena scene
+
+<Steps>
+
+1. In `SampleScene` (rename it `Arena`), add a **Plane** at the origin for the floor.
+2. Create an empty GameObject named **NetworkManager**, then **Add Component > Netcode > NetworkManager**.
+3. In the NetworkManager Inspector, set the transport to **UnityTransport**. A **Unity Transport** component is added next to it.
+4. Create a **Capsule**, name it `PlayerAvatar`, add **Netcode > NetworkObject**, drag it into `Assets/Prefabs`, and delete it from the scene.
+5. Drag `PlayerAvatar` into the NetworkManager's **Player Prefab** field. NGO now spawns one instance per connected client.
+6. Open **File > Build Profiles** (Build Settings in older layouts) and add the open scene to the scene list.
+
+</Steps>
+
+<Callout type="unity" title="Where things live in the Inspector">
+
+The NetworkManager GameObject ends up with two components: **NetworkManager** and **Unity Transport**. The Unity Transport
+component holds the address and port, which default to `127.0.0.1:7777`. The `PlayerAvatar` prefab has **NetworkObject**
+as its first component. Keep NetworkObject above any NetworkBehaviour scripts, because component order decides the order
+in which spawn callbacks run.
+
+</Callout>
+
+You can test right now: enter Play Mode, select the NetworkManager, and click **Start Host** in its Inspector.
+A capsule appears. That capsule is the <Term id="player-object">player object</Term> NGO spawned for the host's own client.
+
+## Starting the network from code
+
+Clicking Inspector buttons doesn't work in a build, so add a tiny bootstrap UI. Put this script on the
+**NetworkManager GameObject**. It's a plain `MonoBehaviour`, not a `NetworkBehaviour`, because it must work
+*before* anything is networked.
+
+```csharp title="ArenaBootstrap.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+/// Attach to the same GameObject as the NetworkManager.
+public class ArenaBootstrap : MonoBehaviour
+{
+    NetworkManager m_NetworkManager;
+
+    void Awake()
+    {
+        m_NetworkManager = GetComponent<NetworkManager>();
+    }
+
+    void OnGUI()
+    {
+        GUILayout.BeginArea(new Rect(10, 10, 260, 200));
+
+        if (!m_NetworkManager.IsClient && !m_NetworkManager.IsServer)
+        {
+            if (GUILayout.Button("Host")) m_NetworkManager.StartHost();
+            if (GUILayout.Button("Client")) m_NetworkManager.StartClient();
+            if (GUILayout.Button("Server")) m_NetworkManager.StartServer();
+        }
+        else
+        {
+            string mode = m_NetworkManager.IsHost ? "Host"
+                        : m_NetworkManager.IsServer ? "Server" : "Client";
+            GUILayout.Label($"Mode: {mode}");
+            GUILayout.Label($"Local client id: {m_NetworkManager.LocalClientId}");
+
+            if (GUILayout.Button("Shutdown")) m_NetworkManager.Shutdown();
+        }
+
+        GUILayout.EndArea();
+    }
+}
+```
+
+`StartHost`, `StartClient` and `StartServer` each return `bool`, which is `false` if the start fails immediately (for
+example, because the port is already in use). The three modes map directly to the
+[topologies from the theory module](../../theory/topologies/):
+
+| Method | Runs a server? | Runs a local client? | Theory name |
+|---|---|---|---|
+| `StartServer()` | Yes | No | <Term id="dedicated-server">Dedicated server</Term> |
+| `StartHost()` | Yes | Yes (client id 0) | <Term id="listen-server">Listen server</Term> / <Term id="host">host</Term> |
+| `StartClient()` | No | Yes | <Term id="client">Client</Term> |
+
+## What happens when a second player joins
+
+<Sequence
+  title="Host first, then a client joins"
+  actors={[
+    { id: 'h', label: 'Host (server + client 0)', kind: 'host' },
+    { id: 'c', label: 'Client instance', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'h', to: 'h', label: 'StartHost(): listen on port 7777', note: 'The local client connects to its own server instantly. It is client id 0.', kind: 'local' },
+    { from: 'h', to: 'h', label: 'Spawn PlayerAvatar for client 0', kind: 'local' },
+    { from: 'c', to: 'h', label: 'StartClient(): connection request', note: 'Includes a hash of the NetworkConfig, so mismatched builds are rejected.', kind: 'reliable' },
+    { from: 'h', to: 'c', label: 'Approved: you are client id 1', kind: 'reliable' },
+    { from: 'h', to: 'c', label: 'Synchronize: load Arena, spawn existing objects', note: 'The client creates its copy of the host player from the registered prefab.', kind: 'reliable' },
+    { from: 'c', to: 'h', label: 'Synchronization complete', kind: 'reliable' },
+    { from: 'h', to: 'c', label: 'Spawn PlayerAvatar for client 1', note: 'Both machines now show two capsules.', kind: 'reliable' },
+  ]}
+/>
+
+What you should notice:
+
+- The host never "connects" over the network to itself. Its local client is wired in directly, which is why the host
+  has zero latency to the server. That host advantage comes back in later lessons.
+- The client learns which scene to load and which objects exist **from the server**. That's why prefabs and scenes
+  must match exactly on both sides.
+- Each connection gets a <Term id="client-id">client id</Term>. The server (or host) is always `0`, and clients get new
+  ids as they connect.
+
+## Run two players with Multiplayer Play Mode
+
+Building a standalone player every time you change a line is slow. <Term id="multiplayer-play-mode">Multiplayer Play Mode</Term>
+(MPPM) launches **additional Editor instances** that share your project's assets, so a code change shows up in every
+instance.
+
+<Steps>
+
+1. Open **Window > Multiplayer > Play Mode Scenarios** (MPPM 1.6) or **Window > Play Mode > Scenarios** (MPPM 2.0/3.0 on Unity 6.3+).
+2. Create a scenario with the **Editor** plus one **additional Editor instance**.
+3. Enter Play Mode. Click **Host** in the main Editor and **Client** in the additional instance.
+4. You see two capsules on top of each other at the origin, because nothing moves them yet. That's the next lessons' job.
+
+</Steps>
+
+MPPM supports up to four Editor players (the main Editor plus three additional instances) and can also add local
+standalone builds. The additional instances are deliberately lightweight: you can't edit GameObjects in them, so make
+changes in the main Editor.
+
+<Callout type="pitfall" title="Forgetting the scene in the build list">
+
+With **Enable Scene Management** on (the default), the client is told "load scene Arena". If that scene isn't in the
+build's scene list, the client can't load it and synchronization fails. Add every networked scene to the build list
+as soon as you create it.
+
+</Callout>
+
+<Callout type="pitfall" title="Placing the player in the scene">
+
+The player prefab is spawned *by NGO* when a client is approved. Don't also drop a `PlayerAvatar` into the scene: NGO
+doesn't support an in-scene placed object as a player object, and you'll end up with an extra, unowned capsule that
+confuses every ownership check.
+
+</Callout>
+
+<Callout type="pitfall" title="Two builds, two projects">
+
+NGO checks that the client's network configuration and registered prefabs match the server's. A client built from an older
+commit, or from a project with a different prefab list, is refused or fails to spawn objects. Always rebuild *all*
+instances after changing prefabs or NetworkManager settings. MPPM avoids this because every instance shares the same assets.
+
+</Callout>
+
+## Project layout for this module
+
+You'll grow this project into a small **top-down arena**: players move, collect pickups, shoot projectiles, take
+damage, and appear on a scoreboard. Keep this layout:
+
+```text title="Assets/"
+Assets/
+  Prefabs/      PlayerAvatar, Projectile, HealthPickup
+  Scenes/       Arena (later also Lobby)
+  Scripts/      ArenaBootstrap.cs and every NetworkBehaviour from later lessons
+```
+
+<KeyTakeaways>
+
+- NGO 2.x (2.13.3 here) runs on Unity 6 on top of **Unity Transport**. NGO 3.0 exists but adds a Netcode for Entities dependency.
+- Every project needs a **NetworkManager**, **network prefabs** with a NetworkObject on the root, and networked scenes in the **build list**.
+- `StartServer`, `StartHost` and `StartClient` map to the dedicated-server, listen-server and client roles. The host's local client is client id 0.
+- The server tells joining clients what to load and spawn, so prefabs, scenes and settings must match on every machine.
+- Use **Multiplayer Play Mode** for fast local testing with up to four Editor players.
+
+</KeyTakeaways>

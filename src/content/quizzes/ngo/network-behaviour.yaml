@@ -1,0 +1,77 @@
+passPct: 70
+questions:
+  - id: dynamic-order
+    type: order
+    prompt: Order the callbacks for a **dynamically spawned** NetworkObject on a client.
+    items:
+      - Awake
+      - OnNetworkPreSpawn
+      - OnNetworkSpawn
+      - OnNetworkPostSpawn
+      - Start
+    explanation: >-
+      For dynamically spawned objects, the network spawn happens in the same call stack as instantiation, so the network
+      callbacks run before `Start`. For in-scene placed objects, `Start` runs before `OnNetworkSpawn`.
+  - id: start-bug
+    type: codeline
+    prompt: This works for dynamically spawned players but breaks for an in-scene placed object. Click the buggy line.
+    code: |-
+      public class TurretController : NetworkBehaviour
+      {
+          [SerializeField] Behaviour m_AimInput;
+
+          void Start()
+          {
+              m_AimInput.enabled = IsOwner;
+          }
+      }
+    answerLines: [5]
+    explanation: >-
+      `Start` runs **before** `OnNetworkSpawn` for in-scene placed objects, so `IsOwner` isn't valid yet. Move the
+      ownership decision to `public override void OnNetworkSpawn()`.
+  - id: has-authority
+    type: single
+    prompt: In a **client-server** session, `HasAuthority` on a NetworkBehaviour is equivalent to…
+    options:
+      - IsOwner
+      - IsServer
+      - IsLocalPlayer
+      - IsClient
+    answer: 1
+    explanation: >-
+      In client-server, the server is the authority for everything, so `HasAuthority` returns true on the server or host.
+      In distributed authority, it returns true for the owner.
+  - id: post-spawn
+    type: single
+    prompt: Behaviour A's `OnNetworkSpawn` reads a field that behaviour B (below it in the Inspector) sets in its own `OnNetworkSpawn`. A sees the default value. What's the intended fix?
+    options:
+      - Move A's read into OnNetworkPostSpawn
+      - Move A's read into Awake
+      - Raise the tick rate
+      - Add a second NetworkObject to B
+    answer: 0
+    explanation: >-
+      Behaviours spawn in Inspector order. `OnNetworkPostSpawn` runs after every behaviour on the object has finished
+      `OnNetworkSpawn`, so cross-behaviour dependencies are safe there.
+  - id: update-before-spawn
+    type: truefalse
+    prompt: Unity doesn't call `Update` on a NetworkBehaviour until its NetworkObject is spawned.
+    answer: false
+    explanation: >-
+      `Update`, `FixedUpdate` and `LateUpdate` run whenever the GameObject is active, spawned or not. Guard netcode logic
+      with `if (!IsSpawned) return;`.
+  - id: ondestroy-base
+    type: codeline
+    prompt: Which line causes NGO's internal clean-up to be skipped when this object is destroyed?
+    code: |-
+      public class Scoreboard : NetworkBehaviour
+      {
+          void OnDestroy()
+          {
+              m_Ui.Clear();
+          }
+      }
+    answerLines: [3]
+    explanation: >-
+      `NetworkBehaviour.OnDestroy` is virtual and does internal clean-up. This declaration hides it instead of overriding it.
+      Write `public override void OnDestroy()` and call `base.OnDestroy()` at the end.

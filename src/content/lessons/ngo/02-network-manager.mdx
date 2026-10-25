@@ -1,0 +1,325 @@
+---
+title: The NetworkManager
+order: 2
+summary: Configure the NetworkManager and Unity Transport, choose server, host or client mode, and react to connections, disconnects and shutdown.
+durationMin: 25
+objectives:
+  - Explain the main NetworkManager settings and when each one matters
+  - Choose between server, host and client modes and relate them to dedicated and listen-server topologies
+  - Set the address and port at runtime with Unity Transport
+  - Track connections with OnConnectionEvent and shut down or kick players cleanly
+prerequisites: [ngo/setup, theory/topologies]
+tags: [ngo, networkmanager, transport, connection]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+    - { name: com.unity.transport, version: '2.7.4' }
+sources:
+  - title: 'NGO 2.13 manual: NetworkManager'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkmanager.html
+  - title: 'NGO 2.13 manual: Connection events'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/connection-events.html
+  - title: 'NGO 2.13 manual: Transports'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/transports.html
+  - title: 'NGO 2.13 API: NetworkManager'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkManager.html
+  - title: 'NGO 2.13 API: NetworkConfig'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkConfig.html
+  - title: 'NGO 2.13 API: UnityTransport'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Transports.UTP.UnityTransport.html
+---
+
+In a single-player game, a `GameManager` singleton usually owns "the state of the session". In NGO, that role is
+split in two: **your** game manager still owns the rules, but the <Term id="network-manager">NetworkManager</Term> owns
+the session itself. It decides whether this process is a server, a client or both, which transport carries the bytes,
+how often state is sent, and which prefabs may be spawned. You start it, you listen to its events, and you shut it
+down. Everything networked hangs off it.
+
+## One NetworkManager, reachable everywhere
+
+There's exactly one NetworkManager per process. Two references are always available:
+
+- `NetworkManager.Singleton` from any script.
+- The `NetworkManager` property inside any `NetworkBehaviour`, which points to the manager that spawned that object.
+
+The NetworkManager creates its **sub-systems** only when it starts (`IsListening` becomes `true`). Before that, they
+don't exist yet:
+
+| Property | Sub-system | Used in lesson |
+|---|---|---|
+| `SpawnManager` | Spawned objects, player-object lookup | Network objects |
+| `SceneManager` | <Term id="network-scene-manager">NetworkSceneManager</Term>, which loads scenes for everyone | Connection and scenes |
+| `CustomMessagingManager` | Named and unnamed custom messages | Custom serialization |
+| `NetworkTimeSystem`, `NetworkTickSystem` | Synchronized time and the network tick | Prediction and anticipation |
+| `PrefabHandler` | Pooling and prefab overrides | Network objects |
+
+<Callout type="pitfall" title="Touching sub-systems before starting">
+
+`NetworkManager.Singleton.SceneManager` is `null` until you call `StartHost`, `StartServer` or `StartClient`, and it
+goes away again after `Shutdown`. Subscribe to scene events and register message handlers **after** starting, or
+from `OnNetworkSpawn`. The docs also warn against starting the NetworkManager from a NetworkBehaviour's `Awake`.
+
+</Callout>
+
+## The settings that matter
+
+Select the NetworkManager GameObject. These are the fields you'll actually change:
+
+| Inspector field | Code (`NetworkManager.NetworkConfig.…`) | What it controls |
+|---|---|---|
+| Player Prefab | `PlayerPrefab` | Spawned once per approved client |
+| Network Prefabs Lists | `Prefabs` | Every prefab that may be spawned dynamically |
+| Protocol Version | `ProtocolVersion` | Bump it so old builds can't join new ones |
+| Network Transport | `NetworkTransport` | Usually **UnityTransport** |
+| Tick Rate | `TickRate` | Network ticks per second (default 30) |
+| Connection Approval | `ConnectionApproval` | Run your approval callback for each joiner |
+| Client Connection Buffer Timeout | `ClientConnectionBufferTimeout` | Seconds a joiner has to finish approval |
+| Force Same Prefabs | `ForceSamePrefabs` | Reject clients whose prefab list differs |
+| Enable Scene Management | `EnableSceneManagement` | Let NGO synchronize scenes for you |
+| Network Topology | `NetworkTopology` | Client-server or distributed authority |
+
+The **tick rate** is the [tick rate from theory](../../theory/tick-rate/): how many times per second NGO collects dirty
+state and sends it. At the default 30 Hz, a <Term id="network-variable">NetworkVariable</Term> change waits up to
+about 33 ms before it's sent. Raising it costs bandwidth on every machine, so leave it at 30 until profiling says otherwise.
+
+The **Network Topology** field only appears once the Multiplayer Services package is installed, because the
+distributed-authority topology needs Unity's hosted service. You'll use it in the distributed authority lesson.
+
+## Server, host or client?
+
+The start method you call decides the process's role, and with it the topology of the session.
+
+<Diagram name="topology" variant="dedicated" caption="StartServer(): a dedicated server with no local player. Every client is remote." />
+
+<Diagram name="topology" variant="listen-server" caption="StartHost(): one player's machine is also the server. That player has zero latency to the authority." />
+
+What you should notice:
+
+- With a <Term id="dedicated-server">dedicated server</Term>, every player has the same path to the authority. That's
+  fair, but you pay for and operate the servers.
+- With a <Term id="listen-server">listen server</Term> (an NGO **host**), one player is also the
+  <Term id="server">server</Term>. It's free to run and simple to test, but the host has an advantage and the session
+  ends when the host quits.
+- Your gameplay code is the same in both cases. You write it against `IsServer`, `IsClient` and `IsOwner`, not against
+  "am I the host?". A host is simply `IsServer && IsClient`.
+
+## Unity Transport: address and port
+
+The Unity Transport component stores the address a client connects to and the port a server listens on. Set them in
+code before starting:
+
+```csharp title="ArenaConnection.cs"
+using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
+using UnityEngine;
+
+/// Attach to the NetworkManager GameObject (replaces the buttons from ArenaBootstrap).
+public class ArenaConnection : MonoBehaviour
+{
+    [SerializeField] string m_Address = "127.0.0.1";
+    [SerializeField] ushort m_Port = 7777;
+
+    NetworkManager m_NetworkManager;
+    UnityTransport m_Transport;
+    string m_Status = "Offline";
+
+    void Awake()
+    {
+        m_NetworkManager = GetComponent<NetworkManager>();
+        m_Transport = GetComponent<UnityTransport>();
+    }
+
+    void OnEnable()
+    {
+        m_NetworkManager.OnConnectionEvent += HandleConnectionEvent;
+        m_NetworkManager.OnClientStopped += HandleClientStopped;
+        m_NetworkManager.OnTransportFailure += HandleTransportFailure;
+    }
+
+    void OnDisable()
+    {
+        m_NetworkManager.OnConnectionEvent -= HandleConnectionEvent;
+        m_NetworkManager.OnClientStopped -= HandleClientStopped;
+        m_NetworkManager.OnTransportFailure -= HandleTransportFailure;
+    }
+
+    public void Host()
+    {
+        // Listen on every local interface so LAN clients can reach us too.
+        m_Transport.SetConnectionData("127.0.0.1", m_Port, "0.0.0.0");
+        if (!m_NetworkManager.StartHost()) m_Status = "Failed to start host";
+    }
+
+    public void Join()
+    {
+        m_Transport.SetConnectionData(m_Address, m_Port);
+        if (!m_NetworkManager.StartClient()) m_Status = "Failed to start client";
+        else m_Status = $"Connecting to {m_Address}:{m_Port}…";
+    }
+
+    void HandleConnectionEvent(NetworkManager manager, ConnectionEventData data)
+    {
+        switch (data.EventType)
+        {
+            case ConnectionEvent.ClientConnected:
+                // On the server: a new client. On a client: we finished connecting.
+                m_Status = manager.IsServer
+                    ? $"Client {data.ClientId} joined"
+                    : $"Connected as client {manager.LocalClientId}";
+                break;
+            case ConnectionEvent.PeerConnected:
+                m_Status = $"Another player ({data.ClientId}) joined";
+                break;
+            case ConnectionEvent.ClientDisconnected:
+                m_Status = $"Client {data.ClientId} disconnected";
+                break;
+            case ConnectionEvent.PeerDisconnected:
+                m_Status = $"Player {data.ClientId} left";
+                break;
+        }
+    }
+
+    void HandleClientStopped(bool wasHost)
+    {
+        // DisconnectReason is filled in when the server kicked or rejected us.
+        string reason = m_NetworkManager.DisconnectReason;
+        m_Status = string.IsNullOrEmpty(reason) ? "Disconnected" : $"Disconnected: {reason}";
+    }
+
+    void HandleTransportFailure() => m_Status = "Transport failure";
+
+    void OnGUI()
+    {
+        GUILayout.BeginArea(new Rect(10, 10, 300, 220));
+        GUILayout.Label(m_Status);
+        if (!m_NetworkManager.IsListening)
+        {
+            m_Address = GUILayout.TextField(m_Address);
+            if (GUILayout.Button("Host")) Host();
+            if (GUILayout.Button("Join")) Join();
+        }
+        else if (GUILayout.Button("Leave"))
+        {
+            m_NetworkManager.Shutdown();
+        }
+        GUILayout.EndArea();
+    }
+}
+```
+
+A few details from the docs are worth memorizing:
+
+- `SetConnectionData(address, port, listenAddress)` takes the **connect** address first. The optional third argument
+  is the server's **listen** address. `"0.0.0.0"` means "every interface on this machine".
+- When you connect through Unity Relay (lesson 13), don't call `SetConnectionData`. Relay connections use
+  `SetRelayServerData` instead, or the Multiplayer Services sessions API configures the transport for you.
+- `OnTransportFailure` is always followed by the NetworkManager shutting itself down.
+
+## Knowing who is connected
+
+`OnConnectionEvent` is the unified connection notification in NGO 2.x. It receives the manager and a
+`ConnectionEventData` with an `EventType`, a `ClientId`, and sometimes a `PeerClientIds` array.
+
+| Event | On the server or host | On a client |
+|---|---|---|
+| `ClientConnected` | A new client connected (`ClientId`) | **You** finished connecting. `PeerClientIds` lists the others |
+| `PeerConnected` | Not raised on a pure server (a host's client gets it) | Another client joined |
+| `ClientDisconnected` | A client left | **You** were disconnected |
+| `PeerDisconnected` | Not raised on a pure server | Another client left |
+
+You'll also see the older `OnClientConnectedCallback` and `OnClientDisconnectCallback` (`Action<ulong>`) in tutorials.
+They still work. `OnConnectionEvent` is simply clearer about *whose* connection changed.
+
+On the server, three collections give you the current set of players:
+
+- `ConnectedClientsIds`: a read-only list of client ids.
+- `ConnectedClients`: a dictionary from client id to `NetworkClient`. `NetworkClient.PlayerObject` is that client's
+  <Term id="player-object">player object</Term>.
+- `ConnectedClientsList`: the same `NetworkClient` values as a list.
+
+These are server-side views. A client only knows about itself (`LocalClient`, `LocalClientId`) and whatever you
+replicate to it.
+
+## Leaving, kicking and shutting down
+
+```csharp title="ArenaAdmin.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+public class ArenaAdmin : MonoBehaviour
+{
+    // Server only: calling DisconnectClient on a client throws.
+    public void Kick(ulong clientId)
+    {
+        var nm = NetworkManager.Singleton;
+        if (!nm.IsServer || clientId == NetworkManager.ServerClientId) return;
+        nm.DisconnectClient(clientId, "Kicked by the host");
+    }
+
+    // Any role: closes the connection and stops all netcode sub-systems.
+    public void LeaveToMenu()
+    {
+        NetworkManager.Singleton.Shutdown();
+        // The NetworkSceneManager is gone now, so use Unity's SceneManager.
+        UnityEngine.SceneManagement.SceneManager.LoadScene("MainMenu");
+    }
+}
+```
+
+<Sequence
+  title="Host shutdown with a connected client"
+  actors={[
+    { id: 'h', label: 'Host', kind: 'host' },
+    { id: 'c', label: 'Client 1', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'h', to: 'h', label: 'Shutdown()', kind: 'local' },
+    { from: 'h', to: 'h', label: 'OnPreShutdown: spawned objects still exist', note: 'Last chance to save state.', kind: 'event' },
+    { from: 'h', to: 'c', label: 'Disconnect notification', note: 'The client sees DisconnectReason "Disconnected due to host shutting down."', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'OnConnectionEvent ClientDisconnected, then OnClientStopped(false)', kind: 'event' },
+    { from: 'h', to: 'h', label: 'Waits up to 5 s for client connections to close', kind: 'local' },
+    { from: 'h', to: 'h', label: 'OnClientStopped(true), then OnServerStopped(true)', note: 'Safe to restart or load the menu.', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- A server or host **notifies** clients when it shuts down, and fills in `DisconnectReason` on their side, so clients
+  can show "host left" instead of waiting for a timeout.
+- A host is both, so it receives `OnClientStopped` and then `OnServerStopped`. Wait for these before starting a new
+  session.
+- After shutdown, the NetworkSceneManager no longer exists, so load menus with `UnityEngine.SceneManagement`.
+
+<Callout type="pitfall" title="Restarting too early">
+
+`Shutdown()` isn't instant: a host can take a while to close its client connections (`ShutdownInProgress` is `true`
+meanwhile). Calling `StartHost()` again right away is asking for trouble. The docs describe `OnClientStopped` and
+`OnServerStopped` as the point where the NetworkManager "is ready to be restarted", so restart from there.
+
+</Callout>
+
+<Callout type="pitfall" title="Firewall and listen address">
+
+"Works on my machine, LAN friend can't join" usually means the server listens only on `127.0.0.1`. Pass `"0.0.0.0"` as the
+listen address and allow the port through the OS firewall. Over the internet, NAT usually blocks direct connections anyway,
+which is why lesson 13 uses Relay. See [NAT and relays](../../theory/nat-and-relays/).
+
+</Callout>
+
+<Callout type="unity" title="Protocol Version and Force Same Prefabs">
+
+When you ship an update that changes prefabs or network messages, increment **Protocol Version**. Older clients are then
+rejected during the connection handshake instead of joining and failing later in confusing ways.
+
+</Callout>
+
+<KeyTakeaways>
+
+- The **NetworkManager** owns the session: role, transport, tick rate, prefab list, scene management and topology.
+- Its sub-systems (`SceneManager`, `SpawnManager`, `CustomMessagingManager`, …) exist only while it's running.
+- `StartServer` gives a dedicated server, `StartHost` a listen server, and `StartClient` a client. Write gameplay against `IsServer`/`IsClient`/`IsOwner`.
+- Use `UnityTransport.SetConnectionData` for direct IP connections, with `"0.0.0.0"` as the listen address for LAN.
+- Track players with `OnConnectionEvent`, kick with `DisconnectClient(id, reason)`, and leave with `Shutdown()`, waiting for the stopped events before restarting.
+
+</KeyTakeaways>

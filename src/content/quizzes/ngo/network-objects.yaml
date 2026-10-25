@@ -1,0 +1,75 @@
+passPct: 70
+questions:
+  - id: two-ids
+    type: single
+    prompt: A client receives "spawn object 103 from prefab hash 0x51A2…". Which id does it use later to route an RPC to this instance?
+    options:
+      - GlobalObjectIdHash
+      - NetworkObjectId (103)
+      - OwnerClientId
+      - The GameObject's InstanceID
+    answer: 1
+    explanation: >-
+      `GlobalObjectIdHash` identifies the **asset** to instantiate. `NetworkObjectId` is assigned at spawn time and
+      identifies the **instance**, so RPCs and NetworkVariable updates refer to it. Unity's InstanceID differs on every machine.
+  - id: runtime-networkobject
+    type: codeline
+    prompt: The server runs this to create a pickup, but it never spawns and NGO logs a warning. Click the line that makes it invalid.
+    code: |-
+      var go = new GameObject("Pickup");
+      go.AddComponent<SphereCollider>().isTrigger = true;
+      var netObj = go.AddComponent<NetworkObject>();
+      netObj.Spawn();
+    answerLines: [3]
+    explanation: >-
+      A NetworkObject added at runtime has a `GlobalObjectIdHash` of zero, because no asset was baked in the Editor, so no
+      client could find a matching prefab. NGO refuses to spawn it. Create a network prefab in the Editor, register it,
+      and instantiate that instead.
+  - id: client-destroy
+    type: codeline
+    prompt: This script runs on a client when the local player touches a pickup. Click the line that will throw or misbehave.
+    code: |-
+      void OnTriggerEnter(Collider other)
+      {
+          if (!IsOwner) return;
+          var pickup = other.GetComponent<HealthPickup>();
+          if (pickup == null) return;
+          Destroy(pickup.gameObject);
+      }
+    answerLines: [6]
+    explanation: >-
+      A non-authority client must never `Destroy` a spawned NetworkObject. NGO throws. Despawning is the authority's job,
+      so the client should send an RPC (or, better, let the server detect the trigger itself) and the server calls `Despawn()`.
+  - id: spawn-order
+    type: order
+    prompt: Order the steps of dynamically spawning a pickup in client-server.
+    items:
+      - The server instantiates the network prefab
+      - The server calls Spawn() and assigns a NetworkObjectId
+      - The server sends a create message with the prefab hash and initial state
+      - Each client instantiates its own copy from its registered prefab
+      - OnNetworkSpawn runs on the client copy, with initial state already applied
+    explanation: >-
+      Clients don't receive your GameObject. They receive instructions plus the initial state, and they build the copy
+      locally before `OnNetworkSpawn` runs.
+  - id: nesting
+    type: truefalse
+    prompt: A network prefab can contain a child GameObject with its own NetworkObject, as long as the root also has one.
+    answer: false
+    explanation: >-
+      Nested NetworkObjects aren't permitted in network prefabs, and the Editor prevents it. Split them into separate
+      prefabs and combine them at runtime with NetworkObject parenting or `AttachableBehaviour`.
+  - id: ownership-change-who
+    type: multi
+    prompt: In a **client-server** session, which statements about ownership are true? Select all that apply.
+    options:
+      - Only the server can call ChangeOwnership
+      - A client can take ownership of any object by calling ChangeOwnership on itself
+      - Objects spawned with Spawn() are owned by the server
+      - Owning an object automatically lets the owner write all its NetworkVariables
+      - By default, a client's owned objects are destroyed when that client disconnects
+    answers: [0, 2, 4]
+    explanation: >-
+      The server is the authority for ownership in client-server. `Spawn()` assigns the server as owner, and owned objects
+      are destroyed with their owner unless `DontDestroyWithOwner` is set. Ownership only grants write access where a
+      feature is configured for owner write, such as `NetworkVariableWritePermission.Owner`.

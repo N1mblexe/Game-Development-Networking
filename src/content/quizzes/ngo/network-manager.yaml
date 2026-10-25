@@ -1,0 +1,72 @@
+passPct: 70
+questions:
+  - id: scene-manager-null
+    type: codeline
+    prompt: This script throws a `NullReferenceException` at startup. Click the line that causes it.
+    code: |-
+      void Start()
+      {
+          var nm = NetworkManager.Singleton;
+          nm.SceneManager.OnSceneEvent += HandleSceneEvent;
+          nm.OnConnectionEvent += HandleConnection;
+          nm.StartHost();
+      }
+    answerLines: [4]
+    explanation: >-
+      NetworkManager sub-systems such as `SceneManager` are created when the NetworkManager starts. Before `StartHost()`
+      it's `null`. Subscribing to `OnConnectionEvent` is fine because it's an event on the NetworkManager itself.
+      Move the scene subscription after the start call or into `OnNetworkSpawn`.
+  - id: host-is
+    type: single
+    prompt: In a process started with `StartHost()`, which flags are true?
+    options:
+      - IsServer only
+      - IsClient only
+      - IsServer and IsClient (and IsHost)
+      - IsHost only, IsServer and IsClient are false
+    answer: 2
+    explanation: >-
+      A host is a server with a local client, so `IsServer`, `IsClient` and `IsHost` are all true. That's why gameplay
+      code written against `IsServer` and `IsClient` works for hosts and dedicated servers alike.
+  - id: lan-listen
+    type: single
+    prompt: Players on your LAN can't join your host, but a second instance on the same PC can. What's the most likely fix?
+    options:
+      - Raise the tick rate
+      - Pass "0.0.0.0" as the listen address in SetConnectionData and allow the port through the firewall
+      - Enable Force Same Prefabs
+      - Switch to the distributed authority topology
+    answer: 1
+    explanation: >-
+      If the server only listens on the loopback address, only local processes can reach it. Listening on `0.0.0.0` accepts
+      connections on every interface, and the OS firewall must allow the port.
+  - id: connection-event-client
+    type: single
+    prompt: On a **client**, what does `ConnectionEvent.ClientConnected` mean?
+    options:
+      - Another client joined the session
+      - The local client finished connecting. PeerClientIds lists the other connected clients
+      - The server started listening
+      - A client was approved but isn't synchronized yet
+    answer: 1
+    explanation: >-
+      On a client, `ClientConnected` refers to the local client. Other clients joining are reported as `PeerConnected`.
+  - id: shutdown-order
+    type: order
+    prompt: Order what a host sees after calling `Shutdown()` with a client connected.
+    items:
+      - OnPreShutdown is invoked while spawned objects still exist
+      - Connected clients are sent a disconnect notification
+      - The host waits for client connections to close (up to about five seconds)
+      - OnClientStopped(true) is invoked
+      - OnServerStopped(true) is invoked
+    explanation: >-
+      The host notifies clients, waits briefly for their connections to close, and then raises the stopped events. A host
+      is both client and server, so it gets `OnClientStopped` followed by `OnServerStopped`.
+  - id: kick-client-side
+    type: truefalse
+    prompt: A client can kick another player by calling `NetworkManager.Singleton.DisconnectClient(otherId)`.
+    answer: false
+    explanation: >-
+      `DisconnectClient` is server-only and throws when a client calls it. A client that wants someone kicked must ask the
+      server (for example, with an RPC), and the server decides.

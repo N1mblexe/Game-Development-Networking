@@ -1,0 +1,300 @@
+---
+title: NetworkObjects and Spawning
+order: 3
+summary: How NGO identifies an object on every machine, how network prefabs are registered and spawned, and who owns what.
+durationMin: 25
+objectives:
+  - Explain GlobalObjectIdHash and NetworkObjectId and why both exist
+  - Register network prefabs and spawn, despawn and pool them on the authority
+  - Tell in-scene placed and dynamically spawned NetworkObjects apart
+  - Assign and change ownership, and follow the nesting rules for NetworkObjects
+prerequisites: [ngo/network-manager, theory/authority-models]
+tags: [ngo, networkobject, spawning, ownership]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: NetworkObject'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkobject.html
+  - title: 'NGO 2.13 manual: Object spawning'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/object-spawning.html
+  - title: 'NGO 2.13 manual: NetworkObject ownership'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkobject-ownership.html
+  - title: 'NGO 2.13 manual: NetworkBehaviour ownership'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkbehaviour-ownership.html
+  - title: 'NGO 2.13 manual: PlayerObjects and player prefabs'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/playerobjects.html
+  - title: 'NGO 2.13 manual: Object visibility'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/object-visibility.html
+  - title: 'NGO 2.13 API: NetworkObject'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkObject.html
+---
+
+`Instantiate(prefab)` creates an object on **one** machine. In a multiplayer game that's a problem: the host creates
+a health pickup, and nobody else knows it exists. NGO's answer is the <Term id="network-object">NetworkObject</Term>
+component, plus one extra call. You still `Instantiate`, but then you `Spawn()`, and NGO tells every connected machine
+to create its own copy of the same prefab and link the copies together. This lesson is about that link: how it's
+made, who may create and destroy it, and who <Term id="owner">owns</Term> the result.
+
+## Two ids: which prefab, and which instance
+
+Each NetworkObject carries two identifiers.
+
+| Id | Set when | Identifies | Used for |
+|---|---|---|---|
+| <Term id="global-object-id-hash">`GlobalObjectIdHash`</Term> | In the Editor, when the prefab or scene object is created | **Which asset** to instantiate | "Spawn a copy of prefab 0x51A2…" |
+| `NetworkObjectId` | At runtime, when the object is spawned | **Which instance** in this session | "Apply this RPC to object 103" |
+
+When the server spawns a pickup, it sends a message that says, in effect, "create the prefab with hash *H*, call
+it object *103*, here are its position and initial state". Each client looks up *H* in its own
+<Term id="network-prefabs-list">network prefabs list</Term>, instantiates that prefab, and records it as 103. From
+then on, RPCs and NetworkVariable updates only need the small id.
+
+That's also why some things are **invalid**: if you add a NetworkObject with `AddComponent` at runtime, there's no hash
+baked into an asset (it's zero), so no client could ever find the matching prefab. NGO logs a warning and refuses to
+spawn it.
+
+<Diagram name="ngo-spawn-flow" caption="The authority instantiates and calls Spawn(). Clients receive a create message and instantiate their own copy from the registered prefab, and OnNetworkSpawn runs on every copy." />
+
+What you should notice:
+
+- The **authority** (the server in client-server) does the spawning. Clients never call `Spawn()` in a client-server game.
+- Clients don't receive a copy of your GameObject. They receive **instructions** and build their own instance from
+  *their* copy of the prefab, so the prefab must be identical and registered on every build.
+- Initial state (transform and NetworkVariable values) travels **inside** the create message, so the object is
+  already correct when `OnNetworkSpawn` runs on the client.
+
+## Registering network prefabs
+
+A <Term id="network-prefab">network prefab</Term> is a prefab with exactly **one** NetworkObject, normally on the root.
+Any NetworkBehaviour on the root or on its children belongs to that NetworkObject.
+
+By default, NGO keeps a generated list that contains every network prefab in the project (the **Generate Default
+Network Prefabs List** setting on the Netcode for GameObjects page of Project Settings). For more control:
+
+<Steps>
+
+1. Right-click in the Project window and choose **Create > Netcode > Network Prefabs List**.
+2. Add `PlayerAvatar`, `HealthPickup` and (later) `Projectile` to it.
+3. Add that list under **Network Prefabs Lists** on the NetworkManager.
+4. Optionally turn off default list generation so only listed prefabs can be spawned.
+
+</Steps>
+
+You can also register prefabs from code with `NetworkManager.AddNetworkPrefab(prefab)` before starting.
+
+<Callout type="pitfall" title="Forgetting to register the prefab">
+
+The classic symptom: the server spawns the object and sees it, but clients log an error that the prefab hash was not
+found, and nothing appears. The prefab isn't in any network prefabs list on that build. Register it, then rebuild
+**every** instance.
+
+</Callout>
+
+<Callout type="pitfall" title="Nested NetworkObjects">
+
+Only one NetworkObject per prefab. The Editor won't let you add a second NetworkObject inside a network prefab. If you need
+two independently networked things (a tank and a detachable turret), make two prefabs and attach them at runtime with
+NetworkObject parenting (`TrySetParent`), or use the `AttachableBehaviour` helper added in 2.5.
+
+</Callout>
+
+## Spawning, despawning and the pickup spawner
+
+The running example gets **health pickups**. A `PickupSpawner` lives on an *in-scene placed* NetworkObject (a
+GameObject with a NetworkObject that you place in the Arena scene in the Editor). On the server, it spawns
+`HealthPickup` prefabs at spawn points and respawns them after they're collected.
+
+```csharp title="PickupSpawner.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+/// Put this on an empty GameObject in the Arena scene, together with a NetworkObject component.
+/// In-scene placed NetworkObjects need no prefab registration: NGO tracks them through the scene.
+public class PickupSpawner : NetworkBehaviour
+{
+    [SerializeField] NetworkObject m_PickupPrefab; // must be in a Network Prefabs List
+    [SerializeField] Transform[] m_SpawnPoints;
+    [SerializeField] float m_RespawnSeconds = 10f;
+
+    NetworkObject[] m_Active;
+    float[] m_RespawnAt;
+
+    public override void OnNetworkSpawn()
+    {
+        // Only the server spawns. On clients, this component has nothing to do.
+        if (!IsServer)
+        {
+            enabled = false;
+            return;
+        }
+
+        m_Active = new NetworkObject[m_SpawnPoints.Length];
+        m_RespawnAt = new float[m_SpawnPoints.Length];
+        for (int i = 0; i < m_SpawnPoints.Length; i++) SpawnAt(i);
+    }
+
+    void Update()
+    {
+        if (!IsSpawned || !IsServer) return;
+
+        for (int i = 0; i < m_Active.Length; i++)
+        {
+            // A despawned-and-destroyed pickup compares equal to null.
+            bool missing = m_Active[i] == null || !m_Active[i].IsSpawned;
+            if (!missing) continue;
+
+            if (m_RespawnAt[i] == 0f) m_RespawnAt[i] = Time.time + m_RespawnSeconds;
+            else if (Time.time >= m_RespawnAt[i]) SpawnAt(i);
+        }
+    }
+
+    void SpawnAt(int index)
+    {
+        Transform point = m_SpawnPoints[index];
+
+        // Instantiate + Spawn in one call. Owner defaults to the server.
+        m_Active[index] = NetworkManager.SpawnManager.InstantiateAndSpawn(
+            m_PickupPrefab,
+            ownerClientId: NetworkManager.ServerClientId,
+            destroyWithScene: true,
+            position: point.position,
+            rotation: point.rotation);
+
+        m_RespawnAt[index] = 0f;
+    }
+}
+```
+
+`InstantiateAndSpawn` is equivalent to the long form you'll see in older tutorials:
+
+```csharp title="LongFormSpawn.cs"
+var instance = Instantiate(m_PickupPrefab, point.position, point.rotation);
+instance.Spawn(destroyWithScene: true);
+```
+
+The pickup despawns itself on the server when a player touches it. For now it only logs who collected it. In the
+NetworkVariables lesson it heals the player.
+
+```csharp title="HealthPickup.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+/// HealthPickup prefab: NetworkObject, a trigger collider, and a kinematic Rigidbody
+/// (so trigger events fire even though players are moved by their transforms).
+public class HealthPickup : NetworkBehaviour
+{
+    void OnTriggerEnter(Collider other)
+    {
+        // Triggers fire on every machine. Only the server decides what happens.
+        if (!IsServer || !IsSpawned) return;
+
+        var player = other.GetComponentInParent<NetworkObject>();
+        if (player == null || !player.IsPlayerObject) return;
+
+        Debug.Log($"Client {player.OwnerClientId} collected a pickup");
+
+        // Despawn on the authority: every client despawns and destroys its copy too.
+        NetworkObject.Despawn();
+    }
+}
+```
+
+Despawning rules from the docs:
+
+- Only the **authority** despawns. `Despawn()` destroys the GameObject by default, and `Despawn(false)` keeps it for reuse.
+- Destroying a spawned object on the authority with `Destroy(gameObject)` also despawns it everywhere.
+- **Never** call `Destroy` on a spawned NetworkObject from a non-authority client. NGO throws. Ask the server with an RPC instead.
+- To keep many short-lived objects (projectiles) cheap, NGO supports pooling through `NetworkManager.PrefabHandler` and
+  `INetworkPrefabInstanceHandler`. Pooling is an optimization, so start without it.
+
+## In-scene placed vs dynamically spawned
+
+| | <Term id="in-scene-placed-object">In-scene placed</Term> | Dynamically spawned |
+|---|---|---|
+| Created by | Loading the scene | `Spawn()` / `InstantiateAndSpawn` at runtime |
+| Needs prefab registration | No | Yes |
+| Spawned by | NGO, when the scene loads on the server (with scene management) | Your authority code |
+| Order on spawn | `Awake`, `Start`, then `OnNetworkSpawn` | `Awake`, `OnNetworkSpawn`, then `Start` |
+| Good for | Managers, doors, levers, spawners | Players, pickups, projectiles |
+
+NGO 2.13 exposes this as `NetworkObject.InScenePlaced`, which replaces the deprecated nullable `IsSceneObject`. The
+docs recommend a **hybrid** for pickups, exactly as above: an in-scene placed spawner that dynamically spawns the items.
+
+## Ownership
+
+Every spawned NetworkObject has an owner, identified by `OwnerClientId`. Objects spawned with `Spawn()` in
+client-server are owned by the server. Player objects are owned by their client. Ownership alone doesn't grant power:
+in client-server, the server stays the [authority](../../theory/authority-models/), and ownership only matters for
+features you configure as owner-driven (an owner-authoritative NetworkTransform, a NetworkVariable with owner write
+permission, an RPC with owner invoke permission).
+
+| Call (server only in client-server) | Effect |
+|---|---|
+| `SpawnWithOwnership(clientId)` | Spawn already owned by that client |
+| `SpawnAsPlayerObject(clientId)` | Spawn as that client's player object |
+| `ChangeOwnership(clientId)` | Give an existing object to a client |
+| `RemoveOwnership()` | Give it back to the server |
+
+Useful read-only properties: `IsOwner`, `IsOwnedByServer`, `IsPlayerObject`, `IsLocalPlayer` and `OwnerClientId`. All of
+them are only valid while `IsSpawned` is true.
+
+<Sequence
+  title="The server hands a turret to client 2"
+  actors={[
+    { id: 's', label: 'Server', kind: 'server' },
+    { id: 'c1', label: 'Client 1', kind: 'client' },
+    { id: 'c2', label: 'Client 2', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'c2', to: 's', label: 'UseTurretRpc()', note: 'A client asks. It cannot change ownership itself.', kind: 'rpc' },
+    { from: 's', to: 's', label: 'Validate, then turret.ChangeOwnership(2)', kind: 'local' },
+    { from: 's', to: 'c1', label: 'Ownership changed: owner = 2', kind: 'reliable' },
+    { from: 's', to: 'c2', label: 'Ownership changed: owner = 2', kind: 'reliable' },
+    { from: 'c2', to: 'c2', label: 'OnGainedOwnership(): IsOwner is now true', kind: 'event' },
+    { from: 'c1', to: 'c1', label: 'OnOwnershipChanged(previous 0, current 2)', note: 'Invoked on every instance after the lost/gained callbacks.', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- In client-server, **only the server** changes ownership. A client requests it, usually through an RPC.
+- The previous owner gets `OnLostOwnership`, the new owner gets `OnGainedOwnership`, and everyone gets
+  `OnOwnershipChanged(previous, current)`, in that order.
+- Ownership changes are messages too, so the new owner learns about them after a delay. Don't assume `IsOwner` flips
+  the moment you send the request.
+
+<Callout type="pitfall" title="SpawnWithOwnership, then editing the object">
+
+The docs warn that if you `SpawnWithOwnership(clientId)` and then immediately change the object on the server, owner-only
+logic in `OnNetworkSpawn` doesn't run on the spawning side and you can get surprising results. If you need to initialize
+it first, `Spawn()` it, set it up, and *then* call `ChangeOwnership(clientId)`.
+
+</Callout>
+
+<Callout type="unity" title="When the owner disconnects">
+
+By default, objects owned by a client are destroyed when that client leaves. Tick **Dont Destroy With Owner** on the
+NetworkObject (or set `DontDestroyWithOwner = true`) for things that should outlive their owner, such as a dropped
+weapon. Ownership then returns to the server.
+
+</Callout>
+
+## Other NetworkObject settings you'll meet
+
+- **Synchronize Transform**: send the transform in the spawn message. Keep it on for anything that moves.
+- **Spawn With Observers**: when off, the object spawns with no clients observing it. `NetworkShow(clientId)` and
+  `NetworkHide(clientId)` control per-client visibility afterwards, which is useful for fog of war.
+- **Active Scene Synchronization** and **Scene Migration Synchronization**: move spawned objects between scenes
+  automatically (covered with scenes in lesson 8).
+
+<KeyTakeaways>
+
+- A NetworkObject links copies of one object across machines: `GlobalObjectIdHash` says **which prefab**, `NetworkObjectId` says **which instance**.
+- Dynamically spawned prefabs must be in a **Network Prefabs List** on every build. In-scene placed objects don't need registration.
+- The authority instantiates and calls `Spawn()` (or `InstantiateAndSpawn`). Clients never `Destroy` spawned objects. They ask the server.
+- One NetworkObject per prefab: no nesting. Use parenting or `AttachableBehaviour` to combine objects at runtime.
+- In client-server, the server owns spawned objects by default and is the only one who can change ownership. Ownership only matters where a feature is owner-driven.
+
+</KeyTakeaways>
