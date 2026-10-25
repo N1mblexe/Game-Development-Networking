@@ -116,39 +116,41 @@ test.describe('lesson quiz', () => {
 });
 
 test.describe('flashcard review', () => {
-  test('reviews every new card, repeats "again" cards, then shows the empty state', async ({ page }) => {
-    await page.goto('/review/');
+  // Content-independent: a session introduces at most 10 new cards (DEFAULT_NEW_PER_SESSION).
+  test('reviews a session of new cards, repeats "again" cards, then counts down the new pool', async ({ page }) => {
+    await page.goto('/review/?module=theory');
     const review = page.locator('[data-review][data-ready="true"]');
-    await expect(review).toContainText('8 cards ready');
+    await expect(review).toContainText('10 cards ready');
+    const before = Number(/(\d+) new/.exec((await review.textContent()) ?? '')?.[1]);
+    expect(before).toBeGreaterThan(10);
     await review.getByRole('button', { name: /Start review/ }).click();
 
     const counter = page.locator('[data-counter]');
-    await expect(counter).toContainText('8 left');
+    await expect(counter).toContainText('10 left');
     await page.keyboard.press('Space');
     await expect(page.locator('[data-flipped="true"]')).toBeVisible();
     await page.keyboard.press('1'); // Again: the card stays in the queue
-    await expect(counter).toContainText('8 left');
+    await expect(counter).toContainText('10 left');
     await expect(counter).toContainText('0 done');
 
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 10; i++) {
       await page.getByRole('button', { name: /Show answer/ }).click();
       await page.getByRole('button', { name: /^Good/ }).click();
     }
     await expect(review.getByRole('heading', { name: 'Session complete' })).toBeVisible();
-    await expect(review).toContainText('You reviewed 8 cards and repeated 1 you forgot');
+    await expect(review).toContainText('You reviewed 10 cards and repeated 1 you forgot');
 
     await page.reload();
-    await expect(page.locator('[data-empty]')).toContainText('All caught up. Next card due on tomorrow');
+    await expect(page.locator('[data-review][data-ready="true"]')).toContainText(`${before - 10} new`);
   });
 
   test('filters by ?module=', async ({ page }) => {
-    await page.goto('/review/?module=ngo');
+    await page.goto('/review/?module=theory');
     const review = page.locator('[data-review][data-ready="true"]');
-    await expect(review).toContainText('Unity Netcode for GameObjects');
-    await expect(page.locator('[data-empty]')).toContainText('No cards in this module yet.');
-    await review.getByRole('link', { name: /Select Networking for Games/ }).click();
-    await expect(page).toHaveURL(/module=theory/);
-    await expect(review).toContainText('8 cards ready');
+    await expect(review).toContainText('Networking for Games');
+    await review.getByRole('link', { name: /Select all modules/ }).click();
+    await expect(page).not.toHaveURL(/module=/);
+    await expect(review).toContainText('All modules');
   });
 });
 
