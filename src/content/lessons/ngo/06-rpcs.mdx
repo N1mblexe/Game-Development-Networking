@@ -9,7 +9,7 @@ objectives:
   - Choose reliable or unreliable delivery and understand per-object ordering
   - Validate client requests on the server, and restrict who may invoke an RPC
   - Translate legacy ServerRpc and ClientRpc code to the current API
-prerequisites: [ngo/network-variables, theory/rpcs-and-events]
+prerequisites: [ngo/network-variables, theory/state-sync]
 tags: [ngo, rpc, messaging]
 targets:
   unity: '6000.x'
@@ -37,7 +37,7 @@ sources:
 The arena has health and a scoreboard, but nobody can shoot yet. Firing is the opposite of health: it's a **moment**,
 not state. Nobody joining in thirty seconds needs to know that you pulled the trigger. Moments travel as
 <Term id="rpc">RPCs</Term>, remote procedure calls: you call a method on one machine and NGO runs it on others. Theory
-covered [when to prefer events over state](../../theory/rpcs-and-events/). This lesson shows the NGO API and the server
+covered [when to prefer events over state](../../theory/state-sync/). This lesson shows the NGO API and the server
 validation that keeps it honest.
 
 ## Declaring an RPC
