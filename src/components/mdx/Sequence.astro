@@ -3,6 +3,11 @@
  * One-off sequence diagram, no registration needed:
  * <Sequence title="Join" actors={[{ id: 'c', label: 'Client', kind: 'client' }, ...]}
  *           steps={[{ from: 'c', to: 's', label: 'ConnectionRequest', kind: 'reliable' }, ...]} />
+ * Step kinds: reliable (solid), unreliable (dashed), rpc (solid + RPC tag), event (dotted), local (self-loop).
+ * Optional per-step `note` (shown when active), `code` (API call) and `tone` (ok | warn | danger | muted).
+ *
+ * The island is server-rendered (initial state) and hydrates when visible. Its text is kept out of the
+ * search index so excerpts come from the lesson prose instead.
  */
 import SequenceFlow from '../diagrams/SequenceFlow';
 import type { SequenceProps } from '../diagrams/types';
@@ -10,4 +15,6 @@ import type { SequenceProps } from '../diagrams/types';
 type Props = SequenceProps;
 ---
 
-<SequenceFlow client:visible {...Astro.props} />
+<div data-pagefind-ignore>
+  <SequenceFlow client:visible {...Astro.props} />
+</div>

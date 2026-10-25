@@ -31,7 +31,9 @@ export default function DiagramHost({ name, variant, caption }: Props) {
     );
   }
 
+  // Diagram text stays out of the search index (data-pagefind-ignore); lesson prose describes it.
   return (
+    <div data-pagefind-ignore="">
     <InteractiveFrame kind="Diagram" title={def.title} subtitle={variant} caption={caption ?? def.description}>
       {error ? (
         <p className="text-danger">Failed to load: {error}</p>
@@ -43,5 +45,6 @@ export default function DiagramHost({ name, variant, caption }: Props) {
         </div>
       )}
     </InteractiveFrame>
+    </div>
   );
 }

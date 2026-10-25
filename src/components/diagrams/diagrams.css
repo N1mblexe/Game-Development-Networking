@@ -1,0 +1,120 @@
+/* Shared styles for every diagram (actor colors, line styles, step states). Imported by primitives/. */
+:root {
+  --dg-client: #2563eb;
+  --dg-server: #7c3aed;
+  --dg-host: #0f8a80;
+  --dg-steam: #1b6fae;
+  --dg-relay: #c2410c;
+  --dg-service: #52606d;
+  --dg-line: #8a94a3;
+}
+:root[data-theme='dark'] {
+  --dg-client: #6ea8ff;
+  --dg-server: #b49cff;
+  --dg-host: #3fd2c2;
+  --dg-steam: #66b3ee;
+  --dg-relay: #fb9b5b;
+  --dg-service: #a3adba;
+  --dg-line: #6b7686;
+}
+
+.dg-kind-client { --kind: var(--dg-client); }
+.dg-kind-server { --kind: var(--dg-server); }
+.dg-kind-host { --kind: var(--dg-host); }
+.dg-kind-steam { --kind: var(--dg-steam); }
+.dg-kind-relay { --kind: var(--dg-relay); }
+.dg-kind-service { --kind: var(--dg-service); }
+
+/* ------------------------------------------------------------- sequence rows */
+.dg-step {
+  transition: opacity 0.25s ease, background-color 0.25s ease;
+}
+.dg-step[data-state='future'] {
+  opacity: 0.32;
+}
+.dg-step[data-state='active'] {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.dg-step[data-state='active'] .dg-line,
+.dg-step[data-state='active'] .dg-head {
+  stroke: var(--accent);
+  fill: var(--accent);
+}
+.dg-step[data-tone='warn'][data-state='active'] .dg-line,
+.dg-step[data-tone='warn'][data-state='active'] .dg-head {
+  stroke: var(--warn);
+  fill: var(--warn);
+}
+.dg-step[data-tone='danger'][data-state='active'] .dg-line,
+.dg-step[data-tone='danger'][data-state='active'] .dg-head {
+  stroke: var(--danger);
+  fill: var(--danger);
+}
+
+.dg-line {
+  stroke: var(--dg-line);
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+  transition: stroke 0.2s ease;
+}
+.dg-head {
+  fill: var(--dg-line);
+  stroke: none;
+  transition: fill 0.2s ease;
+}
+.dg-line[data-kind='unreliable'] {
+  stroke-dasharray: 7 5;
+  stroke-linecap: butt;
+}
+.dg-line[data-kind='event'] {
+  stroke-dasharray: 0.5 5;
+  stroke-width: 2.5;
+}
+
+.dg-dot {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.dg-label-bg {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.dg-scroll {
+  scrollbar-width: thin;
+}
+
+@keyframes dg-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.dg-pulse {
+  animation: dg-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dg-pulse {
+    animation: none;
+  }
+}
+
+/* Highlighted connector (topology hops). */
+.dg-active .dg-line {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+.dg-active .dg-head {
+  fill: var(--accent);
+}
+.dg-edge {
+  stroke: var(--border);
+  stroke-width: 2;
+}

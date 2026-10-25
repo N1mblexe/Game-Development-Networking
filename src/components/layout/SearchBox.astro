@@ -1,11 +1,159 @@
 ---
+/**
+ * Header search: a button (and Ctrl/⌘+K, or "/" outside inputs) that opens a Pagefind modal.
+ * Uses @pagefind/component-ui (via astro-pagefind) with its own instance ("modal") so it never
+ * shares state with the full /search/ page. Without JavaScript the button is a link to /search/.
+ * The index only exists after `pnpm build`.
+ */
+import PagefindConfig from 'astro-pagefind/components/PagefindConfig.astro';
 import { withBase } from '../../lib/url';
-// Phase 0: links to the search page. Agent C replaces this with an inline Pagefind modal (Ctrl/⌘+K).
 ---
 
-<a href={withBase('/search/')} class="btn px-2.5 text-sm text-muted" aria-label="Search">
+<a href={withBase('/search/')} class="btn search-trigger px-2.5 text-sm text-muted" aria-label="Search" aria-keyshortcuts="Control+K Meta+K" data-search-open>
   <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
     <circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path>
   </svg>
   <span class="hidden lg:inline">Search</span>
+  <kbd class="ml-1 hidden rounded border border-border bg-surface-2 px-1.5 font-sans text-[0.7rem] leading-5 font-medium text-muted lg:inline" aria-hidden="true" data-search-kbd>Ctrl K</kbd>
 </a>
+
+<PagefindConfig instance="modal" excerpt-length="24" />
+<pagefind-modal instance="modal" reset-on-close="false" class="nl-search-modal" data-search-modal>
+  <pagefind-modal-header instance="modal">
+    <pagefind-input instance="modal" placeholder="Search lessons and the glossary…" debounce="150"></pagefind-input>
+  </pagefind-modal-header>
+  <pagefind-modal-body instance="modal">
+    <div class="nl-search-filters">
+      <pagefind-filter-dropdown instance="modal" filter="module" label="Module" sort="alphabetical"></pagefind-filter-dropdown>
+    </div>
+    <pagefind-summary instance="modal" default-message="Type to search lessons and glossary terms."></pagefind-summary>
+    <pagefind-results instance="modal" max-sub-results="3"></pagefind-results>
+  </pagefind-modal-body>
+  <pagefind-modal-footer instance="modal">
+    <div class="nl-search-footer">
+      <pagefind-keyboard-hints instance="modal"></pagefind-keyboard-hints>
+      <a href={withBase('/search/')} class="nl-search-full">Full search page →</a>
+    </div>
+  </pagefind-modal-footer>
+</pagefind-modal>
+
+<style is:global>
+  /* Map Pagefind's tokens onto the site's, so the UI follows light/dark automatically. */
+  html:root {
+    --pf-text: var(--text);
+    --pf-text-secondary: var(--muted);
+    --pf-text-muted: var(--muted);
+    --pf-background: var(--surface);
+    --pf-border: var(--border);
+    --pf-border-focus: var(--accent);
+    --pf-skeleton: var(--surface-2);
+    --pf-skeleton-shine: var(--bg);
+    --pf-hover: var(--surface-2);
+    --pf-mark: var(--text);
+    --pf-outline-focus: var(--accent);
+    --pf-font: var(--font-sans);
+    --pf-border-radius: 0.5rem;
+    --pf-input-height: 44px;
+    --pf-result-title-font-size: 15px;
+    --pf-result-excerpt-font-size: 13.5px;
+    --pf-modal-max-width: 640px;
+    --pf-modal-top: 8dvh;
+    --pf-modal-backdrop: rgb(10 14 20 / 0.55);
+    --pf-shadow-lg: 0 24px 60px -12px rgb(0 0 0 / 0.45);
+    --pf-error-bg: var(--danger-soft);
+    --pf-error-border: var(--danger);
+    --pf-error-text: var(--danger);
+    --pf-error-text-secondary: var(--danger);
+  }
+  :root[data-theme='dark'] {
+    --pf-modal-backdrop: rgb(0 0 0 / 0.7);
+    --pf-scroll-shadow: rgb(255 255 255 / 0.08);
+  }
+  /* Search-term highlights inside excerpts. */
+  pagefind-results mark,
+  pagefind-modal mark {
+    background: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+    color: inherit !important;
+    border-radius: 0.2em;
+    padding: 0 0.1em;
+  }
+  .nl-search-filters {
+    display: flex;
+    padding: 0.5rem 0 0.25rem;
+  }
+  .nl-search-filters pagefind-filter-dropdown {
+    display: inline-block;
+  }
+  .nl-search-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    width: 100%;
+  }
+  .nl-search-full {
+    font-family: var(--font-sans);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .nl-search-full:hover {
+    text-decoration: underline;
+  }
+  @media (max-width: 639px) {
+    html:root {
+      --pf-modal-top: 0;
+      --pf-modal-max-height: 100dvh;
+    }
+  }
+</style>
+
+<script>
+  import type { PagefindModal } from '@pagefind/component-ui';
+
+  const modal = () => document.querySelector<HTMLElement & Partial<Pick<PagefindModal, 'open' | 'isOpen'>>>('[data-search-modal]');
+  let returnFocus: HTMLElement | null = null;
+
+  async function openSearch() {
+    await customElements.whenDefined('pagefind-modal');
+    const m = modal();
+    if (!m?.open) return false;
+    returnFocus = document.activeElement as HTMLElement | null;
+    m.open();
+    // Restore focus when the dialog closes (Escape, backdrop click or the close button).
+    m.querySelector('dialog')?.addEventListener('close', () => returnFocus?.focus?.(), { once: true });
+    return true;
+  }
+
+  // Show ⌘ on Apple platforms.
+  if (/Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)) {
+    document.querySelectorAll('[data-search-kbd]').forEach((k) => (k.textContent = '⌘ K'));
+  }
+
+  document.addEventListener('click', (e) => {
+    const trigger = (e.target as Element).closest('[data-search-open]');
+    if (!trigger || e.ctrlKey || e.metaKey || e.shiftKey || (e as MouseEvent).button !== 0) return;
+    e.preventDefault();
+    openSearch().then((ok) => {
+      if (!ok) location.href = (trigger as HTMLAnchorElement).href;
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const t = e.target as HTMLElement;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable;
+    const isK = e.key.toLowerCase() === 'k' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+    if (isK) {
+      // Ctrl/⌘+K works even while typing elsewhere; inside the modal it is a no-op.
+      if (modal()?.isOpen) return;
+      e.preventDefault();
+      openSearch();
+    }
+    // "/" opens search too, unless the page has its own "/" handler (glossary filter) or you're typing.
+    if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !document.querySelector('[data-glossary-filter]')) {
+      e.preventDefault();
+      openSearch();
+    }
+  });
+</script>
