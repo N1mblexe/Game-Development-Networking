@@ -1,0 +1,309 @@
+---
+title: 'The Shipping Checklist'
+order: 9
+summary: Everything between "it works with my friend" and "it works for strangers". Your own App ID, depots without dev files, the restart check, version keys, timeouts, release logging, relay setup, a test matrix, and crash and disconnect UX.
+durationMin: 25
+objectives:
+  - Replace every App ID 480 assumption and ship depots that exclude steam_appid.txt and debug folders
+  - Configure the restart check, lobby version key, Steam networking timeouts and relay access for release
+  - Build a test matrix that covers every way players join, leave and fail
+  - Design disconnect and crash UX so a player always knows what happened and what to do next
+prerequisites: [ngo-steam/dev-workflow, steam/steamworks-overview, steam/testing]
+tags: [ngo, steam, release, checklist, depots]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, vendored and patched as in lessons 2 and 8)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Steamworks docs: Steamworks API overview (steam_appid.txt, SteamAPI_RestartAppIfNecessary)'
+    url: https://partner.steamgames.com/doc/sdk/api
+  - title: 'Steamworks docs: Uploading to Steam (depots, FileExclusion, branches)'
+    url: https://partner.steamgames.com/doc/sdk/uploading
+  - title: 'Steamworks docs: Steam Datagram Relay'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+  - title: 'Steamworks docs: Matchmaking & Lobbies'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'Facepunch.Steamworks 2.5.2: SteamClient.cs (RestartAppIfNecessary, Init sets SteamAppId)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/SteamClient.cs
+  - title: 'Facepunch.Steamworks 2.5.2: SteamNetworkingUtils.cs (InitRelayNetworkAccess, Status, ConnectionTimeout, Timeout)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/SteamNetworkingUtils.cs
+  - title: 'FacepunchTransport.cs (steamAppId field, relay sockets)'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/blob/main/Transports/com.community.netcode.transport.facepunch/Runtime/FacepunchTransport.cs
+  - title: 'NGO 2.13 manual: Connection approval (ClientConnectionBufferTimeout)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/connection-approval.html
+  - title: 'Unity Scripting API: IPostprocessBuildWithReport'
+    url: https://docs.unity3d.com/ScriptReference/Build.IPostprocessBuildWithReport.html
+  - title: 'Unity Scripting API: Application.consoleLogPath'
+    url: https://docs.unity3d.com/ScriptReference/Application-consoleLogPath.html
+---
+
+Shipping a Unity game is mostly a build-settings checklist: the right scenes, the right icon, the right player
+settings. Shipping a Steam multiplayer game adds a second checklist, and its mistakes don't show up on your machine,
+because your machine has Steam open, a `steam_appid.txt` file lying around, the right build installed and a fast,
+stable connection. Players have none of those.
+
+This lesson is that second checklist. Every item points back to the lesson where the code lives, and every item exists
+because someone shipped without it.
+
+## The checklist
+
+<Steps>
+
+1. **Your own App ID, everywhere.** App ID 480 (<Term id="spacewar">Spacewar</Term>) was for prototyping. Set your App ID in `SteamBootstrap`
+   (lesson 2) **and** in the vendored FacepunchTransport's `steamAppId` field, which is only used if the transport initializes Steam itself
+   but shouldn't be a trap. Search the project for `480` before every release.
+2. **Depots that contain only the game.** Build each platform into its own depot through SteamPipe, and use `FileExclusion` in the depot build
+   script to keep out `*.pdb`, `steam_appid.txt` and Unity's `*_DoNotShip` and `*_ButDontShipItWithYourGame` folders. Upload to a beta branch
+   first. Valve's docs note that the default branch "can not be set live automatically", which is a useful last checkpoint.
+3. **No `steam_appid.txt` in the build.** Valve: "You should not ship this with your builds." It overrides the App ID Steam provides, and while it's
+   present, `RestartAppIfNecessary` returns `false` "regardless", which silently disables the next item.
+4. **The restart check on.** `SteamBootstrap` calls `SteamClient.RestartAppIfNecessary(appId)` before `Init` in player builds and quits if it returns
+   `true`. Valve calls this "optional but highly recommended", and says it should be the first Steamworks call you make. Skip it only if you use
+   Steam's DRM wrapper, which does the same check.
+5. **Version keys bumped together.** Every build that can't play with the previous one bumps `SessionKeys.BuildVersion` (the lobby `version`
+   key, checked before connecting) **and** `ProtocolVersion` (NGO's handshake) in the same commit (lessons 1 and 4).
+6. **Timeouts chosen, not inherited.** Steam's connect and connected timeouts, your auth timeout and NGO's `ClientConnectionBufferTimeout`
+   must fit together, and every wait has a visible cancel button (below).
+7. **Release logging.** NetworkManager Log Level *Normal*, Steam networking debug output at *Warning*, the patched transport logging its
+   `EndReason`, and an "Open log folder" button so players can send you a `Player.log` (lesson 8).
+8. **Relay access ready before the first session.** Call `SteamNetworkingUtils.InitRelayNetworkAccess()` at boot and check
+   `SteamNetworkingUtils.Status` before enabling Host and Join. Make sure no fake lag or loss setting survives into release (below).
+9. **A test matrix passed on the release build**, installed through Steam on two machines with two accounts, ideally on two different home
+   networks (below).
+10. **Crash and disconnect UX.** Every ending shows a reason, every wait can be cancelled, and Steam not running at launch produces a clear
+    message instead of a broken menu (below).
+
+</Steps>
+
+## Depots without dev files
+
+A depot build script that maps a Windows build folder and excludes everything a player shouldn't get:
+
+```text title="depot_build_1001.vdf"
+"DepotBuildConfig"
+{
+    "DepotID" "1001"
+    "FileMapping"
+    {
+        "LocalPath" "*"
+        "DepotPath" "."
+        "recursive" "1"
+    }
+    "FileExclusion" "*.pdb"
+    "FileExclusion" "steam_appid.txt"
+    "FileExclusion" "*_BurstDebugInformation_DoNotShip*"
+    "FileExclusion" "*_BackUpThisFolder_ButDontShipItWithYourGame*"
+}
+```
+
+Defence in depth is cheap here. A post-build step can remove a stray `steam_appid.txt` from non-development builds before anything uploads it:
+
+```csharp title="Editor/SteamReleaseGuard.cs"
+using System.IO;
+using UnityEditor;
+using UnityEditor.Build;
+using UnityEditor.Build.Reporting;
+using UnityEngine;
+
+namespace Campfire.Net.Editor
+{
+    /// <summary>Removes steam_appid.txt from release builds. Dev builds keep it (lesson 8).</summary>
+    public sealed class SteamReleaseGuard : IPostprocessBuildWithReport
+    {
+        public int callbackOrder => 0;
+
+        public void OnPostprocessBuild(BuildReport report)
+        {
+            if ((report.summary.options & BuildOptions.Development) != 0) return;
+
+            string folder = Path.GetDirectoryName(report.summary.outputPath);
+            string appIdFile = Path.Combine(folder ?? ".", "steam_appid.txt");
+            if (File.Exists(appIdFile))
+            {
+                File.Delete(appIdFile);
+                Debug.LogWarning($"[Release] Removed {appIdFile}. Release builds must be launched through Steam.");
+            }
+        }
+    }
+}
+```
+
+## Boot on a player's machine
+
+Here is what a correct release build does from double-click to the main menu, with the checklist items in place:
+
+<Sequence
+  title="First launch of a release build"
+  actors={[
+    { id: 'g', label: 'Game', kind: 'client' },
+    { id: 'sc', label: 'Steam client', kind: 'steam' },
+    { id: 'sdr', label: 'Steam Datagram Relay', kind: 'relay' },
+  ]}
+  steps={[
+    { from: 'g', to: 'sc', label: 'RestartAppIfNecessary(yourAppId)', note: 'false when launched by Steam: continue', kind: 'event' },
+    { from: 'g', to: 'sc', label: 'SteamClient.Init(yourAppId)', note: 'throws if Steam is not running: show a message', kind: 'event' },
+    { from: 'g', to: 'g', label: 'SessionTimeouts.Apply(), SteamNetLog.Install()', kind: 'local' },
+    { from: 'g', to: 'sdr', label: 'InitRelayNetworkAccess()', note: 'takes a few seconds; start it now, not at Host', kind: 'event' },
+    { from: 'sdr', to: 'g', label: 'Relay status: Current', kind: 'event' },
+    { from: 'g', to: 'g', label: 'Enable Host and Join; handle +connect_lobby (lesson 4)', kind: 'local' },
+  ]}
+/>
+
+What you should notice:
+
+- **The restart check runs before `Init`.** That's Valve's instruction, and it's what lesson 2's `SteamBootstrap` does.
+- **Relay access starts at boot.** Facepunch's documentation for `InitRelayNetworkAccess` says initialization is otherwise delayed "until the first
+  time you use a feature that requires access to the relay network", and that it "typically" completes in a few seconds. FacepunchTransport only calls
+  it once NGO is running, so without this, the first host or join of every launch pays that delay.
+- **Host and Join wait for a usable relay.** `SteamNetworkingUtils.Status` is the latest relay status Steam reported. `SteamNetworkingAvailability.Current`
+  means ready, and the negative values (`Failed`, `CannotTry`, `Previously`, `Retrying`) deserve a "Can't reach the Steam network" message.
+
+## Timeouts that fit together
+
+Four timers decide how long a player stares at a spinner:
+
+| Timer | Where | Covers |
+|---|---|---|
+| Steam initial connect timeout | `SteamNetworkingUtils.ConnectionTimeout` (ms) | `StartClient` to "relay connection established" |
+| NGO pending approval | `NetworkConfig.ClientConnectionBufferTimeout` (s, default 10) | Transport connected to approval decided |
+| Auth timeout | `SteamAuthApproval.authTimeoutSeconds` (8 s, lesson 6) | Waiting for `ValidateAuthTicketResponse` |
+| Steam connected timeout | `SteamNetworkingUtils.Timeout` (ms) | How long a silent peer counts as alive: crash detection |
+
+```csharp title="SessionTimeouts.cs"
+using Steamworks;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    public static class SessionTimeouts
+    {
+        public const int ConnectMs = 10_000;     // dialing the host through the relay
+        public const int ConnectedMs = 12_000;   // a crashed peer is noticed after this long
+
+        /// <summary>Global Steam networking config: call after SteamClient.Init, before any connection.</summary>
+        public static void Apply()
+        {
+            Debug.Log($"[Steam] Timeouts were connect {SteamNetworkingUtils.ConnectionTimeout} ms, " +
+                      $"connected {SteamNetworkingUtils.Timeout} ms");
+            SteamNetworkingUtils.ConnectionTimeout = ConnectMs;
+            SteamNetworkingUtils.Timeout = ConnectedMs;
+
+#if !DEVELOPMENT_BUILD && !UNITY_EDITOR
+            // Release: make sure no simulator setting from a test session survives.
+            SteamNetworkingUtils.FakeSendPacketLag = 0;
+            SteamNetworkingUtils.FakeRecvPacketLag = 0;
+            SteamNetworkingUtils.FakeSendPacketLoss = 0;
+            SteamNetworkingUtils.FakeRecvPacketLoss = 0;
+#endif
+        }
+    }
+}
+```
+
+The values are a trade-off you should choose deliberately. A shorter connected timeout notices a crashed host sooner, but drops players whose
+Wi-Fi hiccups. The worst-case "Connecting..." time is roughly the connect timeout plus the approval time, so a cancel button should appear well
+before that. These are global settings, so set them before `StartHost` or `StartClient` creates a connection.
+
+## The test matrix
+
+Run it on the release build, installed through Steam on a beta branch, with two accounts on two machines. Each row is a path from an earlier lesson
+that the editor loop can't exercise:
+
+| # | Scenario | Expected result | Lesson |
+|---|---|---|---|
+| 1 | Host, friend joins from the in-game browser | Both in gameplay, names and avatars correct | 3, 4, 5 |
+| 2 | Friend joins with **Join Game** while the game is running | Same as 1 | 4 |
+| 3 | Friend accepts an invite with the game **closed** | Game launches, joins without a menu click | 4 |
+| 4 | Client quits, then rejoins | Host despawns and re-spawns the player, the auth session is ended and restarted | 6, 7 |
+| 5 | Client process killed | Host removes the player within the connected timeout | 7 |
+| 6 | Host quits | Clients see "Disconnected due to host shutting down." and reach the menu | 7 |
+| 7 | Host process killed | Clients see "The host left the game." (lobby event) or a timeout message | 7 |
+| 8 | Older build joins a newer host | Clear version-mismatch message, no connection attempt | 1, 4 |
+| 9 | Lobby full, or same account twice | Denied with a reason | 6 |
+| 10 | Steam offline mode, or Steam not running | Clear message at boot, no exceptions | 2 |
+| 11 | Two different home networks, 200 ms fake lag on one side | Playable; RTT display shows a sensible number | 2, 8 |
+| 12 | Every OS you ship | Rows 1, 3 and 6 pass on each | 2 |
+
+Keep the matrix in your repository and record the build number each time it passes.
+
+## Crash and disconnect UX
+
+A player who lands back on the main menu with no explanation assumes your game is broken. Lesson 7 gave every ending a reason. Now make sure the
+player sees it and has a next step:
+
+| Situation | Show | Offer |
+|---|---|---|
+| Connecting for longer than a few seconds | "Connecting to Alex..." with elapsed time | Cancel (calls `EndSession`) |
+| Approval denied | The host's `Reason` | OK |
+| Host shut down | "The host ended the session." | Back to menu |
+| Host vanished | "The host left the game." | Back to menu, Rejoin if you rehost (lesson 7) |
+| Client connection lost | "Lost connection to the host." | Rejoin (`JoinGame(lobbyId)`), menu |
+| Version mismatch | "Host has 0.5.0, you have 0.4.0. Update through Steam." | OK |
+| Steam not running | "Steam must be running to play online." | Quit, or continue offline if you support it |
+
+```csharp title="SessionEndDialog.cs"
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    /// <summary>Shows lesson 7's teardown reason. Put it on your menu canvas.</summary>
+    public sealed class SessionEndDialog : MonoBehaviour
+    {
+        [SerializeField] private GameObject panel;
+        [SerializeField] private TMPro.TMP_Text message;
+
+        private void OnEnable() => NetworkLauncher.SessionEnded += Show;
+        private void OnDisable() => NetworkLauncher.SessionEnded -= Show;
+
+        private void Show(string reason)
+        {
+            if (string.IsNullOrEmpty(reason)) return;   // a normal "I left" needs no dialog
+            message.text = reason;
+            panel.SetActive(true);
+        }
+
+        /// <summary>Hook to an "Open log folder" button: Player.log is what you need in bug reports.</summary>
+        public void OpenLogFolder() =>
+            Application.OpenURL("file://" + System.IO.Path.GetDirectoryName(Application.consoleLogPath));
+    }
+}
+```
+
+`Application.consoleLogPath` is the path of the current player log, so the button opens the right folder on every platform.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Testing the release build only from the build folder">
+
+Running the exe from your build folder is the one launch players never do. With a `steam_appid.txt` there, the restart check is skipped; without
+one, Steam relaunches whatever version is installed. Install the release candidate through Steam (a beta branch) and launch it from the library,
+or with a `steam://run/<appid>` link, for the final test pass.
+
+</Callout>
+
+<Callout type="pitfall" title="Shipping the transport from a moving git URL">
+
+A package installed from `...multiplayer-community-contributions.git?path=...` without a commit hash resolves to whatever `main` is on the day you
+reimport. This module embedded and patched the transport in lesson 2, so it's in your repository. If you didn't, pin the git URL to a commit.
+
+</Callout>
+
+<Callout type="steam" title="SDR needs no switch, but your game does">
+
+Valve's Steam Datagram Relay page says that on Steam "all you need to do to take advantage of SDR" is use the listen and connect APIs, and "Steam will
+take care of everything else". There's no relay setting to enable in the partner site for this module's peer-to-peer relay sockets. What you **do**
+control is when relay access starts, what the UI does while it isn't ready, and the timeouts above.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Replace App ID 480 everywhere, including the transport's own field, and ship per-platform **depots** that exclude `steam_appid.txt`, `.pdb` files and Unity's DoNotShip folders.
+- Keep `RestartAppIfNecessary` on in release, and never ship `steam_appid.txt`, which disables that check.
+- Bump the lobby `version` key and NGO `ProtocolVersion` together, and choose Steam's connect and connected timeouts so they fit your auth and approval timeouts.
+- Start relay access at boot, gate Host and Join on `SteamNetworkingUtils.Status`, keep release logging on, and clear any fake lag settings.
+- Pass a written **test matrix** on the Steam-installed release build, and give every ending a visible reason and a next step.
+
+</KeyTakeaways>
