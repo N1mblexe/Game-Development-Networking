@@ -250,8 +250,8 @@ questions:
   - id: client-lead
     type: numeric
     prompt: >-
-      A client has 80 ms RTT, and the server keeps a 2-tick input buffer at 30 Hz. Roughly how far ahead of the server, in milliseconds,
-      should the client simulate so that its inputs arrive just in time?
+      A client has 80 ms RTT on a symmetric path (so the one-way trip is half the RTT), and the server keeps a 2-tick input buffer at
+      30 Hz. Roughly how far ahead of the server, in milliseconds, should the client simulate so that its inputs arrive just in time?
     answer: 107
     tolerance: 4
     unit: ms
