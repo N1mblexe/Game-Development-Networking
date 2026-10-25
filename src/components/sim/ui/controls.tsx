@@ -227,11 +227,13 @@ export function StatGrid({ stats, compact, playing, label = 'Live statistics' }:
     return () => clearInterval(id);
   }, [playing, playing ? null : summary]);
   return (
-    <div>
-      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" aria-label={label}>
+    // Columns follow the sim's own width (container queries), not the viewport: a sim in the lesson column
+    // is much narrower than the window. Labels wrap rather than truncate, so none of them lose meaning.
+    <div className="@container">
+      <dl className="grid grid-cols-2 gap-2 @md:grid-cols-3 @4xl:grid-cols-6" aria-label={label}>
         {shown.map((s) => (
-          <div key={s.label} className="min-w-0 rounded-lg bg-surface-2 px-2.5 py-1.5">
-            <dt className="truncate text-[0.7rem] font-medium uppercase tracking-wide text-muted">{s.label}</dt>
+          <div key={s.label} className="flex min-w-0 flex-col justify-between rounded-lg bg-surface-2 px-2.5 py-1.5">
+            <dt className="text-[0.7rem] leading-tight font-medium uppercase tracking-wide text-muted [overflow-wrap:anywhere]">{s.label}</dt>
             <dd className={`truncate font-mono text-sm font-semibold tabular-nums ${s.tone ? toneClass[s.tone] : ''}`}>{s.value}</dd>
           </div>
         ))}
