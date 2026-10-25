@@ -598,8 +598,8 @@ terms:
     short: Simulating with predicted remote inputs and, when the real input differs, restoring a saved state and resimulating up to the present.
     long: >-
       Popularized by Tony Cannon's GGPO and used by most modern fighting games. Usually combined with a small, fixed input
-      delay of a few frames (3 in Killer Instinct and Injustice 2), which reduces how far it has to roll back. State must be small and cheap to copy, because it is saved every frame
-      and may be resimulated many frames at once.
+      delay of a few frames (3 in Killer Instinct and Injustice 2), which reduces how far it has to roll back. State must be
+      small and cheap to copy, because it is saved every frame and may be resimulated many frames at once.
     lesson: theory/lockstep-rollback
     seeAlso: [lockstep, determinism, client-side-prediction]
   - id: determinism
