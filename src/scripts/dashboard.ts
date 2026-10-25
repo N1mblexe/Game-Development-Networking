@@ -86,7 +86,7 @@ function renderContinue(p: Progress, d: DashboardData) {
   if (!next) {
     if (eyebrow) eyebrow.textContent = 'All lessons complete';
     if (title) title.textContent = 'You finished every lesson. Nice work.';
-    if (meta) meta.textContent = `${done} lessons done`;
+    if (meta) meta.textContent = `${done} ${done === 1 ? 'lesson' : 'lessons'} done`;
     if (summary) summary.textContent = 'Keep it fresh with spaced-repetition review, and pass each module exam for a certificate.';
     if (link) link.href = d.reviewUrl;
     if (label) label.textContent = 'Review flashcards';
