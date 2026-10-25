@@ -142,7 +142,7 @@ cards:
 - id: pi-name-source
   lesson: ngo-steam/player-identity
   front: Where does the host get a player's display name?
-  back: From `new Friend(steamId).Name`; members of the same lobby are known to each other.
+  back: From `new Friend(steamId).Name`. Lobby members become known to each other, but the name can arrive asynchronously, so fall back to a placeholder and refresh with `RequestInfoAsync()`.
 - id: pi-late-join
   lesson: ngo-steam/player-identity
   front: How should clients read identity values?
