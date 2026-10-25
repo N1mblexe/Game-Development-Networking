@@ -261,7 +261,7 @@ export default function BandwidthCalculator(props: BandwidthCalculatorProps) {
       </ControlGrid>
 
       {!compact && (
-        <div className="overflow-x-auto rounded-lg border border-border">
+        <div className="relative overflow-x-auto rounded-lg border border-border">
           <table className="w-full min-w-[420px] text-left text-sm">
             <caption className="sr-only">Fields replicated per entity, with their sizes in bits</caption>
             <thead className="bg-surface-2 text-xs text-muted">
@@ -350,11 +350,12 @@ function drawChart(ctx: CanvasRenderingContext2D, w: number, h: number, p: Palet
 
   text(ctx, p, `Download per client at ${cfg.sendRateHz} Hz`, pad, 11, { size: 11, weight: 700 });
   // grid
-  for (let k = 0; k <= 4; k++) {
-    const v = (maxK * k) / 4;
+  const ticks = narrow ? 2 : 4;
+  for (let k = 0; k <= ticks; k++) {
+    const v = (maxK * k) / ticks;
     const x = X(v);
     line(ctx, x, top - 4, x, top + rowH * 4 - 6, alpha(p.border, 0.9));
-    text(ctx, p, k === 0 ? '0' : fmtKbps(v), x, h - 9, { align: k === 0 ? 'left' : k === 4 ? 'right' : 'center', size: 9, mono: true, color: p.muted });
+    text(ctx, p, k === 0 ? '0' : fmtKbps(v), x, h - 9, { align: k === 0 ? 'left' : 'center', size: 9, mono: true, color: p.muted });
   }
 
   variants.forEach((v, i) => {
