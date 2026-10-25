@@ -52,15 +52,15 @@ from code that isn't on a NetworkObject at all. It's the practical side of
 
 The memcpy option copies the struct's memory directly. It's fast, but it also sends any alignment padding and can't
 contain pointers or native collections (the docs warn about memory corruption). Use it only for small structs you
-fully control. For a type you can't edit, `ForceNetworkSerializeByMemcpy<T>` wraps it with the same caveats.
+fully control. For a type you can't edit, the generic `ForceNetworkSerializeByMemcpy` wrapper does the same, with the same caveats.
 
 For external types, RPCs pick up your `WriteValueSafe`/`ReadValueSafe` extension methods directly. NetworkVariables
-also need the delegates in `UserNetworkVariableSerialization<T>` (`WriteValue`, `ReadValue` and `DuplicateValue`, the
+also need the delegates on the generic `UserNetworkVariableSerialization` class for your type (`WriteValue`, `ReadValue` and `DuplicateValue`, the
 last returning a deep copy), and they must be assigned before any such variable is serialized.
 
 ## INetworkSerializable: one method, both directions
 
-`INetworkSerializable` has a single method, `NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter`.
+`INetworkSerializable` has a single generic method, `NetworkSerialize`, which receives a `BufferSerializer` (the signature is in the code below).
 The same code runs when **writing** on the sender and when **reading** on the receiver: `SerializeValue(ref field)`
 writes the field in one case and overwrites it in the other. Because there's one code path, write and read order can't
 drift apart, which is the most common bug in hand-written serializers.
