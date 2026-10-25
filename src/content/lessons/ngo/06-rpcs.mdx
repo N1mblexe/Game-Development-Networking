@@ -32,6 +32,8 @@ sources:
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.RpcTarget.html
   - title: 'NGO source v2.13.3: ProxyMessage.cs (server-side forwarding of client-to-client RPCs)'
     url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Messaging/Messages/ProxyMessage.cs
+  - title: 'NGO source v2.13.3: RpcAttributes.cs (InvokePermission default Everyone, RequireOwnership obsolete)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Messaging/RpcAttributes.cs
   - title: 'NGO 2.13 changelog (2.7.0: RpcInvokePermission, RequireOwnership deprecated)'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/changelog/CHANGELOG.html
 ---
@@ -324,7 +326,8 @@ void PlayMuzzleFlashClientRpc() { m_MuzzleFlash.Play(); }
 When you migrate:
 
 - `[ServerRpc]` (which requires ownership by default) becomes `[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]`.
-- `[ServerRpc(RequireOwnership = false)]` becomes plain `[Rpc(SendTo.Server)]`.
+- `[ServerRpc(RequireOwnership = false)]` becomes plain `[Rpc(SendTo.Server)]`, because `InvokePermission` defaults to
+  `Everyone`. Setting `RequireOwnership` at all compiles with an obsolete warning in 2.13.
 - `[ClientRpc]` becomes `[Rpc(SendTo.ClientsAndHost)]`.
 - Targeting one client with `ClientRpcParams` and a `TargetClientIds` array becomes `SendTo.SpecifiedInParams` with
   `RpcTarget.Single`. That also avoids allocating a new array for every send.
