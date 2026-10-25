@@ -27,6 +27,8 @@ sources:
     url: https://partner.steamgames.com/doc/features/auth
   - title: 'Steamworks docs: Steam Datagram Relay'
     url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+  - title: 'Steamworks docs: ISteamNetworkingSockets (default encryption)'
+    url: https://partner.steamgames.com/doc/api/ISteamNetworkingSockets
 ---
 
 Every copy of your game that ships is running on a machine you don't control. The player can attach a debugger, edit memory with
@@ -136,7 +138,7 @@ checks, but it is the only reliable defence against information cheats.
 Below gameplay, the connection itself needs protection.
 
 - **Authenticate connections.** Before a client can send gameplay messages, it must prove who it is, for example with a platform session ticket (Steam's auth tickets) or a short-lived token from your backend. This is also where you enforce bans.
-- **Encrypt traffic.** Encryption (<Term id="dtls">DTLS</Term> for UDP) stops packet sniffing and tampering on shared networks, and makes it harder to write proxy cheats. Steam Networking Sockets and Unity Relay connections can be encrypted, and Unity Transport supports DTLS secure connections.
+- **Encrypt traffic.** Encryption (<Term id="dtls">DTLS</Term> for UDP) stops packet sniffing and tampering on shared networks, and makes it harder to write proxy cheats. Steam Networking Sockets encrypts every connection by default, Unity Relay connections can be encrypted, and Unity Transport supports DTLS secure connections.
 - **Reject <Term id="replay-attack">replays</Term> and duplicates.** An attacker who captures a valid "buy item" packet shouldn't be able to send it again. Sequence numbers (lesson 10), and an encrypted channel that includes them, prevent that.
 - **Parse defensively.** Every length prefix is a lie until checked. Cap array sizes and string lengths before allocating, and treat a failed read as a reason to drop the packet or the connection, not as an exception that kills the server. Never use `BinaryFormatter` or any serializer that creates arbitrary types from network data.
 - **Hide addresses and absorb floods.** In P2P and listen-server games, a player's IP address is a target. Relays such as Steam Datagram Relay hide IP addresses and rate-limit traffic, and dedicated-server hosts provide <Term id="ddos">DDoS</Term> mitigation.
