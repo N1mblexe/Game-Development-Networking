@@ -1,0 +1,358 @@
+---
+title: Custom Serialization and Messages
+order: 9
+summary: Send your own types with INetworkSerializable, write and read raw bytes with FastBufferWriter and FastBufferReader, sync collections with NetworkList, and use custom named messages where RPCs don't fit.
+durationMin: 30
+objectives:
+  - Choose how a type is serialized - built in, INetworkSerializable, memcpy, or extension methods
+  - Write an INetworkSerializable struct with conditional fields and use it in RPCs, NetworkVariables and NetworkLists
+  - Write and read buffers safely with FastBufferWriter and FastBufferReader, including disposal and bounds
+  - Send and receive custom named messages, and decide when they beat RPCs
+prerequisites: [ngo/network-variables, ngo/rpcs, ngo/connection-and-scenes, theory/reliability-serialization]
+tags: [ngo, serialization, messaging, bandwidth]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: INetworkSerializable'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/serialization/inetworkserializable.html
+  - title: 'NGO 2.13 manual: INetworkSerializeByMemcpy'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/serialization/inetworkserializebymemcpy.html
+  - title: 'NGO 2.13 manual: Custom serialization'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/custom-serialization.html
+  - title: 'NGO 2.13 manual: FastBufferWriter and FastBufferReader'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/fastbufferwriter-fastbufferreader.html
+  - title: 'NGO 2.13 manual: Custom messages'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/message-system/custom-messages.html
+  - title: 'NGO 2.13 API: CustomMessagingManager'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.CustomMessagingManager.html
+  - title: 'NGO source v2.13.3: CustomMessageManager.cs (size checks, host delivery), NetworkVariable.cs (equality check)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/tree/v2.13.3/com.unity.netcode.gameobjects/Runtime
+---
+
+Every RPC argument and every NetworkVariable value ends up as bytes in a packet. For `int` and `Vector3`, NGO knows how
+to write those bytes. For your own types it needs instructions, and you already wrote one set: lesson 5's `ScoreEntry`
+implemented `INetworkSerializable`. This lesson covers the rest of the toolbox. You'll learn how NGO picks a serializer,
+how to write compact custom types, how to handle raw buffers, and how to send a <Term id="custom-messaging">custom message</Term>
+from code that isn't on a NetworkObject at all. It's the practical side of
+[reliability and serialization](../../theory/reliability-serialization/) from theory.
+
+## How NGO serializes a type
+
+| Kind of type | What you do | Example |
+|---|---|---|
+| Primitives, enums, Unity math types | Nothing | `int`, `float`, `Vector3`, `Quaternion`, `Color` |
+| Fixed strings | Nothing | `FixedString32Bytes` |
+| Arrays of the above | Nothing (RPCs) | `int[]`, `Vector3[]` |
+| References to network objects | Use the reference structs | `NetworkObjectReference`, `NetworkBehaviourReference` |
+| Your own struct or class | Implement <Term id="inetworkserializable">`INetworkSerializable`</Term> | `PlayerLoadout` below |
+| A plain unmanaged struct with no pointers | Mark it `INetworkSerializeByMemcpy` | A packed input struct |
+| A type you can't modify | Write `FastBufferWriter` / `FastBufferReader` extension methods | A third-party `Health` struct |
+
+The memcpy option copies the struct's memory directly. It's fast, but it also sends any alignment padding and can't
+contain pointers or native collections (the docs warn about memory corruption). Use it only for small structs you
+fully control. For a type you can't edit, `ForceNetworkSerializeByMemcpy<T>` wraps it with the same caveats.
+
+For external types, RPCs pick up your `WriteValueSafe`/`ReadValueSafe` extension methods directly. NetworkVariables
+also need the delegates in `UserNetworkVariableSerialization<T>` (`WriteValue`, `ReadValue` and `DuplicateValue`, the
+last returning a deep copy), and they must be assigned before any such variable is serialized.
+
+## INetworkSerializable: one method, both directions
+
+`INetworkSerializable` has a single method, `NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter`.
+The same code runs when **writing** on the sender and when **reading** on the receiver: `SerializeValue(ref field)`
+writes the field in one case and overwrites it in the other. Because there's one code path, write and read order can't
+drift apart, which is the most common bug in hand-written serializers.
+
+The arena gets loadouts. A player picks a weapon and a color and may have one optional perk:
+
+```csharp title="PlayerLoadout.cs"
+using System;
+using Unity.Netcode;
+
+public enum WeaponKind : byte { Blaster, Shotgun, Rail }
+
+public struct PlayerLoadout : INetworkSerializable, IEquatable<PlayerLoadout>
+{
+    public WeaponKind Weapon;
+    public byte ColorIndex;
+    public bool HasPerk;
+    public ushort PerkId; // only meaningful when HasPerk is true
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref Weapon);
+        serializer.SerializeValue(ref ColorIndex);
+        serializer.SerializeValue(ref HasPerk);
+
+        // Conditional field: written only when the flag says so. On the reading side, HasPerk has
+        // already been read at this point, so both sides take the same branch.
+        if (HasPerk) serializer.SerializeValue(ref PerkId);
+        else if (serializer.IsReader) PerkId = 0;
+    }
+
+    public bool Equals(PlayerLoadout other) =>
+        Weapon == other.Weapon && ColorIndex == other.ColorIndex &&
+        HasPerk == other.HasPerk && PerkId == other.PerkId;
+}
+```
+
+A loadout without a perk is 3 bytes, and with a perk it's 5. A `string` describing the same data would easily be 30.
+
+Now use it everywhere a built-in type works. The server owns the gameplay truth, so the client **requests** a loadout
+and the server validates it:
+
+```csharp title="PlayerLoadoutState.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+/// On PlayerAvatar.
+public class PlayerLoadoutState : NetworkBehaviour
+{
+    // Server writes, everyone reads, including late joiners.
+    public NetworkVariable<PlayerLoadout> Loadout = new NetworkVariable<PlayerLoadout>();
+
+    [SerializeField] ushort[] m_AllowedPerks = { 1, 2, 3 };
+
+    public override void OnNetworkSpawn()
+    {
+        if (IsOwner)
+        {
+            var chosen = new PlayerLoadout { Weapon = WeaponKind.Shotgun, ColorIndex = 2, HasPerk = true, PerkId = 2 };
+            RequestLoadoutRpc(chosen);
+        }
+        base.OnNetworkSpawn();
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+    void RequestLoadoutRpc(PlayerLoadout requested)
+    {
+        // Deserialized data is just data: check every field.
+        if (!System.Enum.IsDefined(typeof(WeaponKind), requested.Weapon)) return;
+        if (requested.ColorIndex > 3) return;
+        if (requested.HasPerk && System.Array.IndexOf(m_AllowedPerks, requested.PerkId) < 0) return;
+
+        Loadout.Value = requested; // equal values are ignored: no change, nothing sent
+    }
+}
+```
+
+`IEquatable` matters here. When you set `.Value`, NGO compares the new value with the old one and only marks the variable
+dirty if they differ. With `IEquatable`, it uses your `Equals`. Without it, an unmanaged struct is compared byte by
+byte. <Term id="network-list">NetworkList</Term> elements must implement `IEquatable` too, and lesson 5's rule still
+applies: create the list in `Awake`.
+
+<Callout type="pitfall" title="Inheritance and nested classes">
+
+Inheriting from a type that implements `INetworkSerializable` isn't supported. Each serializable type implements the
+interface itself. If a serializable **class** contains another serializable class, the nested field is `null` on the
+reading side unless you create it before calling its `NetworkSerialize` (check `serializer.IsReader`) or in a default
+constructor. Prefer structs, which avoid both problems and don't allocate.
+
+</Callout>
+
+## FastBufferWriter and FastBufferReader
+
+Underneath `BufferSerializer`, NGO uses `FastBufferWriter` and `FastBufferReader`. You use them directly for custom
+messages, for extension methods, and for bit packing. They wrap **native memory**, which brings three rules:
+
+1. **Always dispose them**, ideally with `using`. Temp allocations aren't garbage collected, so a forgotten writer leaks.
+2. **Mind the capacity.** `new FastBufferWriter(size, allocator, maxSize)` can only grow up to `maxSize`. Without a larger
+   `maxSize`, it can't grow at all.
+3. **Pick safe or fast methods.** `WriteValueSafe`/`ReadValueSafe` check bounds and throw `OverflowException`. The plain
+   `WriteValue`/`ReadValue` don't check, so you reserve space first with `TryBeginWrite(bytes)` or `TryBeginRead(bytes)`.
+   In a release build, going past the end without a check is undefined behavior.
+
+```csharp title="BufferBasics.cs"
+using Unity.Collections;
+using Unity.Netcode;
+using UnityEngine;
+
+public static class BufferBasics
+{
+    public static void RoundTrip()
+    {
+        using var writer = new FastBufferWriter(64, Allocator.Temp, 1024);
+        writer.WriteValueSafe(42);                     // int
+        writer.WriteValueSafe(new Vector3(1f, 0f, 2f)); // Unity math type
+        writer.WriteValueSafe("Ahmet", oneByteChars: true); // ASCII-only names: 1 byte per char
+
+        // Variable-length integers: small numbers take fewer bytes.
+        BytePacker.WriteValueBitPacked(writer, (ushort)17);
+
+        using var reader = new FastBufferReader(writer, Allocator.Temp);
+        reader.ReadValueSafe(out int answer);
+        reader.ReadValueSafe(out Vector3 position);
+        reader.ReadValueSafe(out string name, oneByteChars: true);
+        ByteUnpacker.ReadValueBitPacked(reader, out ushort kills);
+
+        Debug.Log($"{answer} {position} {name} {kills}, {writer.Length} bytes");
+    }
+}
+```
+
+Read in exactly the order you wrote. A buffer has no field names: if you swap two reads, you get garbage, not an error.
+`BytePacker.WriteValueBitPacked` is a [quantization](../../theory/reliability-serialization/)-style saving for integers
+that are usually small. It reserves a few bits for the length, so the range shrinks (a bit-packed `ushort` only holds
+0 to 32,767).
+
+## Custom named messages
+
+RPCs need a `NetworkBehaviour` on a spawned NetworkObject. Lesson 8's `MatchFlow` is a plain `MonoBehaviour` on the
+NetworkManager, because it must work before anything is spawned and across scene loads, so it can't declare RPCs. That's
+the job of custom named messages, which go through `NetworkManager.CustomMessagingManager` and aren't tied to any object.
+
+- Register a handler with `RegisterNamedMessageHandler(name, handler)`. The name is hashed, and the handler receives
+  `(ulong senderClientId, FastBufferReader messagePayload)`.
+- Send with `SendNamedMessage(name, clientId, writer)`, `SendNamedMessage(name, clientIds, writer)` or, on the server,
+  `SendNamedMessageToAll(name, writer)`. An optional `NetworkDelivery` defaults to `ReliableSequenced`.
+- Clients can only send to the server. A host receives its own `SendNamedMessageToAll`, so host code doesn't need a special case.
+
+The match announcer sends a countdown and the final results to everyone:
+
+```csharp title="MatchAnnouncer.cs"
+using Unity.Collections;
+using Unity.Netcode;
+using UnityEngine;
+
+/// On the NetworkManager GameObject in Bootstrap, next to MatchFlow.
+public class MatchAnnouncer : MonoBehaviour
+{
+    const string k_Message = "Arena.Announce";
+    enum Kind : byte { Countdown, Results }
+
+    NetworkManager m_NetworkManager;
+    string m_Banner = "";
+
+    void Awake()
+    {
+        m_NetworkManager = GetComponent<NetworkManager>();
+        // CustomMessagingManager exists only while running, so register when we start.
+        m_NetworkManager.OnClientStarted += Register;
+        m_NetworkManager.OnServerStarted += RegisterServerOnly;
+    }
+
+    void OnDestroy()
+    {
+        if (m_NetworkManager == null) return;
+        m_NetworkManager.OnClientStarted -= Register;
+        m_NetworkManager.OnServerStarted -= RegisterServerOnly;
+    }
+
+    void RegisterServerOnly() { if (!m_NetworkManager.IsClient) Register(); }
+
+    void Register() =>
+        m_NetworkManager.CustomMessagingManager.RegisterNamedMessageHandler(k_Message, OnAnnouncement);
+
+    // ---- Server API ----
+
+    public void SendCountdown(byte secondsLeft)
+    {
+        using var writer = new FastBufferWriter(8, Allocator.Temp);
+        writer.WriteValueSafe(Kind.Countdown);
+        writer.WriteValueSafe(secondsLeft);
+        m_NetworkManager.CustomMessagingManager.SendNamedMessageToAll(k_Message, writer);
+    }
+
+    public void SendResults(ScoreEntry[] ranking)
+    {
+        // Results can be large: allow growth and use fragmented delivery above the ~1300-byte packet budget.
+        using var writer = new FastBufferWriter(256, Allocator.Temp, 64 * 1024);
+        writer.WriteValueSafe(Kind.Results);
+        writer.WriteValueSafe(ranking); // INetworkSerializable arrays are supported
+        m_NetworkManager.CustomMessagingManager.SendNamedMessageToAll(
+            k_Message, writer, NetworkDelivery.ReliableFragmentedSequenced);
+    }
+
+    // ---- Receive (every client, and the host) ----
+
+    void OnAnnouncement(ulong senderClientId, FastBufferReader reader)
+    {
+        // Only the server may announce. Ignore anything a client sends to this name.
+        if (senderClientId != NetworkManager.ServerClientId) return;
+
+        reader.ReadValueSafe(out Kind kind);
+        if (kind == Kind.Countdown)
+        {
+            reader.ReadValueSafe(out byte secondsLeft);
+            m_Banner = secondsLeft > 0 ? $"Match starts in {secondsLeft}" : "Fight!";
+        }
+        else if (kind == Kind.Results)
+        {
+            reader.ReadValueSafe(out ScoreEntry[] ranking);
+            m_Banner = ranking.Length > 0 ? $"Winner: {ranking[0].Name} ({ranking[0].Kills} kills)" : "No winner";
+        }
+    }
+
+    void OnGUI()
+    {
+        if (!string.IsNullOrEmpty(m_Banner))
+            GUI.Label(new Rect(Screen.width / 2f - 150f, 20f, 300f, 30f), m_Banner);
+    }
+}
+```
+
+Two details deserve a second look. The size check: in development builds NGO throws an `OverflowException` if a message
+is larger than the unfragmented limit (about 1,300 bytes minus headers) and the delivery isn't
+`ReliableFragmentedSequenced`. And the sender check: named messages have no invoke permission, so a modified client
+could send `Arena.Announce` to the server. The handler drops anything that didn't come from the server.
+
+<Sequence
+  title="A named message from the server's MatchAnnouncer"
+  actors={[
+    { id: 's', label: 'Host (server + client 0)', kind: 'host' },
+    { id: 'c', label: 'Client 1', kind: 'client' },
+  ]}
+  steps={[
+    { from: 's', to: 's', label: 'FastBufferWriter: Kind.Countdown, 3', kind: 'local' },
+    { from: 's', to: 's', label: 'SendNamedMessageToAll: hash("Arena.Announce")', note: 'The host is in ConnectedClientsIds, so its own handler runs immediately.', kind: 'event' },
+    { from: 's', to: 'c', label: 'NamedMessage: hash + payload bytes', note: 'ReliableSequenced by default.', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'Handler(senderClientId 0, reader)', note: 'Read Kind, then the seconds, in the same order they were written.', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- The message carries a **hash of the name**, not the string, so long descriptive names cost nothing extra.
+- Nothing routes it to an object: the handler is global for that name, and each name has exactly one handler.
+- **Unnamed messages** (`SendUnnamedMessage`, `OnUnnamedMessage`) are the same idea with a single global handler, where
+  you write your own type byte first. Named messages are easier to keep apart, so prefer them.
+
+## RPCs or custom messages?
+
+| | RPC | Custom named message |
+|---|---|---|
+| Needs a spawned NetworkObject | Yes | No |
+| Serialization | Generated from the method signature | You write and read the bytes |
+| Who may invoke | `InvokePermission`, ownership | Your handler checks `senderClientId` |
+| Targets | `SendTo` and `RpcTarget` | Client id lists. Clients can only send to the server |
+| Best for | Gameplay on an object | Session-level traffic: announcements, bootstrap data, custom protocols |
+
+<Callout type="pitfall" title="Write and read out of step">
+
+If a sender writes `Kind`, then `secondsLeft`, and the receiver reads `secondsLeft` first, nothing throws. You just get
+the wrong values, or an `OverflowException` several reads later. With conditional fields in hand-written buffers, both
+sides must take exactly the same branches. That's the strongest argument for `INetworkSerializable`: one method keeps
+both directions in step.
+
+</Callout>
+
+<Callout type="pitfall" title="Registering too early, or twice">
+
+`NetworkManager.CustomMessagingManager` is `null` before the NetworkManager starts, just like `SceneManager`. Register
+in `OnServerStarted`/`OnClientStarted` or in `OnNetworkSpawn`, and unregister with `UnregisterNamedMessageHandler(name)`
+in `OnNetworkDespawn` when the handler lives on an object. A host is both server and client: the code above registers
+once on `OnClientStarted`, and only a dedicated server registers from `OnServerStarted`.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Built-in types, fixed strings and network references serialize automatically. For your own types, implement `INetworkSerializable`.
+- `NetworkSerialize` runs in both directions, which keeps reads and writes in step. Use flags for conditional fields, and implement `IEquatable` for change detection and NetworkList elements.
+- `FastBufferWriter`/`FastBufferReader` wrap native memory: dispose them, size them, and use the `Safe` methods unless you reserve space first.
+- Custom named messages carry session-level data without a NetworkObject. Validate `senderClientId`, and use fragmented delivery above about 1,300 bytes.
+- Validate every deserialized value on the server, whether it arrived as an RPC argument or a custom message.
+
+</KeyTakeaways>

@@ -1,0 +1,75 @@
+passPct: 70
+questions:
+  - id: conditional-read
+    type: codeline
+    prompt: Loadouts without a perk arrive with a garbage PerkId on clients, and the next field reads wrong. Click the buggy line.
+    code: |-
+      public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+      {
+          serializer.SerializeValue(ref Weapon);
+          serializer.SerializeValue(ref HasPerk);
+          if (HasPerk || serializer.IsReader) serializer.SerializeValue(ref PerkId);
+          serializer.SerializeValue(ref ColorIndex);
+      }
+    answerLines: [5]
+    explanation: >-
+      The writer skips `PerkId` when there's no perk, but the reader always reads it, so it consumes the bytes of
+      `ColorIndex` and everything after is shifted. Both sides must take the same branch: `if (HasPerk)`.
+  - id: dispose-writer
+    type: codeline
+    prompt: After a few minutes, Unity reports leaked temporary native allocations. Click the line to fix.
+    code: |-
+      public void SendCountdown(byte secondsLeft)
+      {
+          var writer = new FastBufferWriter(8, Allocator.Temp);
+          writer.WriteValueSafe(secondsLeft);
+          NetworkManager.Singleton.CustomMessagingManager
+              .SendNamedMessageToAll("Arena.Countdown", writer);
+      }
+    answerLines: [3]
+    explanation: >-
+      `FastBufferWriter` wraps native memory that the garbage collector never frees. Declare it with `using var writer = ...`
+      (or call `Dispose()`), so it's released when the method ends.
+  - id: which-serializer
+    type: single
+    prompt: You want to send a third-party struct you can't modify in RPCs only. What's the recommended approach?
+    options:
+      - Implement INetworkSerializable on it
+      - Write WriteValueSafe and ReadValueSafe extension methods for FastBufferWriter and FastBufferReader
+      - Convert it to a JSON string for every call
+      - Register it in the Network Prefabs List
+    answer: 1
+    explanation: >-
+      You can't add an interface to a type you don't own. RPC code generation uses `FastBufferWriter`/`FastBufferReader`
+      extension methods directly. NetworkVariables would also need the `UserNetworkVariableSerialization` delegates.
+  - id: named-vs-rpc
+    type: multi
+    prompt: When is a custom named message a better fit than an RPC? Select all that apply.
+    options:
+      - The sending code is a MonoBehaviour on the NetworkManager, with no spawned NetworkObject
+      - You want NGO to enforce owner-only invocation for you
+      - You need to send session-level data such as a match countdown that isn't about any object
+      - You want serialization generated from the method signature
+    answers: [0, 2]
+    explanation: >-
+      Named messages don't need a NetworkObject, which suits session-level traffic. RPCs give you generated serialization
+      and invoke permissions. With a named message you write the bytes yourself and check `senderClientId` yourself.
+  - id: big-message
+    type: truefalse
+    prompt: In a development build, sending a 5 KB named message with the default ReliableSequenced delivery throws, and ReliableFragmentedSequenced fixes it.
+    answer: true
+    explanation: >-
+      NGO checks custom message sizes against the unfragmented limit (about 1,300 bytes minus headers) unless the delivery
+      is `ReliableFragmentedSequenced`, which splits and reassembles large messages.
+  - id: equality
+    type: single
+    prompt: Why does PlayerLoadout implement IEquatable when it's used in a NetworkVariable?
+    options:
+      - NGO won't compile a NetworkVariable without it
+      - NGO compares the new value with the old one to decide whether the variable is dirty, and uses Equals when you provide it
+      - It makes the struct serialize in fewer bytes
+      - It lets clients write the variable
+    answer: 1
+    explanation: >-
+      Setting `.Value` only marks the variable dirty (and sends it) when the new value differs. With `IEquatable` NGO uses your
+      `Equals`, and without it an unmanaged struct is compared byte by byte. NetworkList elements must implement it.
