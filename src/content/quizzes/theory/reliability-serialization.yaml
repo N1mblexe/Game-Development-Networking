@@ -71,8 +71,8 @@ questions:
   - id: reader-mismatch
     type: codeline
     prompt: >-
-      Clients receive garbage health values and wildly wrong positions for every player after the first one. Which line of the reader
-      is wrong?
+      Clients read the first player's id correctly, but its health and position are wrong, and every player after it is garbage.
+      Which line of the reader is wrong?
     code: |-
       void Write(BitWriter w, PlayerState s) {
           w.WriteBits(s.Id, 8);
