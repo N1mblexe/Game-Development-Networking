@@ -192,7 +192,7 @@ const stages: Stage[] = [
     station: 4,
     text: (
       <>
-        The server applies the update to player 3. Round trip so far: one way, typically 10 to 80 ms. The reply makes the same trip
+        The server applies the update to player 3. Time so far: one way, typically 10 to 80 ms. The reply makes the same trip
         backwards, and the home router’s NAT mapping is what lets it in.
       </>
     ),
