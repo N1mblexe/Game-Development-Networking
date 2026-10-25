@@ -27,6 +27,10 @@ export interface SequenceStep {
   note?: string;
   /** Changes line style: reliable = solid, unreliable = dashed, local = self-call. */
   kind?: 'reliable' | 'unreliable' | 'rpc' | 'event' | 'local';
+  /** Optional API call or code shown in monospace under the label. */
+  code?: string;
+  /** Optional emphasis: `warn`/`danger` mark a failure point, `ok` a success, `muted` a non-event. */
+  tone?: 'ok' | 'warn' | 'danger' | 'muted';
 }
 
 export interface SequenceProps {

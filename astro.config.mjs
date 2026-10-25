@@ -28,7 +28,8 @@ export default defineConfig({
     }),
     mdx(),
     react(),
-    pagefind(),
+    // Interactive islands (sims, diagrams, sequences) stay out of the index; lesson prose describes them.
+    pagefind({ indexConfig: { excludeSelectors: ['astro-island'] } }),
   ],
   vite: {
     plugins: [tailwindcss()],

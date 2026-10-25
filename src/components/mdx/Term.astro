@@ -3,6 +3,12 @@
  * <Term id="jitter">jitter</Term>: glossary term with a hover/focus tooltip.
  * The slot is the visible text; it defaults to the glossary term name.
  * Unknown ids fail scripts/validate-content.ts and render with a red underline.
+ *
+ * Behaviour:
+ * - CSS shows the tooltip on hover and keyboard focus (display:none otherwise, so it never widens the page).
+ * - A small shared script keeps it inside the viewport (shifts sideways, flips below near the top),
+ *   closes it on Escape, and on touch makes the first tap show the tooltip and the second tap follow the link.
+ * - Screen readers get the definition through aria-describedby on the link.
  */
 import { getGlossary } from '../../lib/content/nav';
 import { withBase } from '../../lib/url';
@@ -13,26 +19,24 @@ interface Props {
 const { id } = Astro.props;
 const term = (await getGlossary()).get(id);
 const slot = await Astro.slots.render('default');
+// Unique per instance: the same term can appear several times on one page.
+const tipId = `term-tip-${id}-${Math.random().toString(36).slice(2, 8)}`;
 ---
 
 {
   term ? (
-    <span class="group relative inline">
-      <a
-        href={withBase(`/glossary/#${id}`)}
-        class="cursor-help underline decoration-muted decoration-dotted underline-offset-4 hover:decoration-accent"
-        aria-describedby={`term-tip-${id}`}
-        data-term={id}
-      >
+    <span class="term" data-term-wrap>
+      <a href={withBase(`/glossary/#${id}`)} class="term-link" aria-describedby={tipId} data-term={id}>
         {slot ? <Fragment set:html={slot} /> : term.term}
       </a>
-      <span
-        id={`term-tip-${id}`}
-        role="tooltip"
-        class="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-64 max-w-[80vw] -translate-x-1/2 rounded-lg border border-border bg-surface p-3 text-left text-sm leading-snug font-normal text-text shadow-lg group-focus-within:block group-hover:block"
-      >
-        <span class="mb-1 block font-semibold">{term.term}</span>
-        {term.short}
+      <span id={tipId} role="tooltip" class="term-tip" data-term-tip data-pagefind-ignore>
+        <span class="term-panel">
+          <span class="term-title">{term.term}</span>
+          <span class="term-short">{term.short}</span>
+          <span class="term-more" aria-hidden="true">
+            Tap again for the glossary →
+          </span>
+        </span>
       </span>
     </span>
   ) : (
@@ -41,3 +45,164 @@ const slot = await Astro.slots.render('default');
     </span>
   )
 }
+
+<style is:global>
+  .term {
+    position: relative;
+    display: inline;
+  }
+  .term > .term-link {
+    color: inherit;
+    cursor: help;
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: var(--muted);
+    text-underline-offset: 4px;
+    text-decoration-thickness: 1.5px;
+  }
+  .term > .term-link:hover,
+  .term > .term-link:focus-visible {
+    text-decoration-color: var(--accent);
+  }
+  .term-tip {
+    /* Hidden by default so it can never cause horizontal overflow. */
+    display: none;
+    position: absolute;
+    z-index: 30;
+    left: 50%;
+    bottom: 100%;
+    width: 16rem;
+    max-width: calc(100vw - 1.5rem);
+    padding-bottom: 0.5rem; /* hover bridge between the term and the panel */
+    transform: translateX(calc(-50% + var(--term-shift, 0px)));
+    text-align: left;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    font-weight: 400;
+    font-style: normal;
+    letter-spacing: normal;
+    white-space: normal;
+  }
+  .term[data-place='below'] > .term-tip {
+    bottom: auto;
+    top: 100%;
+    padding-bottom: 0;
+    padding-top: 0.5rem;
+  }
+  .term:hover > .term-tip,
+  .term:focus-within > .term-tip,
+  .term[data-open] > .term-tip {
+    display: block;
+  }
+  .term[data-dismissed] > .term-tip {
+    display: none;
+  }
+  .term-panel {
+    display: block;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 0.6rem;
+    padding: 0.65rem 0.8rem;
+    box-shadow:
+      0 10px 30px -10px rgb(0 0 0 / 0.35),
+      0 2px 6px rgb(0 0 0 / 0.08);
+  }
+  .term-title {
+    display: block;
+    font-weight: 650;
+    margin-bottom: 0.2rem;
+  }
+  .term-short {
+    display: block;
+    color: var(--muted);
+  }
+  .term-more {
+    display: none;
+    margin-top: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--accent);
+  }
+  .term[data-open] .term-more {
+    display: block;
+  }
+</style>
+
+<script>
+  // Shared by every <Term> on the page (Astro bundles this once).
+  const MARGIN = 12;
+  const HEADER = 64; // sticky site header
+
+  function place(wrap: HTMLElement) {
+    const tip = wrap.querySelector<HTMLElement>('[data-term-tip]');
+    if (!tip) return;
+    wrap.style.setProperty('--term-shift', '0px');
+    wrap.removeAttribute('data-place');
+    const r = tip.getBoundingClientRect();
+    if (r.width === 0) return; // not shown
+    const vw = document.documentElement.clientWidth;
+    let shift = 0;
+    if (r.left < MARGIN) shift = MARGIN - r.left;
+    else if (r.right > vw - MARGIN) shift = vw - MARGIN - r.right;
+    wrap.style.setProperty('--term-shift', `${Math.round(shift)}px`);
+    if (r.top < HEADER) wrap.dataset.place = 'below';
+  }
+
+  function closeAll(except?: Element | null) {
+    document.querySelectorAll<HTMLElement>('[data-term-wrap][data-open]').forEach((w) => {
+      if (w !== except) delete w.dataset.open;
+    });
+  }
+
+  const wrapOf = (t: EventTarget | null) => (t instanceof Element ? t.closest<HTMLElement>('[data-term-wrap]') : null);
+
+  document.addEventListener('pointerover', (e) => {
+    const w = wrapOf(e.target);
+    if (w && !w.contains(e.relatedTarget as Node | null)) {
+      delete w.dataset.dismissed;
+      place(w);
+    }
+  });
+  document.addEventListener('focusin', (e) => {
+    const w = wrapOf(e.target);
+    if (w) {
+      delete w.dataset.dismissed;
+      place(w);
+    }
+  });
+  document.addEventListener('focusout', (e) => {
+    const w = wrapOf(e.target);
+    if (w && !w.contains(e.relatedTarget as Node | null)) delete w.dataset.open;
+  });
+
+  // Touch: first tap shows the definition, second tap follows the link to the glossary.
+  let lastPointer = 'mouse';
+  document.addEventListener('pointerdown', (e) => {
+    lastPointer = e.pointerType;
+    if (!wrapOf(e.target)) closeAll();
+  });
+  document.addEventListener('click', (e) => {
+    const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>('[data-term-wrap] > a') : null;
+    if (!link) return;
+    const w = link.parentElement as HTMLElement;
+    if (lastPointer === 'touch' && !w.hasAttribute('data-open')) {
+      e.preventDefault();
+      closeAll(w);
+      w.dataset.open = '';
+      delete w.dataset.dismissed;
+      place(w);
+    }
+  });
+
+  // WCAG 1.4.13: Escape dismisses the tooltip without moving focus.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    document.querySelectorAll<HTMLElement>('[data-term-wrap]').forEach((w) => {
+      if (w.matches(':hover, :focus-within') || w.hasAttribute('data-open')) {
+        w.dataset.dismissed = '';
+        delete w.dataset.open;
+      }
+    });
+  });
+  addEventListener('scroll', () => closeAll(), { passive: true });
+</script>
