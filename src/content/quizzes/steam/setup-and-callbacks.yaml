@@ -1,0 +1,80 @@
+passPct: 70
+questions:
+  - id: missing-pump-effect
+    type: single
+    prompt: "You initialize with `SteamClient.Init(480, asyncCallbacks: false)` and never call `RunCallbacks()`. What happens to `await SteamMatchmaking.CreateLobbyAsync(4)`?"
+    options:
+      - It throws "callbacks not pumped"
+      - It completes, but events such as OnLobbyEntered don't fire
+      - It never completes, and no error tells you why
+      - It completes synchronously because the pump is only needed for events
+    answer: 2
+    explanation: >-
+      Facepunch completes async calls **inside** the callback pump. With manual callbacks and no `RunCallbacks()`, the
+      result sits in Steam's queue forever, so the `await` never returns and no event fires.
+  - id: bootstrap-bug
+    type: codeline
+    prompt: This bootstrap initializes with manual callbacks. Click the line that causes every Steam request to hang.
+    code: |-
+      void Awake()
+      {
+          try { SteamClient.Init(appId, asyncCallbacks: false); }
+          catch (Exception e) { Debug.LogError(e.Message); enabled = false; return; }
+      }
+
+      void Update()
+      {
+          // callbacks are pumped automatically
+      }
+
+      void OnDestroy()
+      {
+          if (SteamClient.IsValid) SteamClient.Shutdown();
+      }
+    answerLines: [9]
+    explanation: >-
+      With `asyncCallbacks: false`, nothing pumps automatically. `Update` must call `SteamClient.RunCallbacks()` (guarded by
+      `SteamClient.IsValid`), or you must leave `asyncCallbacks` at its default of `true`.
+  - id: init-failure
+    type: truefalse
+    prompt: "`SteamClient.Init` returns `false` when Steam isn't running, so you should check its return value."
+    answer: false
+    explanation: >-
+      `Init` **throws** when initialization fails, with a message such as `SteamApi_Init failed`. Wrap it in try/catch, log
+      the reason and let the game run without Steam features.
+  - id: lifecycle-order
+    type: order
+    prompt: Order the Steam lifecycle calls in a player build that uses manual callbacks.
+    items:
+      - "`SteamClient.RestartAppIfNecessary(appId)` (quit if it returns true)"
+      - "`SteamClient.Init(appId, asyncCallbacks: false)`"
+      - "`SteamClient.RunCallbacks()` once per frame in `Update`"
+      - "`SteamClient.Shutdown()` when the bootstrap is destroyed"
+    explanation: >-
+      The relaunch check comes first because Steam may restart the game. Then Init opens the interfaces, the pump runs
+      every frame, and Shutdown is the last Steam call.
+  - id: domain-reload
+    type: multi
+    prompt: You disabled Reload Domain in Enter Play Mode Options. What survives from one Play session to the next? Select all that apply.
+    options:
+      - "Handlers subscribed to Facepunch's static events, such as `SteamMatchmaking.OnLobbyEntered`"
+      - "Your own static fields, such as `SteamBootstrap.Instance`"
+      - GameObjects from the previous Play session's scene
+      - "An initialized Steam API, if the previous session never reached `Shutdown`"
+    answers: [0, 1, 3]
+    explanation: >-
+      Without a domain reload, statics and static event subscriptions persist, and a missed `Shutdown` makes the next
+      `Init` throw. Scene objects are still destroyed when Play Mode ends. Unsubscribe, reset statics with
+      `RuntimeInitializeOnLoadMethod`, and always shut down.
+  - id: offline-mode
+    type: single
+    prompt: "`SteamClient.Init` succeeded, but `SteamClient.IsLoggedOn` is false. What does that mean?"
+    options:
+      - The App ID is wrong
+      - Steam is running but not connected to Valve's servers (for example offline mode), so lobbies and networking won't work
+      - The player doesn't own the game
+      - Callbacks are not being pumped
+    answer: 1
+    explanation: >-
+      `IsLoggedOn` reports whether the Steam client is connected to Valve. In offline mode Init still succeeds, but online
+      services fail. Show it in a status bar and log it.

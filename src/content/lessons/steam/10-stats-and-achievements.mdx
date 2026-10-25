@@ -1,0 +1,448 @@
+---
+title: Stats, Achievements and Leaderboards
+order: 10
+summary: Define stats, achievements and leaderboards on the Steamworks partner site, update them with SteamUserStats, store them at the right moments, and prototype against Spacewar's predefined stats on App ID 480.
+durationMin: 24
+objectives:
+  - Configure stats, achievements and leaderboards on the Steamworks partner site and publish the changes
+  - Read and write stats and unlock achievements with SteamUserStats, Stat and Achievement
+  - Call StoreStats at sensible moments and react to OnUserStatsStored and OnAchievementProgress
+  - Find, submit to and download leaderboards with FindOrCreateLeaderboardAsync and the Leaderboard struct
+  - Prototype on App ID 480 with Spacewar's stats and achievements, and reset them while testing
+prerequisites: [steam/setup-and-callbacks, steam/testing]
+tags: [steam, stats, achievements, leaderboards]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: SteamUserStats.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamUserStats.cs
+  - title: 'Facepunch.Steamworks source: Structs/Achievement.cs, Stat.cs, Leaderboard.cs, LeaderboardEntry.cs, LeaderboardUpdate.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/tree/master/Facepunch.Steamworks/Structs
+  - title: 'Facepunch.Steamworks source: Enum/LeaderboardSort.cs and LeaderboardDisplay.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/tree/master/Facepunch.Steamworks/Enum
+  - title: 'Facepunch.Steamworks wiki: Set a Stat Value'
+    url: https://wiki.facepunch.com/steamworks/Set_a_Stat_Value
+  - title: 'Facepunch.Steamworks wiki: Leaderboards'
+    url: https://wiki.facepunch.com/steamworks/Leaderboards
+  - title: 'Facepunch.Steamworks wiki: Wiping Your Stats'
+    url: https://wiki.facepunch.com/steamworks/Wiping_Your_Stats
+  - title: 'Steamworks: Stats and Achievements'
+    url: https://partner.steamgames.com/doc/features/achievements
+  - title: 'Steamworks: Step by Step: Achievements (Spacewar API names)'
+    url: https://partner.steamgames.com/doc/features/achievements/ach_guide
+  - title: 'Steamworks: Step by Step: Stats (Spacewar stat names)'
+    url: https://partner.steamgames.com/doc/features/achievements/stats_guide
+  - title: 'Steamworks API: ISteamUserStats'
+    url: https://partner.steamgames.com/doc/api/ISteamUserStats
+  - title: 'Steamworks: Leaderboards'
+    url: https://partner.steamgames.com/doc/features/leaderboards
+---
+
+You have probably written a save system: a few counters and flags in a serialized class, written to disk when
+something important happens. Steam stats and achievements are the same idea, except the "file" lives on Valve's
+servers, is tied to the player's account, and other people can see it. They also bring one networking rule with them:
+**the client writes them**, so you have to think about who is allowed to write what.
+
+## Three related features
+
+| Feature | What it is | Facepunch entry point |
+|---|---|---|
+| **Stats** | Named numbers per user: `INT`, `FLOAT`, or `AVGRATE` (an average over a sliding window) | `SteamUserStats.GetStatInt` / `SetStat` / `AddStat`, or the `Stat` struct |
+| **Achievements** | Named locked/unlocked flags per user, with icons and localized text | `SteamUserStats.Achievements`, the `Achievement` struct |
+| **Leaderboards** | Named, sorted tables with one integer score per user, plus up to 64 integers of detail | `SteamUserStats.FindOrCreateLeaderboardAsync`, the `Leaderboard` struct |
+
+All three are part of <Term id="steam-user-stats">`SteamUserStats`</Term> (Valve's `ISteamUserStats`). Stats and
+<Term id="steam-achievements">achievements</Term> are cached locally by the Steam client, so reading and setting them is
+cheap and synchronous. Uploading them, and everything about <Term id="steam-leaderboards">leaderboards</Term>, is a round
+trip to Valve.
+
+## Setting them up on the partner site
+
+Nothing works until the names exist on Steam's side. In your app's **Steamworks settings** on the partner site, you
+define each item under *Stats & Achievements* (or *Leaderboards*). Valve documents these fields:
+
+| For a stat | For an achievement | For a leaderboard |
+|---|---|---|
+| **API Name**, the string your code uses | **API Name**, such as `ACH_WIN_ONE_GAME` | **Name** (internal) |
+| Type: `INT`, `FLOAT` or `AVGRATE` | Display name and description (localizable) | **Community Name**: without it, the board isn't shown on the Community Hub |
+| **Set By**: Client (default), GS or Official GS | **Set By**: client, game server or official game server | **Sort Method**: Ascending or Descending |
+| **Increment Only**, **Max Change**, min/max, default value | Achieved and unachieved icons (256 × 256 PNG recommended) | **Display Type**: Numeric, Seconds or Milliseconds |
+| **Aggregated** (keeps a global total) | Optional **progress stat** and range, for a progress bar | **Writes: Trusted** (only the Web API can set scores) |
+
+<Steps>
+
+1. Create the stats first, because an achievement's progress stat must already exist and have the same *Set By* permission.
+2. Create the achievements and upload their icons.
+3. Create leaderboards here rather than from code, so you can set the Community Name and write permissions.
+4. **Publish** from the *Publish* tab. Edits are saved to a draft, and until you publish, `SetStat` and achievement
+   calls for the new names fail.
+
+</Steps>
+
+<Callout type="steam" title="Prototyping on App ID 480">
+
+You can't edit Spacewar's configuration, but you can use it. Valve's step-by-step guides are built on Spacewar and use
+these API names:
+
+- Stats: `NumGames`, `NumWins`, `NumLosses` (`INT`), `FeetTraveled`, `MaxFeetTraveled` (`FLOAT`) and `AverageSpeed` (`AVGRATE`).
+- Achievements: `ACH_WIN_ONE_GAME`, `ACH_WIN_100_GAMES`, `ACH_TRAVEL_FAR_ACCUM` and `ACH_TRAVEL_FAR_SINGLE`.
+
+Keep the API names in one place (serialized fields below) and swap them when you get your own App ID. Unlocking
+Spacewar's achievements on your account is harmless, and you can reset them.
+
+</Callout>
+
+## Reading and writing stats
+
+Stats are addressed by API name, either through static methods or the `Stat` struct:
+
+```csharp title="StatBasics.cs"
+using Steamworks;
+using Steamworks.Data;
+
+int games = SteamUserStats.GetStatInt("NumGames");          // 0 if the name or type is wrong
+float feet = SteamUserStats.GetStatFloat("FeetTraveled");
+
+bool ok = SteamUserStats.SetStat("NumWins", 3);             // absolute value
+ok = SteamUserStats.AddStat("NumGames", 1);                 // Facepunch helper: Get, then Set
+
+// The Stat struct holds the name, which reads well in a field.
+var maxFeet = new Stat("MaxFeetTraveled");
+if (feet > maxFeet.GetFloat()) maxFeet.Set(feet);
+```
+
+A few rules come straight from Valve's `ISteamUserStats` reference:
+
+- `GetStat` and `SetStat` return `false` (or Facepunch's `GetStatInt` returns 0) unless the API name exists, the changes are
+  **published**, and you call the overload whose **type** matches the stat's type. Reading an `INT` stat with
+  `GetStatFloat` is a silent zero.
+- `SetStat` takes an **absolute value**. Facepunch's `AddStat` reads the current value and writes the sum.
+- These calls only change the Steam client's **in-memory** copy. Nothing reaches the server until you store.
+
+<Callout type="note" title="RequestCurrentStats is obsolete">
+
+Older tutorials start by calling `SteamUserStats.RequestCurrentStats()` and waiting for `OnUserStatsReceived`. Valve now
+marks the native call deprecated because the Steam client syncs stats and achievements before the game starts, and
+Facepunch 2.5.2 marks it `[Obsolete]` and simply returns `true`. Read and write stats right after `SteamClient.Init`. Don't
+make your code wait for the `StatsRecieved` flag (Facepunch's spelling): it only changes when a stats-received callback
+for the local user arrives.
+
+</Callout>
+
+## Unlocking achievements
+
+```csharp title="AchievementBasics.cs"
+var firstWin = new Achievement("ACH_WIN_ONE_GAME");
+
+if (!firstWin.State)              // State = unlocked?
+    firstWin.Trigger();           // SetAchievement + StoreStats (apply defaults to true)
+
+// Progress toward a counted achievement. This only shows a pop-up; it doesn't set anything.
+int wins = SteamUserStats.GetStatInt("NumWins");
+if (wins > 0 && wins % 10 == 0 && wins < 100)
+    SteamUserStats.IndicateAchievementProgress("ACH_WIN_100_GAMES", wins, 100);
+```
+
+`Achievement` exposes `Identifier` (the API name), `Name` and `Description` (in the player's language), `State`,
+`UnlockTime` (`DateTime?`), `GlobalUnlocked` (0–1, or -1 when unknown), `GetIconAsync()` and `Clear()`.
+`SteamUserStats.Achievements` enumerates every achievement defined for the app, which is enough for an in-game list.
+
+With its default `Trigger(bool apply = true)`, Facepunch calls `StoreStats` right after a successful unlock. That's what
+you want, because Valve only shows the unlock notification after the store. Unlocking twice is harmless.
+
+<Sequence
+  title="Unlocking an achievement"
+  actors={[
+    { id: 'game', label: 'Your game', kind: 'client' },
+    { id: 'steam', label: 'Local Steam client', kind: 'steam' },
+    { id: 'valve', label: 'Valve stats backend', kind: 'service' },
+  ]}
+  steps={[
+    { from: 'game', to: 'steam', label: 'AddStat("NumWins", 1)', note: 'in-memory only, returns at once', kind: 'local' },
+    { from: 'game', to: 'steam', label: 'Achievement.Trigger() → SetAchievement + StoreStats', kind: 'reliable' },
+    { from: 'steam', to: 'valve', label: 'upload changed stats and achievements', kind: 'reliable' },
+    { from: 'valve', to: 'steam', label: 'accepted, or rejected for breaking a constraint', kind: 'reliable' },
+    { from: 'steam', to: 'game', label: 'OnUserStatsStored(Result)', note: 'delivered by the callback pump', kind: 'event' },
+    { from: 'steam', to: 'game', label: 'OnAchievementProgress(ach, 0, 0)', note: '0 / 0 means fully unlocked', kind: 'event' },
+    { from: 'steam', to: 'game', label: 'overlay shows "Achievement unlocked"', kind: 'local' },
+  ]}
+/>
+
+What you should notice:
+
+- Setting is local and instant. **Storing** is the only network step, and it's asynchronous like everything else in this module.
+- Both results arrive as events, so with `asyncCallbacks: false` they need the `RunCallbacks()` pump from lesson 02.
+- `OnAchievementProgress` also fires for `IndicateAchievementProgress` calls, with real progress numbers. Zero for both means "unlocked".
+
+## Storing: when and how often
+
+Valve warns that `StoreStats` can be **rate limited**: call it "on the order of minutes, rather than seconds", at major
+state changes such as the end of a round. If the process exits with unsaved changes Steam stores them for you, but a
+crash loses them.
+
+When a store fails because a value broke a constraint (Increment Only, Max Change, min/max), the result is
+`Result.InvalidParam`, Steam reverts the rejected stats, and it sends the server's values back. Log it: your
+partner-site settings and your code disagree.
+
+## The `SteamProgress` component
+
+Here's the module project's progress tracker. It records one "game" for every chat session joined, unlocks Spacewar's
+first-win achievement as a stand-in for "first session", and stores at session end rather than on every change.
+
+```csharp title="SteamProgress.cs"
+using Steamworks;
+using Steamworks.Data;
+using UnityEngine;
+
+/// Records stats and achievements for the local player and stores them at sensible moments.
+public sealed class SteamProgress : MonoBehaviour
+{
+    // Spacewar (480) API names while prototyping. Replace them when you have your own App ID.
+    [SerializeField] string sessionsStat = "NumGames";
+    [SerializeField] string firstSessionAchievement = "ACH_WIN_ONE_GAME";
+    [SerializeField] float minSecondsBetweenStores = 120f;
+
+    bool dirty;
+    float lastStoreTime;
+
+    void OnEnable()
+    {
+        SteamUserStats.OnUserStatsStored += HandleStored;
+        SteamUserStats.OnAchievementProgress += HandleAchievementProgress;
+    }
+
+    void OnDisable()
+    {
+        SteamUserStats.OnUserStatsStored -= HandleStored;
+        SteamUserStats.OnAchievementProgress -= HandleAchievementProgress;
+    }
+
+    void Start()
+    {
+        lastStoreTime = Time.unscaledTime;   // Steam synced our stats just before launch
+        var lobbies = SteamLobbyManager.Instance;
+        lobbies.Entered += HandleLobbyEntered;
+        lobbies.Left += StoreNow;            // leaving a lobby is a natural "end of round"
+    }
+
+    void OnDestroy()
+    {
+        var lobbies = SteamLobbyManager.Instance;
+        if (lobbies != null) { lobbies.Entered -= HandleLobbyEntered; lobbies.Left -= StoreNow; }
+    }
+
+    void HandleLobbyEntered(Lobby lobby)
+    {
+        if (!SteamBootstrap.IsReady) return;
+
+        if (!SteamUserStats.AddStat(sessionsStat, 1))
+            Debug.LogWarning($"[Stats] AddStat({sessionsStat}) failed: name, type or unpublished?");
+        dirty = true;
+
+        var first = new Achievement(firstSessionAchievement);
+        if (!first.State) first.Trigger();   // stores immediately so the overlay can show it
+    }
+
+    public void StoreNow()
+    {
+        if (!dirty || !SteamClient.IsValid) return;
+        // Rate limit ourselves: Valve asks for minutes between stores, not seconds.
+        if (Time.unscaledTime - lastStoreTime < minSecondsBetweenStores) return;
+
+        if (SteamUserStats.StoreStats())
+        {
+            lastStoreTime = Time.unscaledTime;
+            dirty = false;   // optimistic; HandleStored sets it again on failure
+        }
+    }
+
+    void OnApplicationQuit() { lastStoreTime = float.NegativeInfinity; StoreNow(); }
+
+    void HandleStored(Result result)
+    {
+        if (result == Result.OK) return;
+        // InvalidParam: a value broke a constraint and Steam reverted it, so don't retry.
+        Debug.LogWarning($"[Stats] StoreStats failed: {result}");
+        dirty = result != Result.InvalidParam;
+    }
+
+    void HandleAchievementProgress(Achievement achievement, int current, int max)
+    {
+        if (current == 0 && max == 0)
+            Debug.Log($"[Stats] Unlocked: {achievement.Name}");
+    }
+}
+```
+
+Put it on the persistent Steam GameObject. It subscribes to the lobby manager in `Start`, as `SteamChatSession` does.
+`StoreNow` stores at most once every two minutes; anything it skips stays dirty until the next lobby exit or the quit.
+
+### An achievements screen
+
+```csharp title="AchievementList.cs"
+using System.Linq;
+using System.Text;
+using Steamworks;
+using TMPro;
+using UnityEngine;
+
+public sealed class AchievementList : MonoBehaviour
+{
+    [SerializeField] TMP_Text list;
+
+    void OnEnable()
+    {
+        if (!SteamBootstrap.IsReady) return;
+
+        var sb = new StringBuilder();
+        foreach (var a in SteamUserStats.Achievements.OrderByDescending(a => a.State))
+        {
+            string when = a.UnlockTime is { } t ? t.ToLocalTime().ToString("d") : "locked";
+            sb.AppendLine($"{a.Name} ({when})\n  {a.Description}");
+        }
+        list.text = sb.ToString();
+    }
+
+    // Steam's own page for this game's achievements (needs the overlay, so a build).
+    public void OpenSteamPage() => SteamFriends.OpenOverlay("achievements");
+}
+```
+
+## Leaderboards
+
+Leaderboards are always asynchronous. You get a handle by name, then submit or download:
+
+```csharp title="SteamLeaderboards.cs"
+using System.Threading.Tasks;
+using Steamworks;
+using Steamworks.Data;
+using UnityEngine;
+
+public static class SteamLeaderboards
+{
+    // Unique prefix: on 480 every developer shares the same app.
+    public const string SessionsBoard = "netlearn_sessions_joined";
+
+    static Leaderboard? cached;
+
+    static async Task<Leaderboard?> GetAsync()
+    {
+        if (cached.HasValue) return cached;
+        // With your own App ID, create the board on the partner site and use FindLeaderboardAsync.
+        cached = await SteamUserStats.FindOrCreateLeaderboardAsync(
+            SessionsBoard, LeaderboardSort.Descending, LeaderboardDisplay.Numeric);
+        return cached;
+    }
+
+    public static async Task SubmitAsync(int score)
+    {
+        Leaderboard? board = await GetAsync();
+        if (board is not Leaderboard lb) { Debug.LogWarning("[Board] not found"); return; }
+
+        LeaderboardUpdate? update = await lb.SubmitScoreAsync(score);   // keeps the best score
+        if (update is LeaderboardUpdate u && u.Changed)
+            Debug.Log($"[Board] New best {u.Score}, rank {u.OldGlobalRank} → {u.NewGlobalRank}");
+    }
+
+    public static async Task<LeaderboardEntry[]> AroundMeAsync()
+    {
+        Leaderboard? board = await GetAsync();
+        if (board is not Leaderboard lb) return System.Array.Empty<LeaderboardEntry>();
+
+        // Null when the player has no entry yet, or the download failed.
+        LeaderboardEntry[] entries = await lb.GetScoresAroundUserAsync(-3, 3);
+        return entries ?? await lb.GetScoresAsync(10) ?? System.Array.Empty<LeaderboardEntry>();
+    }
+}
+```
+
+| `Leaderboard` member | Behaviour |
+|---|---|
+| `SubmitScoreAsync(score, details)` | Valve's *KeepBest*: only replaces the entry if the new score is better |
+| `ReplaceScore(score, details)` | *ForceUpdate*: always replaces it (no `Async` suffix in Facepunch, but it is async) |
+| `GetScoresAsync(count, offset = 1)` | A range from the top, by global rank |
+| `GetScoresAroundUserAsync(start, end)` | Entries relative to the player, for example -3 to 3 |
+| `GetScoresFromFriendsAsync()` | Every entry from the player's friends |
+| `GetScoresForUsersAsync(SteamId[])` | Specific players, such as everyone in the lobby |
+
+Each `LeaderboardEntry` has `User` (a `Friend` whose name Facepunch has already downloaded), `GlobalRank`, `Score` and
+`Details`. The download methods return `null`, not an empty array, when there's nothing to show: the same trap as
+`LobbyQuery.RequestAsync` in lesson 04.
+
+<Callout type="steam" title="Sort order and rate limits">
+
+`LeaderboardSort.Ascending` means the **lowest** score is first (lap times), and `Descending` means the highest is
+first (points). Facepunch's wiki page has this backwards; the source and Valve's docs agree. Valve limits score
+uploads to **10 per 10 minutes**, one in flight at a time, so submit at the end of a session. For an existing board,
+`FindOrCreateLeaderboardAsync` ignores the sort and display arguments.
+
+</Callout>
+
+## Stats in a multiplayer game
+
+Every stat in this lesson is written by the player's **own** client. In this module's sessions the host decides when a
+round ends and who won, tells each client over the socket, and each client updates its own stats. That's fine for
+personal progress, but as lesson 08 put it, Steam proves who a player is, not that their client is honest. A modified
+client can call `SetStat` with any value.
+
+For anything competitive, use the partner-site controls. **Increment Only** and **Max Change** limit how far a stat can
+move, **Set By: GS** lets only game servers (Facepunch's `SteamServerStats`) write it, and **Writes: Trusted**
+leaderboards only accept scores from your backend through the `SetLeaderboardScore` Web API. To show *other* players'
+stats in a lobby, `await friend.RequestUserStatsAsync()`, then call `friend.GetStatInt(name)` or `friend.GetAchievement(name)`.
+
+## Testing and resetting
+
+```csharp title="DevStatsTools.cs"
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+using Steamworks;
+
+public static class DevStatsTools
+{
+    /// Wipes this account's stats (and achievements, if asked). Valve stores the reset for you.
+    public static bool ResetMyProgress(bool includeAchievements = true) =>
+        SteamUserStats.ResetAll(includeAchievements);
+}
+#endif
+```
+
+Without code, start Steam with `-console` and use its console: `reset_all_stats 480` resets an app's stats, and
+`achievement_clear 480 ACH_WIN_ONE_GAME` relocks one achievement.
+When a store fails and you can't see why, Steam writes details to `logs/stats_log.txt` in the Steam install folder. The
+unlock notification itself is drawn by the <Term id="steam-overlay">overlay</Term>, so check it in a build (lesson 09).
+
+## Pitfalls
+
+<Callout type="pitfall" title="Forgetting to publish">
+
+You add `ACH_FIRST_CHAT` on the partner site, write the code, and `Trigger()` returns `false`. Achievements and stats
+work only after you **publish** from the *Publish* tab. The same applies to every later change, such as a new stat or a
+changed type.
+
+</Callout>
+
+<Callout type="pitfall" title="Calling StoreStats every frame">
+
+`AddStat` in `Update` followed by `StoreStats` is the classic bug. The sets are free, but each store is a server
+request that Valve rate limits. Batch changes and store at the end of a round, on leaving a lobby, and on quit.
+
+</Callout>
+
+<Callout type="pitfall" title="Type mismatches and ambiguous AddStat">
+
+`GetStatFloat` on an `INT` stat returns 0, and `SetStat("NumGames", 1f)` fails. Facepunch's `AddStat` has `int` and
+`float` overloads that both default the amount, so `AddStat("NumGames")` doesn't compile (ambiguous call). Pass `1` or `1f`
+to match the stat's type.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Define stats, achievements and leaderboards on the **partner site** and **publish** before any API call can succeed. On 480, use Spacewar's names (`NumGames`, `ACH_WIN_ONE_GAME`, …).
+- `GetStatInt`/`SetStat`/`AddStat` and `Achievement.Trigger()` change the local cache. **`StoreStats()`** uploads, at round ends and on quit, never every frame. `RequestCurrentStats` is obsolete.
+- React to **`OnUserStatsStored(Result)`** and **`OnAchievementProgress(ach, cur, max)`**, where 0/0 means unlocked. Both need the callback pump.
+- Leaderboards: `FindOrCreateLeaderboardAsync` (or `FindLeaderboardAsync`), `SubmitScoreAsync` (keep best) or `ReplaceScore`, and the `GetScores…Async` methods, which return `null` when empty. Uploads are limited to 10 per 10 minutes.
+- Clients write their own stats. For competitive data use **Increment Only/Max Change**, **game-server-only** stats or **trusted** leaderboards.
+
+</KeyTakeaways>

@@ -1,0 +1,411 @@
+---
+title: Messages, Send Types and Lanes
+order: 7
+summary: Turn raw socket bytes into a typed message protocol, pick the right SendType for each message, respect Steam's size limits, measure ping, and use lanes where you would use channels.
+durationMin: 28
+objectives:
+  - Frame messages with a type byte and read them defensively from untrusted peers
+  - Choose between Unreliable, NoNagle, NoDelay and Reliable send flags, and explain what Nagle buffering costs
+  - State Steam Networking Sockets' message size and buffer limits and the delivery guarantees of each send type
+  - Measure round-trip time with ping/pong and compare it with the connection's own status
+  - Configure lanes to stop bulk traffic from delaying gameplay messages
+prerequisites: [steam/networking-sockets, theory/reliability-serialization]
+tags: [steam, networking, messages, reliability]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: Networking/Connection.cs (SendMessage, Flush, QuickStatus, ConfigureConnectionLanes)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Networking/Connection.cs
+  - title: 'Facepunch.Steamworks source: Enum/SendType.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Enum/SendType.cs
+  - title: 'Facepunch.Steamworks source: Networking/SocketManager.cs (Receive, OnMessage)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Networking/SocketManager.cs
+  - title: 'GameNetworkingSockets: steamnetworkingtypes.h (send flags, message size limits)'
+    url: https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/include/steam/steamnetworkingtypes.h
+  - title: 'GameNetworkingSockets: isteamnetworkingsockets.h (SendMessageToConnection, ReceiveMessagesOnConnection, ConfigureConnectionLanes)'
+    url: https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/include/steam/isteamnetworkingsockets.h
+  - title: 'Steamworks API: ISteamNetworkingSockets'
+    url: https://partner.steamgames.com/doc/api/ISteamNetworkingSockets
+---
+
+In lesson 06 every message was a UTF-8 string sent reliably. That's fine for chat, but a game sends many kinds of
+message with very different needs: a position that is stale after 50 ms, a "player died" event that must arrive
+exactly once, a 200 KB level file that must not delay either. In [reliability and serialization](/modules/theory/reliability-serialization/)
+you met the ideas. This lesson maps them onto Steam's API: **you** choose the bytes and the message types,
+and Steam's <Term id="send-type">send types</Term> choose the delivery guarantees per message.
+
+## Messages, not streams
+
+Steam Networking Sockets deliver **messages**. Valve's docs are explicit: each `SendMessage` call arrives as exactly
+one message of the same size on the other side, never merged with others or split. You don't need length prefixes to
+find message boundaries, as you would with TCP. You do still need to say **what kind** of message each one is, so the
+first byte of every message in this module is a type tag.
+
+```csharp title="ChatProtocol.cs"
+using System;
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+using System.Text;
+using Steamworks;
+using Steamworks.Data;
+
+public enum MsgType : byte
+{
+    Chat = 1,     // reliable: text must arrive, in order
+    Ping = 2,     // unreliable: a lost ping is just a skipped sample
+    Pong = 3,     // unreliable
+    Typing = 4,   // unreliable + NoDelay: cosmetic, useless if late
+}
+
+/// Builds one outgoing message in a reusable buffer. Steam copies the bytes on send,
+/// so the same writer can be reused straight away.
+public sealed class NetWriter
+{
+    readonly byte[] buffer;
+    public int Length { get; private set; }
+
+    public NetWriter(int capacity = 1200) => buffer = new byte[capacity];
+
+    public NetWriter Begin(MsgType type) { Length = 0; return WriteByte((byte)type); }
+
+    public NetWriter WriteByte(byte value) { buffer[Length++] = value; return this; }
+
+    public NetWriter WriteDouble(double value)
+    {
+        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(Length, 8), BitConverter.DoubleToInt64Bits(value));
+        Length += 8;
+        return this;
+    }
+
+    public NetWriter WriteString(string value)
+    {
+        // Throws if the string doesn't fit: better than silently sending a truncated message.
+        int bytes = Encoding.UTF8.GetBytes(value, 0, value.Length, buffer, Length + 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(Length, 2), (ushort)bytes);
+        Length += 2 + bytes;
+        return this;
+    }
+
+    public Result SendTo(Connection connection, SendType sendType, ushort lane = 0) =>
+        connection.SendMessage(buffer, 0, Length, sendType, lane);
+}
+
+/// Reads one incoming message. Every read is bounds-checked: the bytes come from another player.
+public struct NetReader
+{
+    static byte[] scratch = new byte[2048];
+    readonly byte[] buf;
+    readonly int end;
+    int pos;
+
+    /// Copies the native message out (it's released after OnMessage returns) and starts reading.
+    public static NetReader From(IntPtr data, int size)
+    {
+        if (scratch.Length < size) scratch = new byte[size];
+        Marshal.Copy(data, scratch, 0, size);
+        return new NetReader(scratch, size);
+    }
+
+    NetReader(byte[] buf, int length) { this.buf = buf; end = length; pos = 0; }
+
+    public byte ReadByte() { Need(1); return buf[pos++]; }
+
+    public double ReadDouble()
+    {
+        Need(8);
+        double v = BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(buf.AsSpan(pos, 8)));
+        pos += 8;
+        return v;
+    }
+
+    public string ReadString(int maxBytes)
+    {
+        Need(2);
+        int n = BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan(pos, 2));
+        pos += 2;
+        if (n > maxBytes) throw new FormatException($"string of {n} bytes exceeds {maxBytes}");
+        Need(n);
+        string s = Encoding.UTF8.GetString(buf, pos, n);
+        pos += n;
+        return s;
+    }
+
+    void Need(int n)
+    {
+        if (pos + n > end) throw new FormatException("truncated message");
+    }
+}
+```
+
+The `scratch` buffer is shared, which is safe because Facepunch calls `OnMessage` one message at a time on the main
+thread, inside `Receive()`. Don't keep a `NetReader` past the callback that created it.
+
+## Send types
+
+`SendType` is a `[Flags]` enum. Facepunch defines four flags. Combine them with `|`:
+
+| Flags | Delivery | Use for |
+|---|---|---|
+| `SendType.Unreliable` | May be lost, duplicated or arrive out of order. Buffered by Nagle. | State that's resent constantly and only needs the latest value |
+| `SendType.Unreliable \| SendType.NoNagle` | As above, but sent at the next opportunity | The last unreliable message of a tick, pings |
+| `SendType.Unreliable \| SendType.NoDelay` | As above, and **dropped** if it can't go out very soon (still connecting, route negotiation) | Voice, typing indicators: worthless when late |
+| `SendType.Reliable` (the default) | Retransmitted until acknowledged; reliable messages arrive **in the order sent** | Events, chat, match start, anything that must happen once |
+| `SendType.Reliable \| SendType.NoNagle` | Reliable, sent without waiting for the Nagle timer | A reliable event you want out this frame |
+
+Valve's documentation of `ReceiveMessagesOnConnection` spells out the guarantees: reliable messages are received in
+the order they were sent, while unreliable messages may be dropped, reordered relative to each other and to reliable
+messages, or received more than once. Plan for all three.
+
+<Callout type="steam" title="What Nagle does">
+
+By default **every** message, reliable or not, waits briefly (the Nagle timer, 5 ms by default) in case more
+messages follow, so several small messages share one packet. That saves bandwidth and costs a few milliseconds of
+latency. Valve's advice is not to disable it everywhere: send a tick's messages normally, then either mark the last
+one `NoNagle` or call `connection.Flush()` to push everything out at once.
+
+</Callout>
+
+`NoDelay` is only valid with unreliable messages. When a message is dropped because of it, `SendMessage` returns
+`Result.Ignored`. In fact `SendMessage` always returns a `Result`, and the non-`OK` values are worth logging:
+
+| `Result` | Meaning (from Valve's `SendMessageToConnection` docs) |
+|---|---|
+| `InvalidParam` | Bad connection handle, or the message is too big |
+| `InvalidState` | The connection is in a state that can't send |
+| `NoConnection` | The connection has ended |
+| `Ignored` | `NoDelay` message dropped because the connection wasn't ready |
+| `LimitExceeded` | Too much data is already queued (the send buffer is full) |
+
+## Size limits
+
+| Limit | Value | Consequence |
+|---|---|---|
+| Largest single message you can send | 512 KB (524,288 bytes) | Larger sends fail with `InvalidParam`. Split bigger data yourself. |
+| Largest message a receiver accepts (default) | 512 KB | A bigger message closes the connection |
+| Send buffer per connection (default) | 512 KB of pending bytes | Beyond it, sends return `LimitExceeded` |
+| Practical unreliable size | about one packet (roughly 1,200 bytes or less) | An unreliable message larger than the <Term id="mtu">MTU</Term> is split into fragments, and if **any** fragment is lost, the whole message is dropped |
+
+Reliable messages up to 512 KB are fragmented and reassembled for you with a sliding window. That makes "send the
+host's current map seed and settings reliably on connect" trivial. For unreliable state, keep each message small so a
+single lost packet only costs one message.
+
+## Ping, pong and relayed chat
+
+<Sequence
+  title="Typed messages between a client and the host"
+  actors={[
+    { id: 'a', label: 'Client A', kind: 'client' },
+    { id: 'h', label: 'Host', kind: 'host' },
+    { id: 'b', label: 'Client B', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'h', to: 'a', label: 'Ping(hostTime) — Unreliable | NoNagle', note: 'once per second per client', kind: 'unreliable' },
+    { from: 'a', to: 'h', label: 'Pong(hostTime) — Unreliable | NoNagle', note: 'echo the host’s own timestamp back', kind: 'unreliable' },
+    { from: 'h', to: 'h', label: 'RTT = now − hostTime (compare with QuickStatus().Ping)', kind: 'local' },
+    { from: 'a', to: 'h', label: 'Typing — Unreliable | NoDelay', note: 'dropped rather than delivered late', kind: 'unreliable' },
+    { from: 'h', to: 'b', label: 'Typing("A")', kind: 'unreliable' },
+    { from: 'a', to: 'h', label: 'Chat("gg") — Reliable', kind: 'reliable' },
+    { from: 'h', to: 'h', label: 'validate length, prefix the verified sender name', kind: 'local' },
+    { from: 'h', to: 'a', label: 'Chat("A: gg")', kind: 'reliable' },
+    { from: 'h', to: 'b', label: 'Chat("A: gg")', kind: 'reliable' },
+  ]}
+/>
+
+What you should notice:
+
+- The pong echoes the **host's** timestamp, so the host computes <Term id="rtt">RTT</Term> with one clock. Clocks on
+  different machines are never in sync.
+- The host builds the "A: gg" prefix from the **verified connection identity**, never from a name the client sends.
+- Only chat is reliable. Losing a ping or a typing indicator costs nothing, so they never wait for retransmission.
+
+Here is the host side, replacing `OnMessage` in lesson 06's `ChatHost` and adding a ping tick:
+
+```csharp title="ChatHost.cs"
+using System;
+using System.Collections.Generic;
+using Steamworks;
+using Steamworks.Data;
+
+public sealed class ChatHost : SocketManager
+{
+    public const int MaxChatBytes = 512;
+
+    public SteamChatSession Session;
+    readonly NetWriter writer = new NetWriter();
+    readonly Dictionary<Connection, double> rttMs = new Dictionary<Connection, double>();
+    double nextPing;
+
+    // OnConnecting / OnConnected / OnDisconnected as in lesson 06 (remove the connection from rttMs on disconnect).
+
+    public override void OnMessage(Connection connection, NetIdentity identity, IntPtr data, int size,
+                                   long messageNum, long recvTime, int channel)
+    {
+        try
+        {
+            NetReader r = NetReader.From(data, size);
+            switch ((MsgType)r.ReadByte())
+            {
+                case MsgType.Chat:
+                    string text = r.ReadString(MaxChatBytes);
+                    string line = $"{new Friend(identity.SteamId).Name}: {text}";
+                    Session.Post(line);
+                    BroadcastChat(line);
+                    break;
+
+                case MsgType.Pong:
+                    double sentAt = r.ReadDouble();
+                    rttMs[connection] = (Session.Now - sentAt) * 1000.0;
+                    break;
+
+                case MsgType.Typing:
+                    writer.Begin(MsgType.Typing).WriteString(new Friend(identity.SteamId).Name);
+                    foreach (Connection c in Connected)
+                        if (c != connection) writer.SendTo(c, SendType.Unreliable | SendType.NoDelay);
+                    break;
+
+                default:
+                    throw new FormatException("unknown message type");
+            }
+        }
+        catch (FormatException e)
+        {
+            // Malformed input from a peer is a protocol violation, not a crash.
+            connection.Close(false, 1002, $"Bad message: {e.Message}");
+        }
+    }
+
+    public void BroadcastChat(string line)
+    {
+        writer.Begin(MsgType.Chat).WriteString(line);
+        foreach (Connection c in Connected)
+        {
+            Result result = writer.SendTo(c, SendType.Reliable);
+            if (result != Result.OK) Session.Post($"(send to {c} failed: {result})");
+        }
+    }
+
+    /// Called from SteamChatSession.Update with Session.Now.
+    public void Tick(double now)
+    {
+        if (now < nextPing) return;
+        nextPing = now + 1.0;
+
+        writer.Begin(MsgType.Ping).WriteDouble(now);
+        foreach (Connection c in Connected)
+            writer.SendTo(c, SendType.Unreliable | SendType.NoNagle);
+    }
+
+    public string DescribeLatency(Connection c)
+    {
+        ConnectionStatus status = c.QuickStatus();
+        string ours = rttMs.TryGetValue(c, out double ms) ? $"{ms:0} ms" : "n/a";
+        return $"app RTT {ours}, Steam ping {status.Ping} ms, quality {status.ConnectionQualityLocal:P0}";
+    }
+}
+```
+
+On the client, `OnMessage` answers pings and shows chat:
+
+```csharp title="ChatClient.cs"
+public override void OnMessage(IntPtr data, int size, long messageNum, long recvTime, int channel)
+{
+    try
+    {
+        NetReader r = NetReader.From(data, size);
+        switch ((MsgType)r.ReadByte())
+        {
+            case MsgType.Chat:
+                Session.Post(r.ReadString(ChatHost.MaxChatBytes + 64));
+                break;
+            case MsgType.Ping:
+                double hostTime = r.ReadDouble();
+                writer.Begin(MsgType.Pong).WriteDouble(hostTime).SendTo(Connection, SendType.Unreliable | SendType.NoNagle);
+                break;
+            case MsgType.Typing:
+                Session.ShowTyping(r.ReadString(128));
+                break;
+        }
+    }
+    catch (FormatException)
+    {
+        Close(false, 1002, "Bad message from host");
+    }
+}
+```
+
+Add `readonly NetWriter writer = new NetWriter();` to `ChatClient`, a `public double Now => Time.realtimeSinceStartupAsDouble;`
+property and a `ShowTyping(string)` method to `SteamChatSession`, and call `host?.Tick(Now)` from its `Update`.
+
+<Callout type="steam" title="The callback parameters you shouldn't trust">
+
+`OnMessage` has `messageNum`, `recvTime` and `channel` parameters. For connections, Valve's message struct only uses the
+channel field with `ISteamNetworkingMessages`, so `channel` is always 0 here. And in Facepunch 2.5.2's `Receive`, the
+native receive time and message number are passed into the `messageNum` and `recvTime` arguments in swapped order. Put
+anything you need (type, sequence numbers, timestamps) in your own message bytes, as this protocol does.
+
+</Callout>
+
+## Channels on Steam: lanes
+
+Other libraries offer **channels** so that a slow reliable stream (chat, file transfer) can't hold up a fast one
+(gameplay events). Steam's equivalent is **lanes**. You configure them per connection and pick one per send:
+
+```csharp title="LaneSetup.cs"
+// After the connection is Connected. Lane 0 = gameplay, lane 1 = chat and bulk data.
+// A lower priority value is sent first; weights only matter between lanes with equal priority.
+connection.ConfigureConnectionLanes(new[] { 0, 1 }, new ushort[] { 1, 1 });
+
+// Chat goes on lane 1, so a burst of chat never delays lane-0 gameplay messages.
+writer.Begin(MsgType.Chat).WriteString(line).SendTo(connection, SendType.Reliable, lane: 1);
+```
+
+Valve's notes on lanes are precise about what they do and don't promise:
+
+- Priorities and weights control the order messages are **sent**. There are **no** guarantees about the order they're
+  received, except that **reliable messages on the same lane arrive in the order sent**.
+- Keep the number of lanes small (around 3 is fine). Lane 0 should carry your most common messages, because other lanes
+  add a little overhead per message.
+- Each side configures lanes for what **it** sends. Configure them on the host's connection to each client, and on the
+  client's connection to the host.
+
+The receiver can't see which lane a message used through Facepunch's `OnMessage`, which is one more reason the type
+byte is the first thing in every message.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Making everything reliable">
+
+It's tempting to send everything reliably "to be safe". On a lossy link, reliable position updates queue behind
+retransmissions and arrive late in bursts, which is exactly the [head-of-line blocking](/modules/theory/packets-and-protocols/)
+problem. Send continuously refreshed state unreliably, and reserve reliable delivery for events.
+
+</Callout>
+
+<Callout type="pitfall" title="Allocating per message">
+
+`connection.SendMessage(Encoding.UTF8.GetBytes(text))` allocates a new array for every send, and the `string` overload
+of `SendMessage` is documented by Facepunch as "a ton of garbage, testing only". At 30 messages per second to 8 peers that
+adds up to GC spikes. Reuse a writer buffer. Facepunch copies the bytes into its own unmanaged buffer before
+`SendMessage` returns, so reuse is safe.
+
+</Callout>
+
+<Callout type="pitfall" title="Trusting message contents">
+
+A peer can send any bytes, of any length, at any rate. Bounds-check every read, cap string lengths, reject unknown types,
+and close connections that send garbage, as `ChatHost` does with reason code 1002. That is the
+[authority](/modules/theory/authority-models/) rule applied at the byte level: the host decides what's valid.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Steam sockets carry **whole messages**. Start each one with a **type byte** and read defensively.
+- `SendType`: `Unreliable` (may drop, reorder, duplicate), `Reliable` (retransmitted, in order), plus `NoNagle` (send now) and `NoDelay` (drop if not ready, unreliable only). Combine with `|`, and check the returned `Result`.
+- Limits: **512 KB** per message and 512 KB of send buffer by default. Keep **unreliable** messages to about one packet, since losing any fragment drops the whole message.
+- Measure RTT with an echoed **host timestamp**, and compare with `connection.QuickStatus().Ping`.
+- **Lanes** (`ConfigureConnectionLanes` + `laneIndex`) are Steam's channels: they prioritise sending, and only reliable messages on the same lane keep their order.
+
+</KeyTakeaways>

@@ -1,0 +1,70 @@
+passPct: 70
+questions:
+  - id: typing-flags
+    type: single
+    prompt: A "player is typing…" indicator is cosmetic and useless if late. Which send flags fit it best?
+    options:
+      - "`SendType.Reliable`"
+      - "`SendType.Reliable | SendType.NoNagle`"
+      - "`SendType.Unreliable | SendType.NoDelay`"
+      - "`SendType.Unreliable` with a sequence number to force ordering"
+    answer: 2
+    explanation: >-
+      `NoDelay` drops the message if it can't go out very soon, which is right for data that's worthless when late.
+      It is only valid for unreliable messages.
+  - id: nodelay-bug
+    type: codeline
+    prompt: One of these sends combines flags in a way Steam doesn't support. Click it.
+    code: |-
+      writer.Begin(MsgType.Chat).WriteString(line);
+      writer.SendTo(c, SendType.Reliable);
+
+      writer.Begin(MsgType.Ping).WriteDouble(now);
+      writer.SendTo(c, SendType.Unreliable | SendType.NoNagle);
+
+      writer.Begin(MsgType.Typing).WriteString(name);
+      writer.SendTo(c, SendType.Reliable | SendType.NoDelay);
+    answerLines: [8]
+    explanation: >-
+      `NoDelay` only applies to unreliable messages. A typing indicator should be `Unreliable | NoDelay`. The chat message
+      (reliable) and the ping (unreliable, sent at once) are fine.
+  - id: max-message
+    type: numeric
+    prompt: What is the largest single message Steam Networking Sockets will send by default, in KB?
+    answer: 512
+    tolerance: 0
+    unit: KB
+    explanation: >-
+      The limit is 512 KB (524,288 bytes), and the default send buffer is also 512 KB. Larger sends fail with
+      `InvalidParam`, so split bigger data yourself.
+  - id: unreliable-guarantees
+    type: multi
+    prompt: What can happen to messages sent with `SendType.Unreliable`? Select all that apply.
+    options:
+      - They can be lost
+      - They can arrive out of order relative to each other
+      - They can arrive more than once
+      - If one fragment of a large unreliable message is lost, the whole message is dropped
+      - They always arrive before reliable messages sent later
+    answers: [0, 1, 2, 3]
+    explanation: >-
+      Valve documents that unreliable messages may be dropped, reordered (also relative to reliable ones) or duplicated.
+      Messages are delivered whole or not at all, which is why unreliable messages should fit in one packet.
+  - id: rtt-order
+    type: order
+    prompt: Order the steps of the module's RTT measurement.
+    items:
+      - "The host sends `Ping(hostTime)` unreliably with `NoNagle`"
+      - "The client echoes the same timestamp back in `Pong(hostTime)`"
+      - "The host reads the `Pong` in `OnMessage`"
+      - "The host computes RTT = now − hostTime"
+    explanation: >-
+      Echoing the host's own timestamp means only one clock is involved, so the clocks don't need to be in sync. Compare
+      the result with `connection.QuickStatus().Ping`.
+  - id: lane-order
+    type: truefalse
+    prompt: With lanes configured, a message on a higher-priority lane is always **received** before a message sent later on a lower-priority lane.
+    answer: false
+    explanation: >-
+      Lane priorities and weights only control the order messages are **sent**. The only receive-order guarantee is that
+      reliable messages on the same lane arrive in the order sent.

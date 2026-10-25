@@ -1,0 +1,73 @@
+passPct: 70
+questions:
+  - id: sdr-symmetric
+    type: single
+    prompt: Why does Steam Datagram Relay work even when both players are behind symmetric NATs?
+    options:
+      - It opens ports on the players' routers with UPnP
+      - Each peer only sends outbound packets to a nearby relay, which every NAT allows
+      - It predicts the NAT's next port mapping
+      - It falls back to TCP
+    answer: 1
+    explanation: >-
+      Hole punching fails on symmetric NATs because the mapped port changes per destination. Relays avoid the problem:
+      both sides make outgoing connections to Valve's relays, and nobody needs an open port.
+  - id: onconnecting-bug
+    type: codeline
+    prompt: This host should reject anyone who isn't in the lobby, but strangers still get in. Click the line that lets them.
+    code: |-
+      public override void OnConnecting(Connection connection, ConnectionInfo info)
+      {
+          SteamId who = info.Identity.SteamId;
+          if (!Session.IsLobbyMember(who))
+          {
+              connection.Close(false, 1001, "Not a member of this lobby");
+          }
+          base.OnConnecting(connection, info);
+      }
+    answerLines: [8]
+    explanation: >-
+      With no `Interface` set, the base `OnConnecting` calls `connection.Accept()`. It runs for rejected peers too because
+      the `if` block doesn't `return`. Only call the base method for peers you want to accept.
+  - id: state-order
+    type: order
+    prompt: Order the connection states a relayed client goes through in a normal session that the host ends.
+    items:
+      - Connecting
+      - FindingRoute
+      - Connected
+      - ClosedByPeer
+    explanation: >-
+      The handshake happens in `Connecting`, route negotiation in `FindingRoute` (unreliable sends are dropped there),
+      messages flow in `Connected`, and the host closing shows up as `ClosedByPeer`. You still call `Close()` afterwards.
+  - id: socket-duties
+    type: multi
+    prompt: Which of these must your code do when using `SocketManager` and `ConnectionManager`? Select all that apply.
+    options:
+      - "Call `Receive()` on each socket and connection manager every frame"
+      - "Call `Close()` on a connection after it reaches `ClosedByPeer` or `ProblemDetectedLocally`"
+      - "Rely on `SteamClient.RunCallbacks()` to deliver messages to `OnMessage`"
+      - "Copy the message bytes out inside `OnMessage` before returning"
+    answers: [0, 1, 3]
+    explanation: >-
+      `RunCallbacks` delivers connection state changes, but messages wait until you call `Receive()`. Ended connections keep
+      their handle until closed, and message memory is released right after `OnMessage` returns.
+  - id: normal-vs-relay
+    type: truefalse
+    prompt: "A client that uses `ConnectNormal` with the host's IP can connect to a socket the host created with `CreateRelaySocket`."
+    answer: false
+    explanation: >-
+      The pairs must match: `CreateRelaySocket` with `ConnectRelay` (by Steam ID), `CreateNormalSocket` with
+      `ConnectNormal` (by address). Plain UDP mode is for local tests.
+  - id: deprecated-api
+    type: single
+    prompt: Which Steam networking API should you avoid in new code?
+    options:
+      - "`SteamNetworkingSockets` with `SocketManager` / `ConnectionManager`"
+      - "`SteamNetworkingMessages`"
+      - "`SteamNetworking` (`SendP2PPacket`, `OnP2PSessionRequest`)"
+      - "`SteamNetworkingUtils`"
+    answer: 2
+    explanation: >-
+      Valve has deprecated `ISteamNetworking`, and Facepunch's wiki marks it deprecated. It has no connection states or
+      socket managers. Use `SteamNetworkingSockets`.

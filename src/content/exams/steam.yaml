@@ -1,0 +1,384 @@
+title: Steamworks with Facepunch — Module Exam
+drawCount: 15
+passPct: 80
+questions:
+  # ---------------------------------------------------------------- steamworks-overview
+  - id: facepunch-async-equivalent
+    type: single
+    tags: [steamworks-overview]
+    prompt: "In Steamworks.NET you create a lobby by registering a `CallResult` for `LobbyCreated_t` and waiting for its handler. What is the Facepunch.Steamworks equivalent?"
+    options:
+      - "`SteamMatchmaking.CreateLobby(...)` followed by polling `SteamMatchmaking.LobbyList`"
+      - "`await SteamMatchmaking.CreateLobbyAsync(maxMembers)`, which returns a nullable `Lobby`"
+      - "`SteamAPI.RunCallbacks()` with a `LobbyCreated_t` handler"
+      - "`new Lobby(maxMembers).Create()`"
+    answer: 1
+    explanation: >-
+      Facepunch wraps Valve's call results in `async` methods, so the code reads top to bottom. The result is `null` when
+      creation fails.
+  - id: relay-hides-ip
+    type: truefalse
+    tags: [steamworks-overview]
+    prompt: When two players connect to each other by Steam ID through Steam Networking Sockets and the relay, neither learns the other's IP address.
+    answer: true
+    explanation: >-
+      Relayed traffic goes through Valve's relays, so peers only see the relay. That hides home IPs and protects the host
+      from being flooded.
+  # ---------------------------------------------------------------- setup-and-callbacks
+  - id: async-callbacks-thread
+    type: single
+    tags: [setup-and-callbacks]
+    prompt: "With `asyncCallbacks: true` (the default) in Unity, where and when do your Steam event handlers run?"
+    options:
+      - On a background thread, so you must marshal to the main thread
+      - On the main thread, roughly 60 times a second, but not in step with `Update`
+      - Only when you call `SteamClient.RunCallbacks()`
+      - Inside `LateUpdate`, after all other scripts
+    answer: 1
+    explanation: >-
+      Facepunch runs a background `async` loop that pumps, then awaits a ~16 ms delay. Unity's synchronization context
+      resumes it on the main thread, so handlers can touch Unity objects but don't run at a fixed point in the frame.
+  - id: teardown-guard
+    type: fill
+    tags: [setup-and-callbacks]
+    prompt: "Which `SteamClient` property should guard Steam calls in `OnDestroy`, where Steam may already be shut down?"
+    answers: [SteamClient.IsValid, IsValid]
+    placeholder: SteamClient.…
+    explanation: >-
+      Destruction order when leaving Play Mode isn't guaranteed. `SteamClient.IsValid` is true only between a successful
+      `Init` and `Shutdown`.
+  - id: init-failure-causes
+    type: multi
+    tags: [setup-and-callbacks]
+    prompt: "Which of these can make `SteamClient.Init` throw? Select all that apply."
+    options:
+      - The Steam client isn't running or isn't logged in
+      - Unity runs as administrator while Steam doesn't
+      - The logged-in account has no license for your own App ID
+      - The native `steam_api` library isn't enabled for the platform
+      - "`asyncCallbacks` is set to true"
+    answers: [0, 1, 2, 3]
+    explanation: >-
+      Init fails when it can't reach a running, logged-in Steam client under the same user and privilege level, when the
+      account lacks a license, or when the native library is missing. The callback mode has nothing to do with it.
+  # ---------------------------------------------------------------- users-and-friends
+  - id: steamid-json
+    type: single
+    tags: [users-and-friends]
+    prompt: Why should you store a Steam ID as a string in JSON save files?
+    options:
+      - Steam IDs contain letters
+      - Many JSON parsers lose precision on 64-bit integers
+      - Steam's terms of service require it
+      - Strings compress better
+    answer: 1
+    explanation: >-
+      A Steam ID is a 64-bit number, and parsers that read numbers as doubles can't represent every 64-bit value exactly.
+      `SteamId.ToString()` gives the decimal value.
+  - id: set-played-with
+    type: truefalse
+    tags: [users-and-friends]
+    prompt: "You can call `SteamFriends.SetPlayedWith(id)` after the match has ended to add everyone to the player's recently played list."
+    answer: false
+    explanation: >-
+      Valve requires that you're in a game with that user at the time, so call it during the session.
+  - id: image-ambiguity
+    type: single
+    tags: [users-and-friends]
+    prompt: "A UI script with `using Steamworks.Data;` and `using UnityEngine.UI;` fails to compile on `Image`. What's the clean fix?"
+    options:
+      - Remove `using UnityEngine.UI;`
+      - "Alias the Steam type, for example `using SteamImage = Steamworks.Data.Image;`"
+      - Rename Unity's Image component in the inspector
+      - Switch to Steamworks.NET
+    answer: 1
+    explanation: >-
+      `Steamworks.Data` has its own `Image` and `Color` structs. An alias or fully qualified names avoids the ambiguity
+      without giving up either namespace.
+  # ---------------------------------------------------------------- lobbies
+  - id: match-start-order
+    type: order
+    tags: [lobbies]
+    prompt: Order the steps from "everyone is ready" to the session starting.
+    items:
+      - Each member sets the member data `ready = 1`
+      - The owner sees that every member is ready
+      - "The owner calls `SetJoinable(false)` and `SetData(\"state\", \"in-game\")`"
+      - "Members receive `OnLobbyDataChanged` and read the new state"
+      - "Members connect to `lobby.Owner.Id`"
+    explanation: >-
+      Members write their own member data, only the owner writes lobby data, and the data change is the signal for
+      everyone to connect to the host.
+  - id: search-distance
+    type: single
+    tags: [lobbies]
+    prompt: A tester on another continent never sees your public lobby in their search, even with matching keys. What is the likely cause?
+    options:
+      - Public lobbies are region-locked
+      - The default search distance is "nearby"; add `FilterDistanceWorldwide()`
+      - The lobby is full
+      - Searches only return friends' lobbies
+    answer: 1
+    explanation: >-
+      `LobbyQuery` defaults to a nearby distance filter. `FilterDistanceWorldwide()` widens it.
+  - id: lobby-data-contents
+    type: multi
+    tags: [lobbies]
+    prompt: Which of these belong in **lobby data**? Select all that apply.
+    options:
+      - Your protocol version
+      - The game mode
+      - The current player count
+      - Every player's position, updated each frame
+      - "A match state such as `in-game`"
+    answers: [0, 1, 4]
+    explanation: >-
+      Lobby data is for what searchers need and what members must agree on, and should change rarely. Searches already
+      know slot counts, and real-time state goes over sockets.
+  # ---------------------------------------------------------------- invites-and-presence
+  - id: connect-format
+    type: single
+    tags: [invites-and-presence]
+    prompt: "Why does the module publish the rich presence `connect` value as `+connect_lobby <id>`?"
+    options:
+      - Steam requires that exact format
+      - It's the same format as the cold-start command line, so one parser handles both entry points
+      - It makes the value shorter
+      - "`steam_display` reads it"
+    answer: 1
+    explanation: >-
+      When a friend joins through presence, the running game receives the `connect` string, and a closed game is launched
+      with it on the command line. Using the `+connect_lobby` format means `TryFindLobbyArg` covers both.
+  - id: special-presence-keys
+    type: multi
+    tags: [invites-and-presence]
+    prompt: Which rich presence keys have a special meaning to Steam? Select all that apply.
+    options:
+      - "`status`"
+      - "`connect`"
+      - "`steam_display`"
+      - "`steam_player_group`"
+      - "`lobby_owner`"
+    answers: [0, 1, 2, 3]
+    explanation: >-
+      `status` is shown in "view game info", `connect` enables Join Game, `steam_display` is a localized token and
+      `steam_player_group` groups players. `lobby_owner` is just an ordinary key you could set yourself.
+  - id: arg-parser-bug
+    type: codeline
+    prompt: This parser crashes when `+connect_lobby` is the last argument. Click the line to fix.
+    code: |-
+      static bool TryFindLobbyArg(string[] args, out SteamId lobbyId)
+      {
+          lobbyId = default;
+          if (args == null) return false;
+          for (int i = 0; i < args.Length; i++)
+          {
+              if (args[i] == "+connect_lobby" && ulong.TryParse(args[i + 1], out ulong raw))
+              {
+                  lobbyId = raw;
+                  return lobbyId.IsValid;
+              }
+          }
+          return false;
+      }
+    answerLines: [5]
+    explanation: >-
+      The loop reads `args[i + 1]`, so it must stop at `args.Length - 1`. Command lines come from other players' presence,
+      so parse them strictly and defensively.
+  # ---------------------------------------------------------------- networking-sockets
+  - id: virtual-port
+    type: single
+    tags: [networking-sockets]
+    prompt: "What is the `virtualport` argument of `CreateRelaySocket` and `ConnectRelay`?"
+    options:
+      - The UDP port opened on the player's router
+      - A number you choose so one host can run several independent sockets; host and client must use the same one
+      - The relay server's port
+      - The Steam App ID
+    answer: 1
+    explanation: >-
+      Relayed connections are addressed by Steam ID, not IP. The virtual port only distinguishes sockets on the same
+      identity, so both sides just have to agree on it.
+  - id: host-self-connect
+    type: truefalse
+    tags: [networking-sockets]
+    prompt: The host should also `ConnectRelay` to its own Steam ID so its chat messages take the same path as everyone else's.
+    answer: false
+    explanation: >-
+      You can't connect to yourself through the relay, and you don't need to. The host is a player that shows its own
+      messages locally and sends to everyone else.
+  - id: finding-route-unreliable
+    type: single
+    tags: [networking-sockets]
+    prompt: A client sends an unreliable message while its connection is in the `FindingRoute` state. What happens to it?
+    options:
+      - It's queued and sent once connected
+      - It's discarded
+      - It's upgraded to reliable
+      - The connection closes
+    answer: 1
+    explanation: >-
+      Unreliable messages are dropped until a route exists. Send anything important reliably, or wait for `OnConnected`.
+  # ---------------------------------------------------------------- messages-and-channels
+  - id: no-length-prefix
+    type: single
+    tags: [messages-and-channels]
+    prompt: Why doesn't the module's protocol need a length prefix to find where each message ends?
+    options:
+      - Every message is padded to 1,200 bytes
+      - "Steam Networking Sockets deliver messages: each `SendMessage` arrives as exactly one message of the same size"
+      - The type byte encodes the length
+      - Reliable delivery preserves stream boundaries like TCP
+    answer: 1
+    explanation: >-
+      Unlike a TCP stream, messages are never merged or split for you. You still need a type byte to know what kind of
+      message it is.
+  - id: readstring-bug
+    type: codeline
+    prompt: This reader trusts a length that came from another player. Click the line that can read past the message.
+    code: |-
+      public string ReadString(int maxBytes)
+      {
+          Need(2);
+          int n = BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan(pos, 2));
+          pos += 2;
+          string s = Encoding.UTF8.GetString(buf, pos, n);
+          pos += n;
+          return s;
+      }
+    answerLines: [6]
+    explanation: >-
+      Before decoding, check `n` against `maxBytes` and call `Need(n)`. Otherwise a peer can claim a 60,000-byte string in
+      a 10-byte message and make you read stale buffer contents or throw.
+  - id: nagle-advice
+    type: single
+    tags: [messages-and-channels]
+    prompt: What is Valve's advice on Nagle buffering for a game tick that sends several messages?
+    options:
+      - Set `NoNagle` on every message
+      - "Send them normally, then mark the last one `NoNagle` or call `connection.Flush()`"
+      - Use reliable messages only, which bypass Nagle
+      - Increase the Nagle timer to 50 ms
+    answer: 1
+    explanation: >-
+      Nagle lets small messages share a packet at the cost of a few milliseconds. Flushing at the end of the tick keeps the
+      batching without the delay.
+  # ---------------------------------------------------------------- auth-tickets
+  - id: reuse-ticket
+    type: truefalse
+    tags: [auth-tickets]
+    prompt: To save a round trip, a client can keep its auth ticket and present it again in the next match.
+    answer: false
+    explanation: >-
+      Tickets are single use. Request a fresh one for each session, and cancel it when the session ends.
+  - id: web-api-ticket
+    type: single
+    tags: [auth-tickets]
+    prompt: Your own HTTPS backend needs to verify a player through the `AuthenticateUserTicket` Web API. Which Facepunch call produces the right ticket?
+    options:
+      - "`SteamUser.GetAuthSessionTicketAsync(identity)`"
+      - "`SteamUser.GetAuthTicketForWebApiAsync(identity)`"
+      - "`SteamUser.BeginAuthSession(ticket, steamId)`"
+      - "`SteamClient.SteamId.ToString()`"
+    answer: 1
+    explanation: >-
+      Session tickets are for another Steam client or game server via `BeginAuthSession`. Valve requires a separate Web API
+      ticket for backends.
+  - id: slow-verdict
+    type: single
+    tags: [auth-tickets]
+    prompt: "A peer's `OnValidateAuthTicketResponse` hasn't arrived after several seconds. What does Valve's guidance suggest?"
+    options:
+      - Disconnect them immediately
+      - Treat them as verified, since `BeginAuthSession` returned OK
+      - Keep the session going, but don't treat the identity as confirmed or let them affect shared state yet
+      - Call `BeginAuthSession` again
+    answer: 2
+    explanation: >-
+      The callback can be delayed "for an indefinite period of time". Show the peer as verifying, keep them out of shared
+      state, and choose a timeout policy.
+  # ---------------------------------------------------------------- testing
+  - id: cold-start-480
+    type: single
+    tags: [testing]
+    prompt: Why can't you fully test a cold-start invite on App ID 480?
+    options:
+      - Invites are disabled on 480
+      - Steam launches the installed Spacewar, not your build
+      - Lobbies on 480 are always friends-only
+      - The overlay doesn't work on 480
+    answer: 1
+    explanation: >-
+      Steam launches whatever is installed for the App ID. Test the `+connect_lobby` path on your own App ID, or start your
+      build with the argument yourself.
+  - id: overlay-requirements
+    type: multi
+    tags: [testing]
+    prompt: What does the Steam overlay need before an invite button can open it? Select all that apply.
+    options:
+      - A build rather than the Unity editor
+      - The overlay enabled in Steam's In Game settings
+      - The overlay enabled in the game's own Steam properties
+      - "`asyncCallbacks: false`"
+    answers: [0, 1, 2]
+    explanation: >-
+      The overlay is injected into the game's rendering, which generally doesn't happen in the editor. Check
+      `SteamUtils.IsOverlayEnabled` and press Shift+Tab to confirm it's alive.
+  - id: different-networks
+    type: single
+    tags: [testing]
+    prompt: Why test at least once with the two PCs on different networks (for example one on a phone hotspot)?
+    options:
+      - Steam bans two accounts on one LAN
+      - On one LAN Steam may find a direct route, which hides relay-only problems
+      - Lobbies don't appear on LANs
+      - Auth tickets fail on private IP addresses
+    answer: 1
+    explanation: >-
+      Relay-specific behaviour, such as slower pings, longer `FindingRoute` and dropped unreliable messages during
+      negotiation, only appears when the traffic is actually relayed.
+  # ---------------------------------------------------------------- stats-and-achievements
+  - id: setstat-false
+    type: single
+    tags: [stats-and-achievements]
+    prompt: "You added an `INT` stat called `ChatsSent` on the partner site an hour ago, and `SteamUserStats.SetStat(\"ChatsSent\", 1)` returns false. What's the most likely cause?"
+    options:
+      - "You didn't call `RequestCurrentStats()` first"
+      - The change was saved as a draft and never published
+      - Stats can only be set from game servers
+      - "`SetStat` only accepts floats"
+    answer: 1
+    explanation: >-
+      Stats and achievements only work once the changes are published from the Publish tab. `RequestCurrentStats` is
+      obsolete, and the `int` overload matches an `INT` stat.
+  - id: leaderboard-rate
+    type: numeric
+    tags: [stats-and-achievements]
+    prompt: Valve rate limits leaderboard score uploads. How many uploads are allowed per 10 minutes?
+    answer: 10
+    tolerance: 0
+    unit: uploads
+    explanation: >-
+      Valve documents 10 uploads per 10 minutes, with one upload in flight at a time. Submit at the end of a session, not on
+      every point scored.
+  - id: progress-zero-zero
+    type: single
+    tags: [stats-and-achievements]
+    prompt: "`SteamUserStats.OnAchievementProgress` fires with `(achievement, 0, 0)`. What does it mean?"
+    options:
+      - The achievement was cleared
+      - The achievement has been fully unlocked and stored
+      - The progress stat is missing
+      - The store failed
+    answer: 1
+    explanation: >-
+      The event comes from `UserAchievementStored_t`. Both progress values being zero means the achievement is unlocked;
+      other values report `IndicateAchievementProgress` calls.
+  - id: indicate-progress
+    type: truefalse
+    tags: [stats-and-achievements]
+    prompt: "`SteamUserStats.IndicateAchievementProgress(\"ACH_WIN_100_GAMES\", 50, 100)` sets the achievement's progress to 50%."
+    answer: false
+    explanation: >-
+      Valve says it will NOT set progress or unlock anything. It only shows a pop-up. Progress comes from the stat you
+      update with `SetStat` / `AddStat`.

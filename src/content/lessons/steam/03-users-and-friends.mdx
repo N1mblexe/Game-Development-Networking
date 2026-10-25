@@ -1,0 +1,311 @@
+---
+title: Users, Steam IDs and Friends
+order: 3
+summary: Identify players by Steam ID, read names and friend state, load avatars into Unity textures, and find friends who are playing your game.
+durationMin: 20
+objectives:
+  - Explain what a Steam ID identifies and why it, not the display name, is the key for players
+  - Read the local user's identity and enumerate friends with Facepunch's Friend struct
+  - Download avatars asynchronously and convert Steam's RGBA image into a correctly oriented Texture2D
+  - React to persona and presence changes with SteamFriends.OnPersonaStateChange
+prerequisites: [steam/setup-and-callbacks]
+tags: [steam, friends, identity, avatars]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: SteamFriends.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamFriends.cs
+  - title: 'Facepunch.Steamworks source: Structs/Friend.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Structs/Friend.cs
+  - title: 'Facepunch.Steamworks source: Structs/SteamId.cs and Structs/Image.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/tree/master/Facepunch.Steamworks/Structs
+  - title: 'Facepunch.Steamworks wiki: Getting A Client''s Avatar'
+    url: https://wiki.facepunch.com/steamworks/GetClientAvatarUnity
+  - title: 'Steamworks API: ISteamFriends'
+    url: https://partner.steamgames.com/doc/api/ISteamFriends
+  - title: 'Steamworks: User Authentication and Ownership (Steam IDs)'
+    url: https://partner.steamgames.com/doc/features/auth
+---
+
+In a local-only Unity game, a "player" is whatever you decide: an index in a list, a `PlayerInput` component, a
+save slot. Online, every other system needs a stable answer to "who is this?" that both machines agree on. Steam
+already has one. Every account, lobby and game server has a **Steam ID**, and every Steam service in this module
+(lobbies, invites, connections, auth tickets, leaderboards) talks in Steam IDs. Learning to treat it as your player
+key now saves you a painful refactor later.
+
+## The Steam ID
+
+A <Term id="steam-id">Steam ID</Term> is a 64-bit number such as `76561197960287930`. It encodes the account type
+and universe as well as the account number, which is why the same type identifies users, <Term id="steam-lobby">lobbies</Term>
+and game servers. In Facepunch.Steamworks it's the `SteamId` struct:
+
+| Member | Meaning |
+|---|---|
+| `ulong Value` | The full 64-bit ID. `SteamId` converts implicitly to and from `ulong`. |
+| `uint AccountId` | The low 32 bits, the "account number" shown in some URLs. Not unique across account types. |
+| `bool IsValid` | `false` for the default (zero) ID. Use it before trusting an ID you parsed or received. |
+| `ToString()` | The decimal 64-bit value, which is safe to store in lobby data or save files. |
+
+Your own ID and name come from `SteamClient`:
+
+```csharp title="WhoAmI.cs"
+SteamId me = SteamClient.SteamId;      // 64-bit ID of the logged-in account
+string myName = SteamClient.Name;      // current persona (display) name
+FriendState state = SteamClient.State; // Online, Away, Busy, …
+```
+
+<Callout type="pitfall" title="Display names are not identities">
+
+Steam display names are not unique, can contain any Unicode, and can change at any moment. Two players called "Alex"
+in the same lobby is normal. Key every dictionary, save file and kick list by `SteamId`, and only use `Name` for
+display. Also remember that a name or ID a client *sends you* is just bytes: lesson 08 shows how to verify it.
+
+</Callout>
+
+## Friends: the `Friend` struct
+
+Facepunch wraps any user you know about (not only friends) in a `Friend` struct. It holds just the `SteamId Id`; every
+property calls into the Steam client when you read it, so values are always current.
+
+| Member | What it tells you |
+|---|---|
+| `Name`, `Nickname` | Persona name, and the nickname *you* gave them (if any) |
+| `State`, `IsOnline`, `IsAway`, `IsBusy` | Their online status (`FriendState`) |
+| `Relationship`, `IsFriend`, `IsBlocked` | How they relate to the local user |
+| `IsMe` | `Id == SteamClient.SteamId` |
+| `IsPlayingThisGame` | Their current game has the same App ID as yours |
+| `GameInfo` | `FriendGameInfo?` with `GameID` and the `Lobby?` they are in, or `null` when not in a game |
+| `SteamLevel` | Their Steam level (0 until downloaded) |
+| `GetRichPresence(key)` | One of their rich presence values (lesson 05) |
+| `RequestInfoAsync()` | Waits until Steam has downloaded their name and persona data |
+
+You get your friends from `SteamFriends.GetFriends()`, and lobby members come back as `Friend` values too, so the
+same UI code renders both.
+
+<Callout type="steam" title="Who Steam 'knows about'">
+
+Valve documents that the Steam client automatically has data for your friends and for people who share a "source"
+with you: the same lobby, Steam group, chat room or game server. For anyone else, such as a stranger on a leaderboard,
+the name may read as `[unknown]` until you call `await friend.RequestInfoAsync()` (or
+`SteamFriends.RequestUserInformation`). Avatars follow the same rule.
+
+</Callout>
+
+## A friends panel
+
+The component below lists online friends, puts the ones playing your game at the top, and shows which of them are in
+a lobby you could join. It refreshes when Steam reports a persona change instead of polling.
+
+```csharp title="FriendsPanel.cs"
+using System.Linq;
+using System.Text;
+using Steamworks;
+using TMPro;
+using UnityEngine;
+
+public sealed class FriendsPanel : MonoBehaviour
+{
+    [SerializeField] TMP_Text list;
+    bool dirty = true;
+
+    void OnEnable()
+    {
+        SteamFriends.OnPersonaStateChange += HandlePersonaChange;
+        dirty = true;
+    }
+
+    void OnDisable() => SteamFriends.OnPersonaStateChange -= HandlePersonaChange;
+
+    // Fires for name, status, game and avatar changes, possibly many times a second
+    // when you first log in. Just mark the list dirty and rebuild at most once per frame.
+    void HandlePersonaChange(Friend friend) => dirty = true;
+
+    void LateUpdate()
+    {
+        if (!dirty || !SteamBootstrap.IsReady) return;
+        dirty = false;
+
+        var online = SteamFriends.GetFriends()
+            .Where(f => f.IsOnline)
+            .OrderByDescending(f => f.IsPlayingThisGame)
+            .ThenBy(f => f.Name);
+
+        var sb = new StringBuilder();
+        foreach (Friend f in online)
+        {
+            sb.Append(f.Name);
+            if (f.IsPlayingThisGame)
+            {
+                // GameInfo is null when they aren't in a game; Lobby is null when not in one.
+                var lobby = f.GameInfo?.Lobby;
+                sb.Append(lobby.HasValue ? "  — in a lobby" : "  — playing");
+            }
+            sb.AppendLine();
+        }
+        list.text = sb.Length > 0 ? sb.ToString() : "No friends online.";
+    }
+}
+```
+
+`f.GameInfo?.Lobby` is the start of "join a friend": lesson 05 turns that lobby into a join button.
+
+## Avatars
+
+Avatars are downloaded on demand, so they're `async`. Facepunch offers three sizes, each returning
+a task of `Image?` (`null` on failure):
+
+| Method | Size |
+|---|---|
+| `SteamFriends.GetSmallAvatarAsync(id)` | 32 × 32 |
+| `SteamFriends.GetMediumAvatarAsync(id)` | 64 × 64 |
+| `SteamFriends.GetLargeAvatarAsync(id)` | 128 × 128 |
+
+The same methods exist on `Friend` (`friend.GetMediumAvatarAsync()`). The returned `Steamworks.Data.Image` has
+`Width`, `Height` and `byte[] Data` in **RGBA order, rows top to bottom**. Unity's `Texture2D` stores rows **bottom to
+top**, so you must flip the rows or every avatar renders upside down.
+
+<Sequence
+  title="Loading a friend's avatar"
+  actors={[
+    { id: 'ui', label: 'Avatar UI', kind: 'client' },
+    { id: 'cache', label: 'SteamAvatarCache', kind: 'client' },
+    { id: 'steam', label: 'Steam client', kind: 'steam' },
+  ]}
+  steps={[
+    { from: 'ui', to: 'cache', label: 'GetAsync(steamId)', kind: 'local' },
+    { from: 'cache', to: 'cache', label: 'cache hit? return the Texture2D', kind: 'local' },
+    { from: 'cache', to: 'steam', label: 'GetMediumAvatarAsync(steamId)', note: 'may need to download user info first', kind: 'reliable' },
+    { from: 'steam', to: 'cache', label: 'Image (RGBA, top-down rows)', kind: 'event' },
+    { from: 'cache', to: 'cache', label: 'flip rows → Texture2D (RGBA32) → store', kind: 'local' },
+    { from: 'cache', to: 'ui', label: 'texture assigned to RawImage', kind: 'event' },
+  ]}
+/>
+
+```csharp title="SteamAvatarCache.cs"
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Steamworks;
+using UnityEngine;
+using SteamImage = Steamworks.Data.Image;   // avoid clashing with UnityEngine.UI.Image
+
+public static class SteamAvatarCache
+{
+    static readonly Dictionary<ulong, Texture2D> cache = new();
+    static readonly Dictionary<ulong, Task<Texture2D>> pending = new();
+
+    /// Returns a 64×64 avatar texture, downloading it once and reusing it afterwards.
+    public static Task<Texture2D> GetAsync(SteamId id)
+    {
+        if (cache.TryGetValue(id, out var tex)) return Task.FromResult(tex);
+        if (pending.TryGetValue(id, out var task)) return task;   // already downloading
+
+        task = LoadAsync(id);
+        pending[id] = task;
+        return task;
+    }
+
+    static async Task<Texture2D> LoadAsync(SteamId id)
+    {
+        try
+        {
+            SteamImage? image = await SteamFriends.GetMediumAvatarAsync(id);
+            if (!image.HasValue) return null;   // no avatar or download failed
+
+            Texture2D tex = ToTexture(image.Value);
+            cache[id] = tex;
+            return tex;
+        }
+        finally
+        {
+            pending.Remove(id);
+        }
+    }
+
+    /// Steam images are RGBA with the first row at the top. Unity textures start at the bottom.
+    public static Texture2D ToTexture(SteamImage image)
+    {
+        int w = (int)image.Width, h = (int)image.Height, row = w * 4;
+        var flipped = new byte[image.Data.Length];
+        for (int y = 0; y < h; y++)
+            Buffer.BlockCopy(image.Data, y * row, flipped, (h - 1 - y) * row, row);
+
+        var tex = new Texture2D(w, h, TextureFormat.RGBA32, mipChain: false);
+        tex.LoadRawTextureData(flipped);
+        tex.Apply();
+        return tex;
+    }
+
+    /// Call when leaving multiplayer, or textures pile up for every player you've seen.
+    public static void Clear()
+    {
+        foreach (var tex in cache.Values) UnityEngine.Object.Destroy(tex);
+        cache.Clear();
+    }
+}
+```
+
+Using it from UI is one line: `rawImage.texture = await SteamAvatarCache.GetAsync(friend.Id);`. Because Facepunch
+completes its tasks on the main thread (lesson 02), you can touch Unity objects right after the `await`.
+
+<Callout type="pitfall" title="Steamworks.Data.Image and Color vs. Unity's">
+
+`Steamworks.Data` contains structs called `Image` and `Color`. With `using Steamworks.Data;` and `using UnityEngine.UI;`
+in the same file, `Image` becomes ambiguous, and `Color` clashes with `UnityEngine.Color`. Use an alias
+(`using SteamImage = Steamworks.Data.Image;`) or fully qualified names instead of importing the whole namespace in UI code.
+
+</Callout>
+
+## Opening Steam UI for a user
+
+The <Term id="steam-overlay">Steam overlay</Term> can show Steam's own pages for a user. That gives you profile,
+"add friend" and chat buttons with no UI work:
+
+```csharp title="PlayerContextMenu.cs"
+using Steamworks;
+
+public static class PlayerContextMenu
+{
+    public static void ShowProfile(SteamId id) => SteamFriends.OpenUserOverlay(id, "steamid");
+    public static void AddFriend(SteamId id)   => SteamFriends.OpenUserOverlay(id, "friendadd");
+    public static void Chat(SteamId id)        => SteamFriends.OpenUserOverlay(id, "chat");
+
+    /// Adds them to the local user's "recently played with" list. Valve requires that you're in a game
+    /// with them at the time, so call it during the session, not after it.
+    public static void RecordPlayedWith(SteamId id) => SteamFriends.SetPlayedWith(id);
+}
+```
+
+The dialog names (`"steamid"`, `"friendadd"`, `"chat"`, `"stats"`, `"achievements"`, …) are Valve's, listed under
+`ActivateGameOverlayToUser` in the `ISteamFriends` docs. The overlay must be available for these to do anything, and it
+generally isn't inside the Unity editor. Lesson 09 covers testing it.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Polling friends every frame">
+
+`SteamFriends.GetFriends()` and every `Friend` property call into the Steam client. Iterating 300 friends and reading
+`Name`, `State` and `GameInfo` every frame is wasted work. Rebuild lists on `OnPersonaStateChange` (coalesced to once
+per frame, as above) or on a slow timer.
+
+</Callout>
+
+<Callout type="pitfall" title="Storing the 32-bit account ID">
+
+`SteamId.AccountId` looks like a friendlier player ID, but it drops the account type and universe. Converting it back
+requires assumptions, and it can't represent lobbies or servers. Store `SteamId.Value` (a `ulong`) or its decimal
+string. In JSON, store it as a string, because many JSON parsers lose precision on 64-bit integers.
+
+</Callout>
+
+<KeyTakeaways>
+
+- A **Steam ID** (`SteamId`, 64-bit) identifies users, lobbies and servers. Use it as your player key, never the display name.
+- `SteamClient.SteamId` / `Name` give you the local user. `SteamFriends.GetFriends()` returns `Friend` structs whose properties read live data from the Steam client.
+- `Friend.IsPlayingThisGame` and `Friend.GameInfo?.Lobby` tell you which friends you could join.
+- Avatars are `async` RGBA images with top-down rows: **flip them** into a `Texture2D`, and cache by Steam ID.
+- Refresh friend UI on **`SteamFriends.OnPersonaStateChange`**, and use the overlay (`OpenUserOverlay`) for profile, chat and friend-request actions.
+
+</KeyTakeaways>

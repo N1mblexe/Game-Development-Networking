@@ -1,0 +1,416 @@
+cards:
+  # ------------------------------------------------------------------ steamworks-overview
+  - id: steamworks-what
+    lesson: steam/steamworks-overview
+    front: What is Steamworks?
+    back: Valve's SDK and backend for games on Steam. A native C++ library exposes interfaces such as ISteamFriends, ISteamMatchmaking and ISteamNetworkingSockets.
+  - id: steam-client-role
+    lesson: steam/steamworks-overview
+    front: Why must the Steam client be running for Steamworks to work?
+    back: The SDK in your game talks to the local Steam client over IPC, and the client talks to Valve. Without it there is nobody to answer.
+  - id: steam-async
+    lesson: steam/steamworks-overview
+    front: How do most Steam requests return their results?
+    back: Asynchronously, as callbacks queued by the Steam client. Your game must pump the queue for them to arrive.
+  - id: facepunch-vs-net
+    lesson: steam/steamworks-overview
+    front: How does Facepunch.Steamworks differ from Steamworks.NET?
+    back: Facepunch is idiomatic C# with async Tasks, events and structs like Lobby and Friend. Steamworks.NET mirrors Valve's C++ API one to one.
+  - id: one-wrapper
+    lesson: steam/steamworks-overview
+    front: Why can't you use Facepunch.Steamworks and Steamworks.NET in one project?
+    back: Both use the Steamworks namespace, which causes ambiguous-type errors. Pick one wrapper per project.
+  - id: core-trio
+    lesson: steam/steamworks-overview
+    front: Which three Steam services form this module's multiplayer core?
+    back: Lobbies for discovery, Steam Networking Sockets over the Steam Datagram Relay for transport, and auth session tickets for identity and ownership.
+  - id: app-id-480
+    lesson: steam/steamworks-overview
+    front: What is App ID 480?
+    back: Spacewar, Valve's sample game. Anyone can develop against it until they have their own App ID, but its lobby list and achievements are shared.
+  - id: steam-doesnt-do
+    lesson: steam/steamworks-overview
+    front: Name things Steam does NOT do for your multiplayer game.
+    back: Game state replication, cheat prevention and cross-platform play. Dedicated servers need the separate SteamServer API.
+  - id: facepunch-version
+    lesson: steam/steamworks-overview
+    front: Which Facepunch.Steamworks version and distribution does this course use?
+    back: 2.5.2 from the GitHub release zip, whose Unity folder has ready-made .meta files. NuGet stops at 2.3.3.
+
+  # ------------------------------------------------------------------ setup-and-callbacks
+  - id: init-call
+    lesson: steam/setup-and-callbacks
+    front: Which call starts Steam in Facepunch.Steamworks, and how does it report failure?
+    back: SteamClient.Init(appId, asyncCallbacks). It throws an exception, so wrap it in try/catch.
+  - id: async-callbacks-flag
+    lesson: steam/setup-and-callbacks
+    front: "What does asyncCallbacks: true do?"
+    back: Init starts a background loop that pumps callbacks about every 16 ms. In Unity the handlers resume on the main thread.
+  - id: manual-pump
+    lesson: steam/setup-and-callbacks
+    front: "With asyncCallbacks: false, what must you call every frame?"
+    back: SteamClient.RunCallbacks(), typically in Update. Without it, awaits never complete and events never fire.
+    code: |-
+      void Update()
+      {
+          if (SteamClient.IsValid) SteamClient.RunCallbacks();
+      }
+  - id: shutdown
+    lesson: steam/setup-and-callbacks
+    front: When do you call SteamClient.Shutdown()?
+    back: Once, when the bootstrap is destroyed or disabled on exit. Any Steam call after it is a bug.
+  - id: is-valid
+    lesson: steam/setup-and-callbacks
+    front: What does SteamClient.IsValid tell you?
+    back: Whether Steam is initialized and not yet shut down. Guard Update and teardown code with it.
+  - id: restart-app
+    lesson: steam/setup-and-callbacks
+    front: What does SteamClient.RestartAppIfNecessary(appId) do?
+    back: Checks whether the exe was started outside Steam. If it returns true, Steam is relaunching the game and you should quit immediately.
+  - id: domain-reload-statics
+    lesson: steam/setup-and-callbacks
+    front: What goes wrong with Steam when Reload Domain is disabled?
+    back: Static events and fields survive between Play sessions, so old handlers fire again and Init throws if Shutdown never ran. Unsubscribe, reset statics and always shut down.
+  - id: dispatch-on-exception
+    lesson: steam/setup-and-callbacks
+    front: Why set Dispatch.OnException?
+    back: Exceptions thrown inside Steam callbacks are caught by Facepunch's dispatcher. Without the hook they disappear silently.
+  - id: is-logged-on
+    lesson: steam/setup-and-callbacks
+    front: What does SteamClient.IsLoggedOn tell you?
+    back: Whether the Steam client is connected to Valve. In offline mode Init succeeds, but lobbies and networking don't work.
+
+  # ------------------------------------------------------------------ users-and-friends
+  - id: steam-id-what
+    lesson: steam/users-and-friends
+    front: What is a Steam ID?
+    back: A 64-bit number that identifies a user, lobby or game server, encoding account type and universe. In Facepunch it's the SteamId struct.
+  - id: player-key-card
+    lesson: steam/users-and-friends
+    front: What should you key player data by?
+    back: SteamId.Value, never the display name, which isn't unique and can change. Store it as a string in JSON.
+  - id: account-id-trap
+    lesson: steam/users-and-friends
+    front: Why not store SteamId.AccountId?
+    back: It's only the low 32 bits and drops the account type and universe, so it can't reliably be turned back into a Steam ID.
+  - id: local-user
+    lesson: steam/users-and-friends
+    front: How do you get the local player's ID and name?
+    back: SteamClient.SteamId and SteamClient.Name.
+  - id: friend-struct-card
+    lesson: steam/users-and-friends
+    front: What does Facepunch's Friend struct contain?
+    back: Only a SteamId. Every property (Name, State, IsPlayingThisGame, GameInfo) reads live data from the Steam client.
+  - id: friend-in-lobby
+    lesson: steam/users-and-friends
+    front: How can you tell that a friend is in a lobby you might join?
+    back: friend.IsPlayingThisGame is true and friend.GameInfo?.Lobby has a value.
+  - id: avatar-flip
+    lesson: steam/users-and-friends
+    front: Why must you flip Steam avatar images for Unity?
+    back: Steam's RGBA rows go top to bottom, but Texture2D rows go bottom to top. Unflipped avatars render upside down.
+  - id: unknown-user
+    lesson: steam/users-and-friends
+    front: A stranger's name shows as [unknown]. What do you do?
+    back: Call await friend.RequestInfoAsync() (or SteamFriends.RequestUserInformation) so Steam downloads their persona data.
+  - id: persona-change
+    lesson: steam/users-and-friends
+    front: How should a friends list stay up to date?
+    back: Mark it dirty on SteamFriends.OnPersonaStateChange and rebuild at most once per frame, instead of polling.
+  - id: open-user-overlay
+    lesson: steam/users-and-friends
+    front: How do you open a player's Steam profile from the game?
+    back: SteamFriends.OpenUserOverlay(id, "steamid"). Other dialogs include "friendadd" and "chat".
+
+  # ------------------------------------------------------------------ lobbies
+  - id: lobby-what
+    lesson: steam/lobbies
+    front: What is a Steam lobby?
+    back: A Steam-hosted room with members, one owner, owner-written lobby data, per-member data and chat. It's destroyed when the last member leaves.
+  - id: create-lobby-invisible
+    lesson: steam/lobbies
+    front: What visibility does CreateLobbyAsync give a new lobby?
+    back: Invisible. Call SetPublic(), SetFriendsOnly() or SetPrivate() straight after creating it.
+  - id: lobby-types
+    lesson: steam/lobbies
+    front: Which lobby types appear in searches?
+    back: Public and Invisible. Friends-only and private lobbies are reached through the friends list or invites.
+  - id: set-joinable
+    lesson: steam/lobbies
+    front: What does Lobby.SetJoinable(false) do?
+    back: Closes the lobby to new joiners without changing its visibility. Use it when a match starts.
+  - id: lobby-vs-member-data
+    lesson: steam/lobbies
+    front: Lobby data vs member data?
+    back: Lobby data is written only by the owner and readable by everyone, including searchers. Member data is per member, and each member writes only their own.
+  - id: lobby-query-null
+    lesson: steam/lobbies
+    front: What does LobbyQuery.RequestAsync() return when nothing matches?
+    back: null, not an empty array. Coalesce it before iterating.
+  - id: lobby-filter-480
+    lesson: steam/lobbies
+    front: How do you avoid other developers' lobbies on App ID 480?
+    back: Filter with WithKeyValue on a key unique to your project, plus a protocol version, and ignore results that don't parse.
+  - id: lobby-host-election
+    lesson: steam/lobbies
+    front: How does this module decide who hosts the session?
+    back: The lobby owner hosts. Every other member connects to lobby.Owner.Id.
+  - id: lobby-join-result
+    lesson: steam/lobbies
+    front: How do you know whether lobby.Join() succeeded?
+    back: It returns a RoomEnter. Anything but RoomEnter.Success (Full, DoesntExist, NotAllowed…) is a failure.
+  - id: lobby-leave
+    lesson: steam/lobbies
+    front: When should you call lobby.Leave()?
+    back: When the player backs out of multiplayer, before joining another lobby, and in OnDestroy if SteamClient.IsValid.
+
+  # ------------------------------------------------------------------ invites-and-presence
+  - id: invite-overlay
+    lesson: steam/invites-and-presence
+    front: How do you open Steam's invite dialog for your lobby?
+    back: SteamFriends.OpenGameInviteOverlay(lobby.Id). It needs the overlay, so test it in a build.
+  - id: invite-friend
+    lesson: steam/invites-and-presence
+    front: How do you invite a friend from your own UI?
+    back: lobby.InviteFriend(friend.Id). It returns true when the invite was sent.
+  - id: join-requested
+    lesson: steam/invites-and-presence
+    front: Which event fires when a player accepts an invite or joins a friend while the game is running?
+    back: SteamFriends.OnGameLobbyJoinRequested(lobby, friendId). Route it to your normal join code.
+  - id: lobby-invite-event
+    lesson: steam/invites-and-presence
+    front: What is SteamMatchmaking.OnLobbyInvite for?
+    back: It fires when an invite arrives while the game runs, which is good for a toast. Accepting the invite is a separate event.
+  - id: connect-lobby-arg
+    lesson: steam/invites-and-presence
+    front: How does a game launched by an invite know which lobby to join?
+    back: Steam passes +connect_lobby <lobby id> on the command line. Parse it once Steam is initialized; there's no callback.
+  - id: rich-presence-what
+    lesson: steam/invites-and-presence
+    front: What is rich presence?
+    back: Up to 20 key/value strings Steam attaches to the player and shows to friends. Set them with SteamFriends.SetRichPresence(key, value).
+  - id: rp-connect
+    lesson: steam/invites-and-presence
+    front: What does the rich presence key "connect" do?
+    back: Enables Join Game for the player. A friend's running game gets OnGameRichPresenceJoinRequested; a closed game is launched with the string on its command line.
+  - id: rp-steam-display
+    lesson: steam/invites-and-presence
+    front: Why doesn't steam_display show anything on App ID 480?
+    back: It needs a localization token from a rich presence file uploaded for your own app, which you can't do for Spacewar.
+  - id: rp-clear
+    lesson: steam/invites-and-presence
+    front: Why clear presence when leaving a lobby?
+    back: A stale connect value keeps Join Game enabled, and friends launch into a lobby that no longer exists.
+
+  # ------------------------------------------------------------------ networking-sockets
+  - id: sdr-what
+    lesson: steam/networking-sockets
+    front: What is Steam Datagram Relay?
+    back: Valve's relay network. It carries traffic between Steam IDs through any NAT, hides IP addresses, and authenticates and encrypts the traffic.
+  - id: create-relay-socket
+    lesson: steam/networking-sockets
+    front: How does the host listen for relayed connections?
+    back: SteamNetworkingSockets.CreateRelaySocket with a SocketManager subclass and a virtual port.
+    code: ChatHost host = SteamNetworkingSockets.CreateRelaySocket<ChatHost>(0);
+  - id: connect-relay
+    lesson: steam/networking-sockets
+    front: How does a client connect to the host?
+    back: SteamNetworkingSockets.ConnectRelay with a ConnectionManager subclass, the host's Steam ID and the same virtual port.
+    code: ChatClient client = SteamNetworkingSockets.ConnectRelay<ChatClient>(lobby.Owner.Id, 0);
+  - id: receive-pump
+    lesson: steam/networking-sockets
+    front: Why call Receive() every frame?
+    back: RunCallbacks delivers state changes, but messages wait on the socket until Receive() hands them to OnMessage.
+  - id: on-connecting
+    lesson: steam/networking-sockets
+    front: What does the default SocketManager.OnConnecting do?
+    back: Accepts every connection. Check the verified info.Identity.SteamId and close unwanted peers instead of calling base.
+  - id: close-handles
+    lesson: steam/networking-sockets
+    front: What must you do after a connection reaches ClosedByPeer or ProblemDetectedLocally?
+    back: Call Close() on it. The handle stays allocated until you do.
+  - id: connection-states
+    lesson: steam/networking-sockets
+    front: Name the normal connection state progression.
+    back: Connecting, FindingRoute, Connected, then ClosedByPeer or ProblemDetectedLocally when it ends.
+  - id: end-reason
+    lesson: steam/networking-sockets
+    front: Where do you find out why a connection ended?
+    back: info.EndReason (a NetConnectionEnd). 1000–1999 are your own codes; 3000s are local, 4000s remote and 5000s miscellaneous problems.
+  - id: old-p2p-api
+    lesson: steam/networking-sockets
+    front: Should you use SteamNetworking.SendP2PPacket?
+    back: No. ISteamNetworking is deprecated; use SteamNetworkingSockets.
+  - id: onmessage-lifetime
+    lesson: steam/networking-sockets
+    front: How long is the data pointer in OnMessage valid?
+    back: Only during the callback. Facepunch releases the native message when your override returns, so copy it out first.
+
+  # ------------------------------------------------------------------ messages-and-channels
+  - id: messages-not-streams
+    lesson: steam/messages-and-channels
+    front: Do Steam sockets deliver a byte stream or messages?
+    back: Messages. Each SendMessage call arrives as exactly one message of the same size.
+  - id: type-byte
+    lesson: steam/messages-and-channels
+    front: Why does every message in the module start with a type byte?
+    back: So the receiver knows which kind of message it is. OnMessage doesn't tell you the lane, and the channel parameter is always 0.
+  - id: sendtype-reliable
+    lesson: steam/messages-and-channels
+    front: What does SendType.Reliable guarantee?
+    back: Retransmission until acknowledged, and reliable messages arrive in the order sent. It's the default.
+  - id: sendtype-unreliable
+    lesson: steam/messages-and-channels
+    front: What can happen to SendType.Unreliable messages?
+    back: They can be lost, reordered or duplicated. Use them for constantly refreshed state.
+  - id: nonagle
+    lesson: steam/messages-and-channels
+    front: What does SendType.NoNagle do?
+    back: Sends the message at the next opportunity instead of waiting for the Nagle timer (5 ms by default) to batch it.
+  - id: nodelay
+    lesson: steam/messages-and-channels
+    front: What does SendType.NoDelay do?
+    back: Drops an unreliable message if it can't go out very soon, and SendMessage returns Result.Ignored. It's only valid for unreliable sends.
+  - id: message-limit
+    lesson: steam/messages-and-channels
+    front: What are Steam sockets' default size limits?
+    back: 512 KB per message and 512 KB of pending send buffer per connection. Keep unreliable messages to about one packet.
+  - id: lanes
+    lesson: steam/messages-and-channels
+    front: What are lanes?
+    back: Steam's channels, set with ConfigureConnectionLanes. They prioritise sending, and only reliable messages on the same lane keep their order.
+  - id: rtt-host-clock
+    lesson: steam/messages-and-channels
+    front: Why does the pong echo the host's timestamp?
+    back: So the host computes RTT with its own clock only. Clocks on different machines are never in sync.
+  - id: send-result
+    lesson: steam/messages-and-channels
+    front: What does SendMessage return LimitExceeded for?
+    back: The connection's send buffer is full because too much data is already queued.
+
+  # ------------------------------------------------------------------ auth-tickets
+  - id: ticket-what
+    lesson: steam/auth-tickets
+    front: What is an auth session ticket?
+    back: A signed blob from the client's Steam client that lets the host verify the client's Steam ID, its license for your app, its ban status and the copy's owner.
+  - id: ticket-not-anticheat
+    lesson: steam/auth-tickets
+    front: Does a valid ticket mean the client is honest?
+    back: No. It proves identity and ownership, not that the game is unmodified or its messages are honest.
+  - id: get-ticket
+    lesson: steam/auth-tickets
+    front: How does the client get a ticket for the host?
+    back: await SteamUser.GetAuthSessionTicketAsync(hostSteamId), passing the identity that will validate it.
+  - id: begin-auth
+    lesson: steam/auth-tickets
+    front: What does SteamUser.BeginAuthSession return?
+    back: A BeginAuthResult from a quick local check, such as OK, InvalidTicket or DuplicateRequest. The real verdict comes later.
+  - id: validate-response
+    lesson: steam/auth-tickets
+    front: Where does the host get the real auth verdict?
+    back: SteamUser.OnValidateAuthTicketResponse(steamId, ownerId, response). Trust the peer only on AuthResponse.OK.
+  - id: verified-identity
+    lesson: steam/auth-tickets
+    front: Which Steam ID should the host pass to BeginAuthSession?
+    back: The connection's verified identity (identity.SteamId), never an ID written inside the client's message.
+  - id: end-auth
+    lesson: steam/auth-tickets
+    front: What cleanup does each side do when a session ends?
+    back: The client calls ticket.Cancel(), and the host calls SteamUser.EndAuthSession(steamId).
+  - id: owner-differs
+    lesson: steam/auth-tickets
+    front: What does it mean when ownerId differs from steamId in the auth response?
+    back: The player is using a copy borrowed through Steam Family Sharing.
+  - id: web-api-ticket-card
+    lesson: steam/auth-tickets
+    front: Which ticket do you need for your own web backend?
+    back: A Web API ticket from SteamUser.GetAuthTicketForWebApiAsync(identity), not a session ticket.
+
+  # ------------------------------------------------------------------ testing
+  - id: two-accounts
+    lesson: steam/testing
+    front: What do you need to test lobbies, invites and auth properly?
+    back: Two Steam accounts on two machines (or a VM), ideally on different networks.
+  - id: clones-share-steam
+    lesson: steam/testing
+    front: Why can't ParrelSync or Multiplayer Play Mode test Steam lobbies between players?
+    back: Every process on the machine talks to the same Steam client and account, so all of them have the same Steam ID.
+  - id: local-udp-mode
+    lesson: steam/testing
+    front: How can you iterate on socket code on one machine?
+    back: Use CreateNormalSocket and ConnectNormal on localhost, with a development-only bypass for the lobby and auth checks.
+  - id: overlay-testing
+    lesson: steam/testing
+    front: Where do you test overlay features such as the invite dialog?
+    back: In a build with the overlay enabled. Check SteamUtils.IsOverlayEnabled and press Shift+Tab to confirm it works.
+  - id: detailed-status
+    lesson: steam/testing
+    front: What does connection.DetailedStatus() give you?
+    back: A multi-line report of the route (relayed or direct), relays, ping, loss and queues. Paste it into networking bug reports.
+  - id: fake-lag
+    lesson: steam/testing
+    front: How do you simulate bad networks in Steam networking?
+    back: Set SteamNetworkingUtils.FakeSendPacketLag/FakeRecvPacketLag and FakeSendPacketLoss/FakeRecvPacketLoss, and reset them to 0 afterwards.
+  - id: debug-output
+    lesson: steam/testing
+    front: How do you see the Steam networking library's own log?
+    back: Set SteamNetworkingUtils.DebugLevel to a level such as Warning and subscribe to SteamNetworkingUtils.OnDebugOutput.
+  - id: same-account-two-pcs
+    lesson: steam/testing
+    front: Why not log one account into two PCs for testing?
+    back: Steam treats it as one user, lobbies see one member, and auth can fail with LoggedInElseWhere.
+  - id: cold-start-480-card
+    lesson: steam/testing
+    front: Why test cold-start invites on your own App ID?
+    back: On 480, Steam launches the installed Spacewar rather than your build.
+
+  # ------------------------------------------------------------------ stats-and-achievements
+  - id: stat-types
+    lesson: steam/stats-and-achievements
+    front: Which stat types does Steam support?
+    back: INT, FLOAT and AVGRATE (an average over a sliding window).
+  - id: publish-first
+    lesson: steam/stats-and-achievements
+    front: Why does SetStat return false for a stat you just created?
+    back: Partner-site changes are drafts until you publish them, or the overload's type doesn't match the stat's type.
+  - id: set-vs-store
+    lesson: steam/stats-and-achievements
+    front: What's the difference between SetStat and StoreStats?
+    back: SetStat, AddStat and achievement unlocks change the Steam client's local cache. StoreStats uploads the changes to Valve.
+  - id: store-frequency
+    lesson: steam/stats-and-achievements
+    front: How often should you call StoreStats?
+    back: On the order of minutes, at round ends, lobby exits and quit. Valve rate limits it.
+  - id: trigger
+    lesson: steam/stats-and-achievements
+    front: What does Achievement.Trigger() do in Facepunch?
+    back: Calls SetAchievement and, because apply defaults to true, StoreStats right after a successful unlock.
+    code: new Achievement("ACH_WIN_ONE_GAME").Trigger();
+  - id: stats-events
+    lesson: steam/stats-and-achievements
+    front: Which events report the results of storing stats?
+    back: SteamUserStats.OnUserStatsStored(Result) and OnAchievementProgress(achievement, current, max), where 0/0 means unlocked.
+  - id: request-current-stats
+    lesson: steam/stats-and-achievements
+    front: Do you still need SteamUserStats.RequestCurrentStats()?
+    back: No. Valve deprecated it because Steam syncs stats before launch, and Facepunch 2.5.2 marks it obsolete and returns true.
+  - id: spacewar-stats
+    lesson: steam/stats-and-achievements
+    front: Which stats and achievements can you prototype with on App ID 480?
+    back: Spacewar's, such as the NumGames, NumWins and FeetTraveled stats and the ACH_WIN_ONE_GAME and ACH_WIN_100_GAMES achievements.
+  - id: find-or-create-board
+    lesson: steam/stats-and-achievements
+    front: How do you get a leaderboard handle?
+    back: await SteamUserStats.FindOrCreateLeaderboardAsync(name, sort, display), or FindLeaderboardAsync(name) for one defined on the partner site. Both return null on failure.
+  - id: submit-vs-replace
+    lesson: steam/stats-and-achievements
+    front: SubmitScoreAsync vs ReplaceScore?
+    back: SubmitScoreAsync keeps the player's best score. ReplaceScore always overwrites it.
+  - id: board-sort
+    lesson: steam/stats-and-achievements
+    front: Which leaderboard sort puts the highest score first?
+    back: LeaderboardSort.Descending. Ascending puts the lowest first, as for lap times.
+  - id: reset-stats
+    lesson: steam/stats-and-achievements
+    front: How do you wipe your own test progress?
+    back: SteamUserStats.ResetAll(true) also clears achievements. It affects only the current account.

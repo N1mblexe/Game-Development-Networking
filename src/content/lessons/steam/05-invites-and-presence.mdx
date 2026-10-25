@@ -1,0 +1,279 @@
+---
+title: Invites and Rich Presence
+order: 5
+summary: Let players invite friends through the Steam overlay, accept invites whether or not the game is running, and publish rich presence so friends can see and join what you're doing.
+durationMin: 22
+objectives:
+  - Send lobby invites with the Steam overlay invite dialog or Lobby.InviteFriend
+  - Handle SteamFriends.OnGameLobbyJoinRequested and OnGameRichPresenceJoinRequested for a running game
+  - Handle a cold start from an invite by parsing the +connect_lobby command-line argument
+  - Set and clear rich presence keys (status, connect, steam_display, steam_player_group) and read friends' presence
+prerequisites: [steam/lobbies]
+tags: [steam, invites, rich-presence, overlay]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: SteamFriends.cs (events, rich presence, overlay)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamFriends.cs
+  - title: 'Facepunch.Steamworks source: SteamApps.cs (CommandLine)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamApps.cs
+  - title: 'Steamworks API: ISteamFriends (SetRichPresence, GameLobbyJoinRequested_t, GameRichPresenceJoinRequested_t)'
+    url: https://partner.steamgames.com/doc/api/ISteamFriends
+  - title: 'Steamworks: Steam Matchmaking & Lobbies (invites, +connect_lobby)'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'Steamworks: Rich Presence'
+    url: https://partner.steamgames.com/doc/features/enhancedrichpresence
+---
+
+Most multiplayer sessions on Steam don't start from a lobby browser. They start with a friend saying "join me", and
+one click in the Steam friends list. That click can arrive when your game is already running, or it can **launch**
+your game from scratch. Both paths need to end in the same `JoinAsync(lobby)` from lesson 04. This lesson wires them
+up, and then publishes <Term id="rich-presence">rich presence</Term> so the friends list shows what each player is doing.
+
+## Two ways to send an invite
+
+| Approach | Call | What the friend sees |
+|---|---|---|
+| Steam's invite dialog | `SteamFriends.OpenGameInviteOverlay(lobby.Id)` | A Steam chat invite with a **Join Game** button |
+| Your own friend picker | `lobby.InviteFriend(friend.Id)` | The same Steam chat invite |
+
+The overlay dialog is the least work and the most familiar to players: Steam lists friends, shows who's online and
+sends the invites. Use `InviteFriend` when you build your own picker (for example from the friends panel in lesson 03).
+It returns `true` when the invite was sent, whether or not the friend responds, and `false` if you're offline.
+
+```csharp title="InviteButton.cs"
+using Steamworks;
+using UnityEngine;
+
+public sealed class InviteButton : MonoBehaviour
+{
+    public void OnClick()
+    {
+        var lobbies = SteamLobbyManager.Instance;
+        if (lobbies.Current is not Steamworks.Data.Lobby lobby) return;
+
+        if (SteamUtils.IsOverlayEnabled)
+            SteamFriends.OpenGameInviteOverlay(lobby.Id);
+        else
+            Debug.LogWarning("[Invite] Overlay unavailable (editor, or disabled in Steam). Use InviteFriend instead.");
+    }
+}
+```
+
+<Callout type="steam" title="The overlay needs a real Steam session">
+
+`SteamUtils.IsOverlayEnabled` is `false` when the <Term id="steam-overlay">Steam overlay</Term> isn't hooked into your
+process, which is the usual state inside the Unity editor. Test invite flows in a **build** with the overlay enabled
+in Steam's settings (lesson 09). `SteamFriends.OnGameOverlayActivated(bool)` tells you when the overlay opens and
+closes, which is useful for pausing input.
+
+</Callout>
+
+## Receiving an invite: three entry points
+
+<Sequence
+  title="Invite acceptance, warm and cold"
+  actors={[
+    { id: 'host', label: 'Host', kind: 'host' },
+    { id: 'steam', label: 'Steam', kind: 'steam' },
+    { id: 'friend', label: 'Friend’s Steam client', kind: 'steam' },
+    { id: 'game', label: 'Friend’s game', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'host', to: 'steam', label: 'OpenGameInviteOverlay(lobby.Id) → invite sent', kind: 'reliable' },
+    { from: 'steam', to: 'friend', label: 'chat invite with Join Game', note: 'if the game is running, it also gets SteamMatchmaking.OnLobbyInvite', kind: 'event' },
+    { from: 'friend', to: 'friend', label: 'friend clicks Join Game', kind: 'local' },
+    { from: 'friend', to: 'game', label: 'game running → SteamFriends.OnGameLobbyJoinRequested(lobby, friendId)', kind: 'event' },
+    { from: 'friend', to: 'game', label: 'game not running → launch with +connect_lobby 1098…', note: 'no callback: read the command line after Init', kind: 'reliable' },
+    { from: 'game', to: 'steam', label: 'await lobby.Join()', kind: 'reliable' },
+    { from: 'steam', to: 'game', label: 'OnLobbyEntered(lobby)', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- **Accepting** an invite and **receiving** one are different events. `SteamMatchmaking.OnLobbyInvite(friend, lobby)`
+  fires when an invite arrives while the game runs, which is good for an in-game toast. The click itself comes through
+  `SteamFriends.OnGameLobbyJoinRequested`.
+- The same `OnGameLobbyJoinRequested` fires when the player picks **Join Game** on a friend in the friends list while
+  that friend is in a joinable lobby. You don't need separate code for "join friend" and "accept invite".
+- A **cold start** has no callback at all. Steam passes the lobby on the command line, and you must look for it yourself.
+
+The third entry point is rich presence's `connect` key, covered below. It fires
+`SteamFriends.OnGameRichPresenceJoinRequested(friend, connectString)` instead.
+
+## The invite handler
+
+```csharp title="SteamInviteHandler.cs"
+using System;
+using Steamworks;
+using Steamworks.Data;
+using UnityEngine;
+
+/// Routes every "join this lobby" request (invites, friends list, command line) to SteamLobbyManager.
+public sealed class SteamInviteHandler : MonoBehaviour
+{
+    const string ConnectLobbyArg = "+connect_lobby";
+
+    void OnEnable()
+    {
+        SteamFriends.OnGameLobbyJoinRequested += HandleLobbyJoinRequested;
+        SteamFriends.OnGameRichPresenceJoinRequested += HandleRichPresenceJoinRequested;
+        SteamMatchmaking.OnLobbyInvite += HandleInviteReceived;
+    }
+
+    void OnDisable()
+    {
+        SteamFriends.OnGameLobbyJoinRequested -= HandleLobbyJoinRequested;
+        SteamFriends.OnGameRichPresenceJoinRequested -= HandleRichPresenceJoinRequested;
+        SteamMatchmaking.OnLobbyInvite -= HandleInviteReceived;
+    }
+
+    void Start()
+    {
+        // Cold start: launched by clicking Join Game while the game was closed.
+        if (!SteamBootstrap.IsReady) return;
+        if (TryFindLobbyArg(Environment.GetCommandLineArgs(), out SteamId id) ||
+            TryFindLobbyArg(SteamApps.CommandLine?.Split(' '), out id))
+        {
+            Join(new Lobby(id), "command line");
+        }
+    }
+
+    void HandleLobbyJoinRequested(Lobby lobby, SteamId viaFriend) => Join(lobby, $"join request via {viaFriend}");
+
+    void HandleRichPresenceJoinRequested(Friend friend, string connect)
+    {
+        // We publish "connect" in the same format as the command line, so one parser handles both.
+        if (TryFindLobbyArg(connect?.Split(' '), out SteamId id))
+            Join(new Lobby(id), $"rich presence of {friend.Name}");
+    }
+
+    void HandleInviteReceived(Friend from, Lobby lobby)
+    {
+        Debug.Log($"[Invite] {from.Name} invited you. Accept it from the Steam chat, or show your own prompt.");
+    }
+
+    static async void Join(Lobby lobby, string reason)
+    {
+        Debug.Log($"[Invite] Joining {lobby.Id} ({reason})");
+        bool ok = await SteamLobbyManager.Instance.JoinAsync(lobby);
+        if (!ok) Debug.LogWarning("[Invite] The lobby is full, closed or gone.");
+    }
+
+    static bool TryFindLobbyArg(string[] args, out SteamId lobbyId)
+    {
+        lobbyId = default;
+        if (args == null) return false;
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == ConnectLobbyArg && ulong.TryParse(args[i + 1], out ulong raw))
+            {
+                lobbyId = raw;
+                return lobbyId.IsValid;
+            }
+        }
+        return false;
+    }
+}
+```
+
+Put it on the same persistent GameObject as `SteamBootstrap` and `SteamLobbyManager`, so it survives scene loads and
+is listening from the first frame.
+
+<Callout type="pitfall" title="Only handling the warm path">
+
+Most teams test invites with both games already running, ship, and then discover that a friend who *wasn't* running
+the game lands on the main menu after launch. Valve documents that a cold start passes `+connect_lobby <lobby id>` on
+the command line instead of firing a callback. Parse it once Steam is initialized, and test the cold path explicitly
+by closing the game before clicking **Join Game**.
+
+</Callout>
+
+## Rich presence
+
+Rich presence is a small set of key/value strings that Steam attaches to the player and shows to their friends.
+Facepunch exposes it as `SteamFriends.SetRichPresence(key, value)`, `SteamFriends.GetRichPresence(key)` (your own
+values), `SteamFriends.ClearRichPresence()`, and `friend.GetRichPresence(key)` for others. Valve allows up to 20 keys
+per user. A few keys are special:
+
+| Key | Effect |
+|---|---|
+| `status` | Free text shown in the friends list's "view game info" dialog |
+| `connect` | Enables **Join Game** for this player. When a friend clicks it, their game gets `OnGameRichPresenceJoinRequested(friend, connect)` or, if closed, is launched with this string on the command line |
+| `steam_display` | A **localization token** (`#Status_InLobby`) that Steam shows next to the player's name, in the viewer's language. Without a valid token, nothing is displayed there |
+| `steam_player_group` | A group ID (for example the lobby ID). Steam groups players with the same value together |
+| `steam_player_group_size` | The group's total size, so Steam can show "Bob and 3 more" |
+
+```csharp title="SteamPresence.cs"
+using Steamworks;
+using Steamworks.Data;
+
+public static class SteamPresence
+{
+    public static void InMenu()
+    {
+        SteamFriends.ClearRichPresence();
+        SteamFriends.SetRichPresence("status", "In the main menu");
+    }
+
+    public static void InLobby(Lobby lobby)
+    {
+        string id = lobby.Id.ToString();
+        SteamFriends.SetRichPresence("status", $"In a lobby ({lobby.MemberCount}/{lobby.MaxMembers})");
+        SteamFriends.SetRichPresence("connect", $"+connect_lobby {id}");   // same format as the cold-start argument
+        SteamFriends.SetRichPresence("steam_player_group", id);
+        SteamFriends.SetRichPresence("steam_player_group_size", lobby.MemberCount.ToString());
+        // With your own App ID, also set a token defined in your rich presence localization file:
+        // SteamFriends.SetRichPresence("steam_display", "#Status_InLobby");
+    }
+
+    public static void InMatch()
+    {
+        SteamFriends.SetRichPresence("status", "In a match");
+        SteamFriends.SetRichPresence("connect", "");   // an empty value removes the key: no joining mid-match
+    }
+}
+```
+
+Call `InLobby` from the lobby manager's `Entered`, `MemberJoined` and `MemberLeft` events, `InMatch` when the owner
+starts the session, and `InMenu` on `Left`. Reading a friend's presence is symmetrical:
+`friend.GetRichPresence("status")` returns their value or `null`, and `SteamFriends.OnFriendRichPresenceUpdate(friend)`
+tells you when it changed.
+
+<Callout type="steam" title="steam_display needs your own App ID">
+
+The text Steam shows next to a player's name comes from a **localization file** you upload in your app's Steamworks
+settings, keyed by tokens such as `#Status_InLobby`, with `%key%` substitutions from your other presence keys. You
+can't upload one for Spacewar (480), so during 480 development only `status` (in "view game info") and `connect` are
+useful. Valve's Rich Presence page has the file format and a tester.
+
+</Callout>
+
+<Callout type="pitfall" title="Stale presence">
+
+Rich presence persists while the game runs. If you leave a lobby but forget to clear `connect`, friends can still click
+**Join Game**, launch into a lobby that no longer exists, and get a confusing failure. Clear or update presence every
+time the lobby state changes, and make `JoinAsync` failures show a clear "that session has ended" message.
+
+</Callout>
+
+<Callout type="pitfall" title="Trusting the connect string">
+
+The `connect` value and the command line come from another player's presence. Treat them as untrusted input: parse
+strictly (as `TryFindLobbyArg` does), never pass them to a shell or file API, and only accept the formats you publish
+yourself.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Send invites with **`SteamFriends.OpenGameInviteOverlay(lobby.Id)`** (needs the overlay) or **`lobby.InviteFriend(id)`**.
+- A click on an invite or on **Join Game** for a friend in a lobby fires **`SteamFriends.OnGameLobbyJoinRequested(lobby, friendId)`**; route it to your normal join code.
+- If the game wasn't running, Steam launches it with **`+connect_lobby <id>`**: parse the command line after `Init`.
+- **Rich presence** keys: `status` (text), `connect` (enables Join Game, fires `OnGameRichPresenceJoinRequested`), `steam_display` (localized token, needs your own App ID), `steam_player_group`/`_size`.
+- Keep presence in sync with lobby state, and treat connect strings as untrusted input.
+
+</KeyTakeaways>

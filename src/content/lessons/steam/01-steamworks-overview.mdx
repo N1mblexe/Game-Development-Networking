@@ -1,0 +1,233 @@
+---
+title: Steamworks and Facepunch.Steamworks
+order: 1
+summary: What Steamworks gives a multiplayer game, how your process talks to Steam, and why this course uses the Facepunch.Steamworks C# wrapper.
+durationMin: 18
+objectives:
+  - Describe the Steamworks services a multiplayer game uses and what each one replaces
+  - Explain the path from your game process through the local Steam client to Valve's backend
+  - Compare Facepunch.Steamworks with Steamworks.NET and pick the right one for a project
+  - Outline the lobby + relay architecture this module builds, and what App ID 480 is for
+prerequisites: [theory/topologies, theory/nat-and-relays]
+tags: [steam, steamworks, facepunch, overview]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks on GitHub (README, source)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks
+  - title: 'Facepunch.Steamworks releases (2.5.2, April 2026)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/releases
+  - title: 'Facepunch.Steamworks wiki: Setting Up'
+    url: https://wiki.facepunch.com/steamworks/Setting_Up
+  - title: 'Steamworks API Overview (initialization, callbacks)'
+    url: https://partner.steamgames.com/doc/sdk/api
+  - title: 'Steamworks: Steam Networking'
+    url: https://partner.steamgames.com/doc/features/multiplayer/networking
+  - title: 'Steamworks: Steam Matchmaking & Lobbies'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'Steamworks API Example Application (SpaceWar, App ID 480)'
+    url: https://partner.steamgames.com/doc/sdk/api/example
+  - title: 'Steamworks.NET documentation'
+    url: https://steamworks.github.io/
+---
+
+If you have shipped a Unity game without multiplayer, you have probably used Steam as a store and maybe for
+achievements. For a multiplayer game Steam can do much more. It knows who the player is and who their friends are,
+it can host the "room" where players gather before a match, it can carry your game's packets between players through
+Valve's own network, and it can prove that a player owns your game. Each of those is a service you would otherwise
+have to build, host and pay for.
+
+This module teaches those services through **Facepunch.Steamworks**, the C# wrapper used by Rust and Garry's Mod,
+in a plain Unity 6 project. You won't use Netcode for GameObjects here. Module 4 connects the two. Keeping this module
+NGO-free means you will see exactly what Steam does, and what it leaves to you.
+
+## What Steamworks is
+
+<Term id="steamworks">Steamworks</Term> is Valve's SDK and backend for games on Steam. The SDK is a native C++ library
+(`steam_api64.dll` on Windows, `libsteam_api.so` on Linux, `libsteam_api.dylib` on macOS) that exposes a set of
+interfaces such as `ISteamFriends`, `ISteamMatchmaking` and `ISteamNetworkingSockets`.
+
+The important detail is **where the work happens**. The library in your game does very little by itself. It talks over
+local inter-process communication to the <Term id="steam-client">Steam client</Term> that the player already has running,
+and the Steam client talks to Valve's servers. That is why "Steam must be running" is the first rule of Steamworks
+development, and why your game never needs a Valve password or API key on the player's machine.
+
+<Sequence
+  title="One request: your game asks Steam for something"
+  actors={[
+    { id: 'game', label: 'Your Unity game', kind: 'client' },
+    { id: 'client', label: 'Local Steam client', kind: 'steam' },
+    { id: 'backend', label: 'Valve backend', kind: 'service' },
+  ]}
+  steps={[
+    { from: 'game', to: 'client', label: 'SteamAPI_Init (App ID)', note: 'IPC to the running Steam client; fails if Steam is closed', kind: 'reliable' },
+    { from: 'game', to: 'client', label: 'CreateLobby(...)', note: 'returns immediately with a handle; the answer comes later', kind: 'reliable' },
+    { from: 'client', to: 'backend', label: 'create lobby for this user', kind: 'reliable' },
+    { from: 'backend', to: 'client', label: 'lobby 109775241… created', kind: 'reliable' },
+    { from: 'client', to: 'game', label: 'LobbyCreated_t queued', note: 'sits in a queue until the game pumps callbacks', kind: 'event' },
+    { from: 'game', to: 'game', label: 'RunCallbacks() dispatches it to your handler', kind: 'local' },
+  ]}
+/>
+
+What you should notice:
+
+- Almost every Steam request is **asynchronous**. The answer arrives as a <Term id="steam-callbacks">callback</Term>
+  that your game must explicitly pump. Lesson 02 is all about that pump.
+- Your game never opens a connection to Valve itself. If the Steam client is offline, most services quietly stop working.
+- Results are tied to the **logged-in Steam user**. You can't pretend to be a different player by passing a different ID.
+
+## The services a multiplayer game uses
+
+| Service | Steamworks interface | What it replaces |
+|---|---|---|
+| Identity and profile | `ISteamUser`, `ISteamFriends` | Your own account system, display names and avatars |
+| Friends and presence | `ISteamFriends` (rich presence, overlay) | A friends list, "join friend" buttons and invite UI |
+| <Term id="steam-lobby">Lobbies</Term> | `ISteamMatchmaking` | A <Term id="matchmaking">matchmaking</Term> server and room list |
+| Peer-to-peer networking | `ISteamNetworkingSockets` + <Term id="steam-datagram-relay">Steam Datagram Relay</Term> | A <Term id="relay">relay</Term> server, NAT traversal and DDoS protection |
+| Authentication | `ISteamUser` session tickets | Login tokens and ownership checks |
+| Stats, achievements, leaderboards | `ISteamUserStats` | A progression backend |
+
+The networking row deserves a closer look, because it changes how you design the game. In the theory module you saw
+that two players at home usually can't reach each other directly, because both sit behind <Term id="nat">NAT</Term>
+(see [NAT and relays](/modules/theory/nat-and-relays/)). Steam solves this for you. When you connect to another player
+by **Steam ID** instead of by IP address, Steam routes the traffic through Valve's relay network when needed, so it
+works through any NAT, and neither player learns the other's IP address.
+
+## The architecture this module builds
+
+Steam's model for small multiplayer games is a <Term id="peer-to-peer">peer-to-peer</Term> session with one player
+acting as <Term id="host">host</Term>, glued together by a lobby:
+
+<Steps>
+
+1. A player creates a **lobby** on Steam's servers and becomes its owner. The lobby is a chat-room-like object with
+   key/value data that other players can search for.
+2. Friends join through an **invite** or the friends list, or strangers find it through a **lobby search**.
+3. Every member reads the lobby's **owner Steam ID**. The owner opens a listen socket, and everyone else connects to
+   that Steam ID through **Steam Networking Sockets**.
+4. Before trusting a new peer, the host verifies a Steam **auth session ticket**.
+5. Game messages flow over the connection. The lobby stays around for chat, presence and late joins.
+
+</Steps>
+
+Across the module you'll grow one small project: a `SteamBootstrap` that initializes Steam, a `SteamLobbyManager`
+that hosts, finds and joins lobbies, and a socket-based **chat and ping** session between lobby members. It is
+deliberately simple, so that every line is about Steam rather than gameplay.
+
+<Callout type="steam" title="App ID 480: Spacewar">
+
+Every Steamworks call is made on behalf of an <Term id="app-id">App ID</Term>. Until Valve gives you your own, you
+develop against **480**, Valve's sample game <Term id="spacewar">Spacewar</Term>. It is shared by thousands of
+developers, so its lobby list is full of other people's tests and its achievements belong to Spacewar. You'll learn
+to work around both. Switch to your own App ID as soon as you have one.
+
+</Callout>
+
+## Choosing a C# wrapper
+
+Unity can't call the C++ API directly, so you need a C# binding. Two are widely used:
+
+| | <Term id="facepunch-steamworks">Facepunch.Steamworks</Term> | <Term id="steamworks-net">Steamworks.NET</Term> |
+|---|---|---|
+| Style | Idiomatic C#: static classes, `async` Tasks, C# events, structs like `Lobby` and `Friend` | A thin 1:1 mirror of the C++ API: `SteamMatchmaking.CreateLobby` plus generic `CallResult` and `Callback` wrappers |
+| Async results | `await SteamMatchmaking.CreateLobbyAsync()` | Register a `CallResult<LobbyCreated_t>` and wait for the handler |
+| Networking | `SocketManager` / `ConnectionManager` classes over `ISteamNetworkingSockets` | Raw `SteamNetworkingSockets.*` functions and message pointers |
+| Valve docs map | Names differ; you translate concepts | Almost line-for-line with Valve's docs |
+| Distribution | Release zip with a ready-made `Unity` folder (managed DLLs + native `steam_api`) | Unity package (Git URL / .unitypackage) |
+| Used by | Rust, Garry's Mod, the NGO community `FacepunchTransport` | Many indie titles, the NGO community `SteamNetworkingSockets` transport |
+
+<CodeTabs labels={['Facepunch.Steamworks', 'Steamworks.NET']}>
+
+```csharp title="HostLobbyFacepunch.cs"
+using Steamworks;
+using Steamworks.Data;
+
+// Async/await: the call reads top to bottom.
+public async void HostLobby()
+{
+    Lobby? created = await SteamMatchmaking.CreateLobbyAsync(4);
+    if (!created.HasValue) return;           // creation failed
+
+    Lobby lobby = created.Value;
+    lobby.SetFriendsOnly();
+    lobby.SetData("name", "Ahmet's room");
+}
+```
+
+```csharp title="HostLobbySteamworksNet.cs"
+using Steamworks;
+
+// Call results: you register a handler, then match it to the call.
+CallResult<LobbyCreated_t> lobbyCreated;
+
+void Start() => lobbyCreated = CallResult<LobbyCreated_t>.Create(OnLobbyCreated);
+
+public void HostLobby()
+{
+    SteamAPICall_t call = SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 4);
+    lobbyCreated.Set(call);
+}
+
+void OnLobbyCreated(LobbyCreated_t result, bool ioFailure)
+{
+    if (ioFailure || result.m_eResult != EResult.k_EResultOK) return;
+    var lobbyId = new CSteamID(result.m_ulSteamIDLobby);
+    SteamMatchmaking.SetLobbyData(lobbyId, "name", "Ahmet's room");
+}
+```
+
+</CodeTabs>
+
+Both are good. This course uses Facepunch.Steamworks because the code is shorter and reads like the flow you are
+trying to build, and because module 4 uses the Facepunch-based NGO transport. The cost is that you must translate
+between Facepunch names and Valve's documentation, which is still the authority on *behaviour*. When this module says
+"Valve documents that…", that is the C++ docs; when it shows a member name, it was checked against the Facepunch source.
+
+<Callout type="steam" title="Version used in this module">
+
+The lessons target **Facepunch.Steamworks 2.5.2** (GitHub release, April 2026) on Unity 6. Download the release zip,
+not the NuGet package: at the time of writing NuGet stops at 2.3.3, and the zip contains a `Unity` folder with
+`.meta` files that already set the right platform for each DLL. Lesson 02 walks through the install.
+
+</Callout>
+
+## What Steam does not do for you
+
+Steam handles identity, discovery and transport. It does **not** give you:
+
+- **Game state replication.** Sockets move byte arrays. Deciding what to send, how often and who has
+  <Term id="authority">authority</Term> is your job (or NGO's, in module 4).
+- **Dedicated servers.** Lobbies plus a player-hosted listen socket are the default. Steam supports dedicated servers
+  through a separate `SteamServer` API, which this module mentions but doesn't cover.
+- **Cheat prevention.** Auth tickets prove *who* someone is and that they own the game. They say nothing about whether
+  the messages they send are honest. Theory's [security lesson](/modules/theory/security/) still applies.
+- **Cross-platform play.** Everything here assumes every player runs your game through Steam.
+
+<Callout type="pitfall" title="Two wrappers, one namespace">
+
+Facepunch.Steamworks and Steamworks.NET both put their types in a namespace called `Steamworks`. Importing both
+into one project produces a wall of ambiguous-type errors, and copying a Steamworks.NET snippet into a Facepunch
+project fails in confusing ways (`SteamAPI.RunCallbacks` and `CSteamID` don't exist in Facepunch). Pick one wrapper
+per project, and check which one a tutorial uses before copying from it.
+
+</Callout>
+
+<Callout type="pitfall" title="Treating Steam calls as instant">
+
+`CreateLobbyAsync`, avatar downloads, lobby searches and auth tickets all take a network round trip to Valve,
+typically hundreds of milliseconds and sometimes seconds. Design your UI around a "waiting" state from the start,
+and never block the main thread with `.Result` or `.Wait()` on a Steam task in Unity.
+
+</Callout>
+
+<KeyTakeaways>
+
+- **Steamworks** is a native SDK that talks to the locally running **Steam client**, which talks to Valve. No Steam client means no Steamworks.
+- Most calls are **asynchronous**: results come back as callbacks that your game must pump.
+- For multiplayer, the core trio is **lobbies** (discovery), **Steam Networking Sockets over the Steam Datagram Relay** (transport through any NAT, IPs hidden) and **auth tickets** (identity and ownership).
+- **Facepunch.Steamworks** wraps the C++ API in idiomatic C# (`async`, events, structs). **Steamworks.NET** mirrors it 1:1. Use one per project.
+- Develop on **App ID 480 (Spacewar)** until you have your own, and expect shared-lobby noise.
+
+</KeyTakeaways>

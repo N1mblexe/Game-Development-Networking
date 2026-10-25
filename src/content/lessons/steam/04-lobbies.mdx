@@ -1,0 +1,393 @@
+---
+title: Lobbies
+order: 4
+summary: Create, configure, search for, join and leave Steam lobbies with Facepunch.Steamworks, and use lobby and member data to coordinate players before a session starts.
+durationMin: 28
+objectives:
+  - Create a lobby with SteamMatchmaking.CreateLobbyAsync and set its visibility, joinability and metadata
+  - Search for your own lobbies with a filtered LobbyQuery and handle empty results
+  - Join and leave lobbies and track membership through SteamMatchmaking events
+  - Use lobby data, member data and the lobby owner to agree on who hosts the session
+prerequisites: [steam/users-and-friends, theory/topologies]
+tags: [steam, lobbies, matchmaking]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: SteamMatchmaking.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamMatchmaking.cs
+  - title: 'Facepunch.Steamworks source: Structs/Lobby.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Structs/Lobby.cs
+  - title: 'Facepunch.Steamworks source: Structs/LobbyQuery.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Structs/LobbyQuery.cs
+  - title: 'Steamworks: Steam Matchmaking & Lobbies'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'Steamworks API: ISteamMatchmaking (ELobbyType, RequestLobbyList, CreateLobby)'
+    url: https://partner.steamgames.com/doc/api/ISteamMatchmaking
+---
+
+Think of a lobby as a `ScriptableObject` that lives on Valve's servers instead of on disk. It has a list of members,
+a handful of string fields anyone can read, and one owner who can write them. Players can search for it, join it and
+chat in it, all without any server of yours. In the theory module's terms, the lobby is the **rendezvous point** of a
+<Term id="peer-to-peer">peer-to-peer</Term> game: it doesn't carry gameplay, but it is how players find each other and
+agree on who the <Term id="host">host</Term> is.
+
+## What a lobby is
+
+A <Term id="steam-lobby">Steam lobby</Term> is identified by a Steam ID, just like a user. Valve documents these
+properties:
+
+- Up to **250 members** (most games use 2–16). `Lobby.MaxMembers` reads and sets the limit (owner only).
+- Exactly one **owner** (`Lobby.Owner`). If the owner leaves, Steam promotes another member.
+- **Lobby data**: string key/value pairs. Only the owner can set them; everyone, including people searching, can read them.
+- **Member data**: key/value pairs per member. Each member can only set their own.
+- **Chat messages**: small strings or byte arrays broadcast to members.
+- When the last member leaves, the lobby is **destroyed automatically**.
+
+The lobby's **type** decides who can see and join it. Facepunch maps each to a method on `Lobby`:
+
+| Method | `ELobbyType` | In search results? | Friends can join from the friends list? |
+|---|---|---|---|
+| `SetPublic()` | Public | Yes | Yes |
+| `SetFriendsOnly()` | FriendsOnly | No | Yes (and invitees) |
+| `SetPrivate()` | Private | No | No, invite only |
+| `SetInvisible()` | Invisible | Yes | No |
+
+Separately, `SetJoinable(bool)` opens or closes the doors without changing visibility. Close it when a match starts,
+so nobody joins mid-round, and reopen it afterwards.
+
+<Callout type="steam" title="CreateLobbyAsync makes an invisible lobby">
+
+`SteamMatchmaking.CreateLobbyAsync(int maxMembers = 100)` always creates the lobby as **Invisible**. Call
+`SetPublic()`, `SetFriendsOnly()` or `SetPrivate()` straight after creating it, or friends won't see it.
+
+</Callout>
+
+## Creating a lobby
+
+<Sequence
+  title="Host creates a lobby; a player finds and joins it"
+  actors={[
+    { id: 'host', label: 'Host (owner)', kind: 'host' },
+    { id: 'steam', label: 'Steam lobby service', kind: 'steam' },
+    { id: 'p', label: 'Joining player', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'host', to: 'steam', label: 'CreateLobbyAsync(4)', kind: 'reliable' },
+    { from: 'steam', to: 'host', label: 'OnLobbyCreated(OK, lobby) + OnLobbyEntered(lobby)', note: 'the creator is the first member and the owner', kind: 'event' },
+    { from: 'host', to: 'steam', label: 'SetPublic(), SetJoinable(true), SetData("netlearn_game", "chat-demo")', kind: 'reliable' },
+    { from: 'p', to: 'steam', label: 'LobbyList.WithKeyValue("netlearn_game", "chat-demo").RequestAsync()', kind: 'reliable' },
+    { from: 'steam', to: 'p', label: 'Lobby[] (with data as of the search)', kind: 'event' },
+    { from: 'p', to: 'steam', label: 'await lobby.Join()', kind: 'reliable' },
+    { from: 'steam', to: 'p', label: 'RoomEnter.Success, OnLobbyEntered(lobby)', kind: 'event' },
+    { from: 'steam', to: 'host', label: 'OnLobbyMemberJoined(lobby, player)', kind: 'event' },
+    { from: 'p', to: 'p', label: 'read lobby.Owner.Id → the host to connect to (lesson 06)', kind: 'local' },
+  ]}
+/>
+
+What you should notice:
+
+- Creation and joining are both `async`, and both also raise **events**. The events are the reliable source of truth,
+  because they also fire for joins you didn't start yourself (invites, the friends list).
+- Search results come with the lobby's data **at search time**. You can show a lobby browser without joining anything.
+- Nothing networked has happened yet. The lobby only tells the joiner *who* to connect to.
+
+## The `SteamLobbyManager`
+
+This is the module's second building block. It owns "the lobby I'm in", wraps creation, search and joining, and
+re-raises the static Steam events as instance events for your UI.
+
+```csharp title="SteamLobbyManager.cs"
+using System;
+using System.Linq;
+using System.Threading.Tasks;
+using Steamworks;
+using Steamworks.Data;
+using UnityEngine;
+
+public sealed class SteamLobbyManager : MonoBehaviour
+{
+    // Our own keys. On App ID 480 every Spacewar test in the world shares the lobby list,
+    // so we filter on keys nobody else uses.
+    public const string GameKey = "netlearn_game";
+    public const string GameValue = "chat-demo";
+    public const string VersionKey = "netlearn_ver";
+    public const string Version = "1";
+    public const string NameKey = "name";
+    public const string ReadyKey = "ready";   // member data
+
+    public static SteamLobbyManager Instance { get; private set; }
+
+    public Lobby? Current { get; private set; }
+    public bool InLobby => Current.HasValue;
+    public bool IsOwner => Current is Lobby l && l.IsOwnedBy(SteamClient.SteamId);
+    bool IsCurrent(Lobby lobby) => Current is Lobby c && c.Id == lobby.Id;
+
+    public event Action<Lobby> Entered;
+    public event Action Left;
+    public event Action<Friend> MemberJoined;
+    public event Action<Friend> MemberLeft;
+    public event Action DataChanged;
+
+    void Awake()
+    {
+        if (Instance != null) { Destroy(gameObject); return; }
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+    }
+
+    void OnEnable()
+    {
+        SteamMatchmaking.OnLobbyCreated += HandleCreated;
+        SteamMatchmaking.OnLobbyEntered += HandleEntered;
+        SteamMatchmaking.OnLobbyMemberJoined += HandleMemberJoined;
+        SteamMatchmaking.OnLobbyMemberLeave += HandleMemberLeft;
+        SteamMatchmaking.OnLobbyMemberDisconnected += HandleMemberLeft;
+        SteamMatchmaking.OnLobbyDataChanged += HandleDataChanged;
+        SteamMatchmaking.OnLobbyMemberDataChanged += HandleMemberDataChanged;
+    }
+
+    void OnDisable()
+    {
+        SteamMatchmaking.OnLobbyCreated -= HandleCreated;
+        SteamMatchmaking.OnLobbyEntered -= HandleEntered;
+        SteamMatchmaking.OnLobbyMemberJoined -= HandleMemberJoined;
+        SteamMatchmaking.OnLobbyMemberLeave -= HandleMemberLeft;
+        SteamMatchmaking.OnLobbyMemberDisconnected -= HandleMemberLeft;
+        SteamMatchmaking.OnLobbyDataChanged -= HandleDataChanged;
+        SteamMatchmaking.OnLobbyMemberDataChanged -= HandleMemberDataChanged;
+    }
+
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+        if (SteamClient.IsValid) Leave();   // Steam may already be shut down on quit
+    }
+
+    // ----------------------------------------------------------------- hosting
+    public async Task<bool> HostAsync(int maxMembers = 4, bool friendsOnly = false)
+    {
+        Leave();
+        Lobby? created = await SteamMatchmaking.CreateLobbyAsync(maxMembers);
+        if (!created.HasValue)
+        {
+            Debug.LogWarning("[Lobby] CreateLobbyAsync failed");
+            return false;
+        }
+
+        Lobby lobby = created.Value;
+        if (friendsOnly) lobby.SetFriendsOnly(); else lobby.SetPublic();
+        lobby.SetJoinable(true);
+        lobby.SetData(GameKey, GameValue);
+        lobby.SetData(VersionKey, Version);
+        lobby.SetData(NameKey, $"{SteamClient.Name}'s room");
+        return true;   // Current is set by HandleEntered
+    }
+
+    // ----------------------------------------------------------------- finding
+    public async Task<Lobby[]> FindAsync()
+    {
+        Lobby[] results = await SteamMatchmaking.LobbyList
+            .WithKeyValue(GameKey, GameValue)
+            .WithKeyValue(VersionKey, Version)   // never list incompatible builds
+            .WithSlotsAvailable(1)
+            .FilterDistanceWorldwide()            // default is "nearby" only
+            .WithMaxResults(20)
+            .RequestAsync();
+
+        return results ?? Array.Empty<Lobby>();   // RequestAsync returns null for zero matches
+    }
+
+    // ----------------------------------------------------------------- joining
+    public async Task<bool> JoinAsync(Lobby lobby)
+    {
+        if (IsCurrent(lobby)) return true;
+        Leave();
+
+        RoomEnter result = await lobby.Join();
+        if (result != RoomEnter.Success)
+        {
+            Debug.LogWarning($"[Lobby] Join {lobby.Id} failed: {result}");   // Full, DoesntExist, NotAllowed, …
+            return false;
+        }
+        return true;
+    }
+
+    public void Leave()
+    {
+        if (Current is not Lobby lobby) return;
+        lobby.Leave();
+        Current = null;
+        Left?.Invoke();
+    }
+
+    public void SetReady(bool ready) => Current?.SetMemberData(ReadyKey, ready ? "1" : "0");
+
+    // ----------------------------------------------------------------- events
+    void HandleCreated(Result result, Lobby lobby)
+    {
+        if (result != Result.OK) Debug.LogWarning($"[Lobby] Created with {result}");
+    }
+
+    void HandleEntered(Lobby lobby)
+    {
+        // Facepunch raises this without the enter-response code, so confirm we're really a member.
+        if (!lobby.Members.Any(m => m.IsMe)) return;
+
+        Current = lobby;
+        Debug.Log($"[Lobby] Entered {lobby.Id} (owner {lobby.Owner.Name}, {lobby.MemberCount}/{lobby.MaxMembers})");
+        Entered?.Invoke(lobby);
+    }
+
+    void HandleMemberJoined(Lobby lobby, Friend friend)
+    {
+        if (IsCurrent(lobby)) MemberJoined?.Invoke(friend);
+    }
+
+    void HandleMemberLeft(Lobby lobby, Friend friend)
+    {
+        if (IsCurrent(lobby)) MemberLeft?.Invoke(friend);
+    }
+
+    void HandleDataChanged(Lobby lobby)
+    {
+        if (IsCurrent(lobby)) DataChanged?.Invoke();
+    }
+
+    void HandleMemberDataChanged(Lobby lobby, Friend member)
+    {
+        if (IsCurrent(lobby)) DataChanged?.Invoke();
+    }
+}
+```
+
+The static events fire for **every** lobby the client hears about, including lobbies you merely refreshed with
+`Lobby.Refresh()`, so each handler checks `lobby.Id` against `Current`. That check is cheap insurance against UI
+updating for the wrong room.
+
+## Searching: `LobbyQuery`
+
+`SteamMatchmaking.LobbyList` returns a fresh `LobbyQuery` builder. Every filter returns the query, so you chain them,
+and `RequestAsync()` sends it:
+
+| Filter | Effect |
+|---|---|
+| `WithKeyValue(key, value)` | Lobby data `key` must equal `value` (string compare) |
+| `WithEqual` / `WithNotEqual` / `WithLower` / `WithHigher(key, int)` | Numeric comparisons on lobby data |
+| `OrderByNear(key, int)` | Sort results by closeness to a value (for example a skill rating) |
+| `WithSlotsAvailable(n)` | At least `n` free slots |
+| `FilterDistanceClose()` / `FilterDistanceFar()` / `FilterDistanceWorldwide()` | Geographic range. The default is "nearby". |
+| `WithMaxResults(n)` | Cap the number of results. Fewer results download faster. |
+
+Valve documents that a search takes from 300 ms to 5 seconds, returns at most 50 lobbies, skips full lobbies, and only
+returns **Public or Invisible, joinable** lobbies. Friends-only lobbies never appear in searches: friends reach them
+through the friends list or invites (lesson 05).
+
+<Callout type="pitfall" title="App ID 480 shared-lobby noise">
+
+On Spacewar (480) you are searching the same lobby list as everyone else testing on 480. An unfiltered search returns
+other developers' lobbies, sometimes with keys your code doesn't expect, and joining one gets you into a stranger's
+test. **Always filter on a key that's unique to your project** (like `netlearn_game` above), include a protocol
+version, and ignore results whose data doesn't parse.
+
+</Callout>
+
+<Callout type="pitfall" title="RequestAsync returns null, not an empty array">
+
+When no lobby matches, `LobbyQuery.RequestAsync()` returns `null`. Code like `foreach (var l in await query.RequestAsync())`
+throws a `NullReferenceException` exactly when the list is empty, which is the first thing you'll see in testing.
+Coalesce it to an empty array with `??`, as `FindAsync` does.
+
+</Callout>
+
+Showing results doesn't require joining. The data from the search is already there:
+
+```csharp title="LobbyBrowserRow.cs"
+// Inside a lobby browser UI, for each result:
+string title = lobby.GetData(SteamLobbyManager.NameKey);
+string players = $"{lobby.MemberCount}/{lobby.MaxMembers}";
+label.text = string.IsNullOrEmpty(title) ? "(unnamed)" : $"{title}  {players}";
+joinButton.onClick.AddListener(() => _ = SteamLobbyManager.Instance.JoinAsync(lobby));
+```
+
+## Lobby data and member data
+
+Use **lobby data** for things searchers need (mode, map, version) and things every member must agree on (the
+match settings). Use **member data** for per-player state such as a "ready" flag or a chosen character. Both are
+strings: Facepunch rejects keys longer than 255 characters and values longer than 8,192.
+
+```csharp title="LobbyReadyCheck.cs"
+using System.Linq;
+using Steamworks;
+using Steamworks.Data;
+
+public static class LobbyReadyCheck
+{
+    /// Run on the owner when DataChanged fires.
+    public static bool EveryoneReady(Lobby lobby) =>
+        lobby.MemberCount >= 2 &&
+        lobby.Members.All(m => lobby.GetMemberData(m, SteamLobbyManager.ReadyKey) == "1");
+
+    /// Owner only: freeze the lobby and announce the start.
+    public static void StartMatch(Lobby lobby)
+    {
+        lobby.SetJoinable(false);            // no late joiners this round
+        lobby.SetData("state", "in-game");   // members see OnLobbyDataChanged
+    }
+}
+```
+
+Valve's guidance is to keep lobby data **small and rarely changed**: don't store player counts (search already knows
+slot counts) or anything updated every frame. Lobby data is a coordination tool, not a replication channel. Real-time
+state goes over the sockets from lesson 06.
+
+<Callout type="steam" title="Lobby chat and SetGameServer">
+
+`Lobby.SendChatString(text)` broadcasts a short message to members, received through
+`SteamMatchmaking.OnChatMessage(lobby, friend, text)`. It is handy for "starting in 3…" signals. Facepunch also exposes
+`Lobby.SetGameServer(SteamId)`, which triggers `SteamMatchmaking.OnLobbyGameCreated` on every member: a built-in way
+for the owner to announce "connect to this ID now". This module simply connects to `lobby.Owner.Id` once the owner says
+`state = in-game`.
+
+</Callout>
+
+## Who hosts?
+
+Everyone in a lobby can read the same `lobby.Owner`, so it's a natural <Term id="host">host</Term> election: the owner
+opens a listen socket, and every other member connects to `lobby.Owner.Id`.
+
+<Diagram name="steam-lobby-p2p-flow" caption="Create, join, read the owner's Steam ID, then connect through the relay. Lessons 06–07 implement the right half." />
+
+Ownership can move: if the owner leaves, Steam promotes someone else, but the socket session the old owner hosted is
+gone. For this module, treat "the owner left" as "the session ended" and return players to the lobby screen. Host
+migration is a game-design problem as much as a networking one.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Forgetting to leave">
+
+A lobby you never `Leave()` keeps you as a member until your process exits, and in the editor that's until you close
+Unity. Your next test then joins a second lobby while still listed in the first, and friends see you in a room you
+abandoned. Leave when the player backs out of multiplayer, before joining another lobby, and in `OnDestroy` (guarded by
+`SteamClient.IsValid`).
+
+</Callout>
+
+<Callout type="pitfall" title="Setting lobby data as a non-owner">
+
+`SetData`, `SetJoinable`, `SetPublic` and `MaxMembers = …` only work for the owner; for anyone else they return
+`false` or do nothing. If a client needs to change something, have it set **member data** or send a message to the host,
+and let the host write the lobby data.
+
+</Callout>
+
+<KeyTakeaways>
+
+- A **Steam lobby** is a Steam-hosted room with members, an **owner**, owner-written **lobby data**, per-member **member data** and chat.
+- `SteamMatchmaking.CreateLobbyAsync(max)` creates an **invisible** lobby: immediately call `SetPublic`/`SetFriendsOnly`/`SetPrivate`, `SetJoinable(true)` and `SetData`.
+- Search with `SteamMatchmaking.LobbyList` + filters + `RequestAsync()`. Filter on **your own key and version**, and remember that `null` means "no results".
+- Join with `await lobby.Join()` (check `RoomEnter.Success`), track membership through `OnLobbyEntered`, `OnLobbyMemberJoined`, `OnLobbyMemberLeave`, `OnLobbyDataChanged`, and always `Leave()`.
+- The **owner's Steam ID** is the host everyone connects to in the next lessons.
+
+</KeyTakeaways>
