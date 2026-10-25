@@ -274,4 +274,10 @@ describe('NAT model', () => {
     expect(outcome('port-restricted', 'symmetric')).toBe('relay');
     expect(outcome('symmetric', 'symmetric')).toBe('relay');
   });
+  it('the outcome does not depend on which peer punches first', () => {
+    const types = ['full-cone', 'restricted-cone', 'port-restricted', 'symmetric'] as const;
+    for (const a of types)
+      for (const b of types) expect(simulateHolePunch(a, b).at(-1)!.outcome, `${a} vs ${b}`).toBe(simulateHolePunch(b, a).at(-1)!.outcome);
+    expect(simulateHolePunch('symmetric', 'restricted-cone').at(-1)!.outcome).toBe('direct');
+  });
 });

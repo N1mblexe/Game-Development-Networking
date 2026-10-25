@@ -224,9 +224,26 @@ export function simulateHolePunch(typeA: NatType, typeB: NatType, seed = 7): Tra
     packets: [p2],
   });
 
-  // Peer-reflexive replies: whoever received something answers the address it actually came from.
   let aToB = p1.delivered;
   let bToA = p2.delivered;
+
+  // Peers keep sending checks for a while (ICE paces them every few tens of ms), so when both
+  // first attempts were dropped A tries again: B's punch may have opened B's NAT by now.
+  if (!aToB && !bToA) {
+    const p3 = punch('A', reflexive.B, 'Retry A→B');
+    aToB = p3.delivered;
+    push({
+      title: 'A tries again',
+      text:
+        `Hole punching keeps sending for a few seconds, so A sends to ${ep(reflexive.B)} again, from ${p3.wireSrc}. ` +
+        (p3.delivered
+          ? `This time B's NAT lets it in: B's own punch added A's address to its allow list.`
+          : `B's NAT still drops it (${p3.dropReason}). Neither side can reach the port the other is really using.`),
+      packets: [p3],
+    });
+  }
+
+  // Peer-reflexive replies: whoever received something answers the address it actually came from.
   if (!aToB && learned.A) {
     const p = punch('A', learned.A, 'Reply A→B');
     aToB = p.delivered;
@@ -279,7 +296,7 @@ export function simulateHolePunch(typeA: NatType, typeB: NatType, seed = 7): Tra
     title: 'Connected through the relay',
     text: 'Every packet now goes peer → relay → peer. Replies come from the relay, which both NATs already allow. It always works, at the cost of an extra hop of latency and server bandwidth. Relays also hide the players\' IP addresses from each other, which is why Steam relays by default.',
     packets: [
-      { path: ['A', 'natA', 'relay', 'natB', 'B'], label: 'Game data', wireSrc: `${ep(ra)} → relay → ${ep(rb)}`, wireDst: ep(rb), delivered: true },
+      { path: ['A', 'natA', 'relay', 'natB', 'B'], label: 'Game data', wireSrc: ep(ra), wireDst: `${ep(ADDR.relay)} (relay) → ${ep(rb)}`, delivered: true },
     ],
     outcome: 'relay',
   });

@@ -7,8 +7,6 @@
  */
 import type { SimDefinition } from './types';
 
-const stub = () => import('./StubSim');
-
 export const sims = {
   'link-playground': {
     title: 'Link Playground',
@@ -169,11 +167,19 @@ export const sims = {
     title: 'NAT Traversal',
     description: 'Step through hole punching, and see when a relay is the only way through.',
     lessons: ['theory/nat-and-relays'],
-    load: stub,
+    load: () => import('./NatTraversal'),
     defaultPreset: 'cone',
     presets: {
-      cone: { label: 'Cone NATs (punch works)', props: {} },
-      symmetric: { label: 'Symmetric NAT (relay needed)', props: {} },
+      cone: {
+        label: 'Cone NATs (punch works)',
+        description: 'Both home routers keep one public port per socket, so the addresses from the rendezvous server are right.',
+        props: { natA: 'port-restricted', natB: 'port-restricted' },
+      },
+      symmetric: {
+        label: 'Symmetric NAT (relay needed)',
+        description: 'B picks a new public port for every destination, so the punch misses and traffic falls back to a relay.',
+        props: { natA: 'port-restricted', natB: 'symmetric' },
+      },
     },
   },
 } satisfies Record<string, SimDefinition>;
