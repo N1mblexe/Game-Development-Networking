@@ -134,7 +134,7 @@ channels as you can, and put messages that depend on each other in the same one.
 
 ## Quantization
 
-A 32-bit `float` has about 7 significant digits wherever it is. Nobody needs a player's position to a millionth of a millimetre.
+A 32-bit `float` has about 7 significant digits wherever it is. Nobody needs a player's position to a thousandth of a millimetre.
 <Term id="quantization">Quantization</Term> maps a value in a known range to an integer with only the precision you need.
 
 The bits needed for range *R* at precision *p* are `ceil(log2(R / p))`:
@@ -210,7 +210,7 @@ of id and flags. That's about 130 bits, or **16 bytes**, compared with 44 bytes 
 > 300 bytes × 30 packets/s = 9 KB/s ≈ 72 kbit/s per client
 > 16 clients × 9 KB/s = 144 KB/s ≈ 1.15 Mbit/s server upload
 
-Before delta compression, that's already 2.4 times smaller than the naive version. Note that the 28 header bytes are a fixed cost per
+Before delta compression, that's already about 2.5 times smaller than the naive version. Note that the 28 header bytes are a fixed cost per
 packet: at 60 packets per second they alone cost 1.7 KB/s, which is one reason to bundle everything for a client into one packet per tick.
 
 <Sim name="bandwidth-calculator" preset="arena-16p" caption="Change players, entities, fields, tick rate and bit-packing." />

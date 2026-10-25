@@ -351,8 +351,9 @@ questions:
     tags: [reliability-serialization, security]
     explanation: >-
       What matters is what the **receiver** deserializes, and that's decided by the bytes, which an attacker controls. BinaryFormatter
-      can be made to construct arbitrary types, which leads to remote code execution. Microsoft calls it dangerous and has removed it from
-      .NET 9. Read only the fields you expect, with length limits.
+      can be made to construct arbitrary types, which leads to remote code execution. Microsoft calls it dangerous, and from .NET 9 its
+      in-box implementation always throws. Older runtimes, such as the ones Unity uses, can still have a working one, so the danger is
+      real. Read only the fields you expect, with length limits.
 
   # ------------------------------------------------------------------ 11 nat-and-relays
   - id: cgnat-port-forward
