@@ -238,7 +238,7 @@ public sealed class SteamProgress : MonoBehaviour
         if (!SteamBootstrap.IsReady) return;
 
         if (!SteamUserStats.AddStat(sessionsStat, 1))
-            Debug.LogWarning($"[Stats] AddStat({sessionsStat}) failed: unknown name, wrong type or unpublished?");
+            Debug.LogWarning($"[Stats] AddStat({sessionsStat}) failed: name, type or unpublished?");
         dirty = true;
 
         var first = new Achievement(firstSessionAchievement);
@@ -248,12 +248,13 @@ public sealed class SteamProgress : MonoBehaviour
     public void StoreNow()
     {
         if (!dirty || !SteamClient.IsValid) return;
-        if (Time.unscaledTime - lastStoreTime < minSecondsBetweenStores) return;   // rate limit ourselves
+        // Rate limit ourselves: Valve asks for minutes between stores, not seconds.
+        if (Time.unscaledTime - lastStoreTime < minSecondsBetweenStores) return;
 
         if (SteamUserStats.StoreStats())
         {
             lastStoreTime = Time.unscaledTime;
-            dirty = false;   // cleared optimistically; HandleStored sets it again on failure
+            dirty = false;   // optimistic; HandleStored sets it again on failure
         }
     }
 
@@ -262,8 +263,9 @@ public sealed class SteamProgress : MonoBehaviour
     void HandleStored(Result result)
     {
         if (result == Result.OK) return;
-        Debug.LogWarning($"[Stats] StoreStats failed: {result}");   // InvalidParam = a constraint was broken
-        dirty = result != Result.InvalidParam;                      // retry later, unless Steam rejected the values
+        // InvalidParam: a value broke a constraint and Steam reverted it, so don't retry.
+        Debug.LogWarning($"[Stats] StoreStats failed: {result}");
+        dirty = result != Result.InvalidParam;
     }
 
     void HandleAchievementProgress(Achievement achievement, int current, int max)
