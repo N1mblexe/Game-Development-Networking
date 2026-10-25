@@ -1,0 +1,234 @@
+/*
+ * Certificate: always "paper" (white, dark ink) so it reads as a document in both themes and
+ * prints the same. Sizes use container-query units, so the layout scales from 360 px to a
+ * landscape page without reflowing. Only loaded on pages that render <Certificate>.
+ */
+.cert-wrap {
+  container-type: inline-size;
+}
+
+.cert {
+  --ink: #1b1f27;
+  --ink-soft: #5b6270;
+  --paper: #fffdf8;
+  --cert: #2459d6; /* overridden inline with the module color */
+  --cert-soft: color-mix(in srgb, var(--cert) 9%, var(--paper));
+  position: relative;
+  aspect-ratio: 1.414 / 1;
+  width: 100%;
+  background:
+    radial-gradient(120% 80% at 50% 0%, var(--cert-soft), transparent 60%),
+    var(--paper);
+  color: var(--ink);
+  border-radius: 0.6rem;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.06),
+    0 12px 32px -12px rgb(0 0 0 / 0.25);
+  padding: 2.6cqw;
+  font-family: var(--font-sans);
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.cert-frame {
+  position: relative;
+  height: 100%;
+  border: 0.35cqw solid var(--cert);
+  border-radius: 0.3rem;
+  padding: 0.7cqw;
+}
+.cert-inner {
+  height: 100%;
+  border: 1px solid color-mix(in srgb, var(--cert) 45%, transparent);
+  border-radius: 0.2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  text-align: center;
+  padding: 3.2cqw 5cqw 2.6cqw;
+}
+
+/* corner brackets */
+.cert-frame::before,
+.cert-frame::after {
+  content: '';
+  position: absolute;
+  width: 5cqw;
+  height: 5cqw;
+  border: 0 solid var(--cert);
+}
+.cert-frame::before {
+  top: 1.6cqw;
+  left: 1.6cqw;
+  border-top-width: 0.25cqw;
+  border-left-width: 0.25cqw;
+}
+.cert-frame::after {
+  bottom: 1.6cqw;
+  right: 1.6cqw;
+  border-bottom-width: 0.25cqw;
+  border-right-width: 0.25cqw;
+}
+
+.cert-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.8cqw;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-size: max(0.7rem, 1.9cqw);
+  color: var(--ink);
+}
+.cert-brand svg {
+  width: max(1rem, 2.6cqw);
+  height: max(1rem, 2.6cqw);
+  color: var(--cert);
+}
+.cert-kicker {
+  margin-top: 1.2cqw;
+  font-size: max(0.55rem, 1.35cqw);
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--cert);
+}
+.cert-small {
+  font-size: max(0.6rem, 1.55cqw);
+  color: var(--ink-soft);
+}
+.cert-name {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif;
+  font-size: max(1.25rem, 5.4cqw);
+  line-height: 1.1;
+  font-weight: 600;
+  font-style: italic;
+  padding: 0 3cqw 0.6cqw;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  min-width: 55%;
+  overflow-wrap: anywhere;
+}
+.cert-name[data-empty='true'] {
+  color: #a9aeb8;
+}
+.cert-module {
+  font-size: max(0.9rem, 3.1cqw);
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  color: var(--ink);
+}
+.cert-footer {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  gap: 2cqw;
+}
+.cert-field {
+  font-size: max(0.55rem, 1.35cqw);
+  color: var(--ink-soft);
+  border-top: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  padding-top: 0.6cqw;
+}
+.cert-field strong {
+  display: block;
+  color: var(--ink);
+  font-size: max(0.65rem, 1.6cqw);
+  font-weight: 650;
+}
+.cert-seal {
+  width: max(3rem, 10.5cqw);
+  height: max(3rem, 10.5cqw);
+  border-radius: 50%;
+  background: var(--cert);
+  color: #fff;
+  display: grid;
+  place-content: center;
+  line-height: 1;
+  box-shadow:
+    0 0 0 0.45cqw var(--paper),
+    0 0 0 0.75cqw var(--cert);
+}
+.cert-seal b {
+  font-size: max(0.8rem, 2.6cqw);
+  font-weight: 800;
+}
+.cert-seal span {
+  margin-top: 0.4cqw;
+  font-size: max(0.4rem, 1cqw);
+  letter-spacing: 0.18em;
+  font-weight: 700;
+}
+
+/* Below ~520 px a fixed aspect ratio would make the text tiny: let it grow taller instead. */
+@container (max-width: 520px) {
+  .cert {
+    aspect-ratio: auto;
+  }
+  .cert-inner {
+    gap: 1.1rem;
+    padding: 1.75rem 1rem 1.25rem;
+  }
+  .cert-brand {
+    font-size: 1rem;
+  }
+  .cert-kicker {
+    font-size: 0.62rem;
+    letter-spacing: 0.24em;
+  }
+  .cert-small {
+    font-size: 0.82rem;
+  }
+  .cert-name {
+    font-size: 1.85rem;
+  }
+  .cert-module {
+    font-size: 1.3rem;
+  }
+  .cert-field {
+    font-size: 0.7rem;
+  }
+  .cert-field strong {
+    font-size: 0.8rem;
+  }
+  .cert-footer {
+    grid-template-columns: 1fr 1fr;
+  }
+  .cert-seal {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    justify-self: center;
+    margin-bottom: 0.5rem;
+  }
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 0;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+  .cert-wrap {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 6mm;
+  }
+  .cert {
+    aspect-ratio: auto;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
+    break-inside: avoid;
+  }
+}

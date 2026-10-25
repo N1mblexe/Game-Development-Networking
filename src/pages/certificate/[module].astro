@@ -17,6 +17,7 @@ const lessons = await getLessons(module.id);
     moduleId={module.id}
     moduleTitle={module.data.title}
     moduleColor={module.data.color}
+    moduleBadge={module.data.badge}
     lessonKeys={lessons.map((l) => l.id)}
     examUrl={examUrl(module.id)}
   />
