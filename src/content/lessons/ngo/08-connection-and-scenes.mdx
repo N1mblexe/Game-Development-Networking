@@ -69,7 +69,7 @@ What you should notice:
 ## Connection approval
 
 Turn on **Connection Approval** on the NetworkManager (or set `NetworkConfig.ConnectionApproval = true`) and assign
-`NetworkManager.ConnectionApprovalCallback`, which has the type `Action<ConnectionApprovalRequest, ConnectionApprovalResponse>`.
+`NetworkManager.ConnectionApprovalCallback`, an `Action` that receives a `ConnectionApprovalRequest` and a `ConnectionApprovalResponse`.
 Only one callback can be registered at a time. The request carries:
 
 - `ClientNetworkId`: the joining client's id.
