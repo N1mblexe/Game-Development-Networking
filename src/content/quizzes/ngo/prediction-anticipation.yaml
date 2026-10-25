@@ -9,7 +9,7 @@ questions:
       and stale-data detection. A full rollback-and-replay loop is left to you.
   - id: value-vs-authoritative
     type: codeline
-    prompt: This server-side check lets a player fire with zero ammo if they click quickly. Click the buggy line.
+    prompt: This server-side check makes its decision from the wrong value. Click the buggy line.
     code: |-
       public bool ServerSpend()
       {
@@ -21,7 +21,8 @@ questions:
     answerLines: [4]
     explanation: >-
       Server decisions should use `AuthoritativeValue`, the real state. `Value` is the anticipated, display-side value.
-      Checking one and writing the other mixes the two, so check `Ammo.AuthoritativeValue <= 0`.
+      On the server the two usually match, because `Anticipate` there writes both, but `Value` can differ (for example
+      while a `Smooth` is running). Checking one and writing the other mixes them, so check `Ammo.AuthoritativeValue <= 0`.
   - id: write-transform
     type: codeline
     prompt: On a client, this anticipated movement keeps snapping back every update. Click the line responsible.
