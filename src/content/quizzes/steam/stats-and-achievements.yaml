@@ -1,0 +1,74 @@
+passPct: 70
+questions:
+  - id: lost-progress
+    type: single
+    prompt: "`AddStat(\"NumGames\", 1)` returned true, but after the game crashed the value on Steam's servers hadn't changed. Why?"
+    options:
+      - AddStat only works for float stats
+      - "Sets only change the Steam client's local cache; nothing was uploaded because `StoreStats()` wasn't called"
+      - Stats can only be written by game servers
+      - "You must call `RequestCurrentStats()` before every set"
+    answer: 1
+    explanation: >-
+      Setting stats is local and cheap. `StoreStats()` uploads them. Steam stores unsaved changes when the process exits
+      normally, but a crash before that loses them.
+  - id: store-every-frame
+    type: codeline
+    prompt: This tracks distance for Spacewar's `FeetTraveled` stat. Click the line that will get the game rate limited.
+    code: |-
+      void Update()
+      {
+          float moved = Vector3.Distance(transform.position, lastPos);
+          lastPos = transform.position;
+          SteamUserStats.AddStat("FeetTraveled", moved);
+          SteamUserStats.StoreStats();
+      }
+    answerLines: [6]
+    explanation: >-
+      Adding to the stat every frame is fine because it's local. Storing every frame is not: Valve rate limits
+      `StoreStats` and asks for calls "on the order of minutes". Store at the end of a round, on leaving a lobby, and on quit.
+  - id: achievement-setup-order
+    type: order
+    prompt: Order the steps to ship a new achievement, from the partner site to the player seeing it.
+    items:
+      - Create the progress stat (if any) on the partner site
+      - Create the achievement with its API name and icons
+      - Publish the changes from the Publish tab
+      - "Call `new Achievement(\"ACH_…\").Trigger()` in the game"
+      - "`StoreStats` uploads the unlock (Trigger does it by default)"
+      - The overlay shows the unlock notification
+    explanation: >-
+      A progress stat must exist before the achievement that uses it, and nothing works until the changes are published.
+      Valve only shows the notification after the unlock is stored.
+  - id: protect-competitive
+    type: multi
+    prompt: Which measures limit what a modified client can do to competitive stats and leaderboards? Select all that apply.
+    options:
+      - Set **Increment Only** and **Max Change** on the stat
+      - Set the stat's **Set By** to GS or Official GS and write it from a game server
+      - Set the leaderboard's **Writes** to Trusted and submit scores from your backend
+      - Call `StoreStats` more often so tampering is overwritten
+      - Validate the player's auth ticket before they set stats
+    answers: [0, 1, 2]
+    explanation: >-
+      Clients write their own stats, so protection has to come from server-side rules or from writes the client can't make.
+      An auth ticket proves who the player is, not that their client is honest.
+  - id: ascending-sort
+    type: truefalse
+    prompt: "A leaderboard created with `LeaderboardSort.Ascending` lists the highest score first."
+    answer: false
+    explanation: >-
+      Ascending means the **lowest** score is top, which suits lap times. Use `Descending` for points. Facepunch's wiki
+      page states this the other way round, but the source and Valve's docs agree.
+  - id: around-user-null
+    type: single
+    prompt: "`await board.GetScoresAroundUserAsync(-3, 3)` returns `null`. What's the most likely reason in a fresh test?"
+    options:
+      - The leaderboard sort is wrong
+      - The local player has no entry on that board yet
+      - The range must be positive
+      - Leaderboards don't work on App ID 480
+    answer: 1
+    explanation: >-
+      Facepunch returns `null` when the download has no entries, and "around the user" has nothing to centre on until the
+      player has submitted a score. Fall back to `GetScoresAsync(10)`.

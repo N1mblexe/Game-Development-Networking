@@ -1,0 +1,77 @@
+passPct: 70
+questions:
+  - id: where-work-happens
+    type: single
+    prompt: Your game calls a Steamworks function. Where does most of the work actually happen?
+    options:
+      - "Inside `steam_api64.dll`, which talks directly to Valve's servers"
+      - "In the locally running Steam client, which the game talks to over IPC and which talks to Valve's backend"
+      - "In a Valve web API that the game calls over HTTPS with an API key"
+      - "In your own backend, which forwards requests to Steam"
+    answer: 1
+    explanation: >-
+      The native library in your game is thin. It talks to the **Steam client** already running on the player's machine,
+      and that client talks to Valve. That's why Steam must be running and why your game never needs Valve credentials.
+  - id: what-steam-provides
+    type: multi
+    prompt: Which of these does Steam provide for the lobby + relay architecture in this module? Select all that apply.
+    options:
+      - Discovery and a rendezvous point (lobbies)
+      - Transport through any NAT with IPs hidden (Steam Datagram Relay)
+      - Proof of identity and ownership (auth session tickets)
+      - Game state replication
+      - Protection against modified clients sending dishonest messages
+    answers: [0, 1, 2]
+    explanation: >-
+      Steam handles identity, discovery and transport. Deciding what state to send and who has authority is your job
+      (or NGO's in module 4), and an auth ticket proves *who* someone is, not that their messages are honest.
+  - id: two-wrappers
+    type: truefalse
+    prompt: You can safely install Facepunch.Steamworks and Steamworks.NET in the same Unity project, as long as each script only uses one of them.
+    answer: false
+    explanation: >-
+      Both wrappers put their types in the `Steamworks` namespace, so having both produces ambiguous-type errors. Pick one
+      wrapper per project and check which one a tutorial uses before copying from it.
+  - id: architecture-order
+    type: order
+    prompt: Put the steps of this module's lobby + relay session in order.
+    items:
+      - A player creates a lobby and becomes its owner
+      - Friends join through an invite, the friends list or a search
+      - Every member reads the lobby owner's Steam ID
+      - Members connect to the owner through Steam Networking Sockets
+      - The host verifies each peer's auth session ticket
+      - Game messages flow over the connections
+    explanation: >-
+      The lobby is only the rendezvous: it tells everyone who the host is. The networked session starts when members
+      connect to the owner's Steam ID, and the host checks tickets before trusting anyone.
+  - id: wrong-wrapper-line
+    type: codeline
+    prompt: This Facepunch.Steamworks code was "fixed" with a line from a Steamworks.NET tutorial. Click the line that doesn't belong.
+    code: |-
+      using Steamworks;
+      using Steamworks.Data;
+
+      public async void HostLobby()
+      {
+          Lobby? created = await SteamMatchmaking.CreateLobbyAsync(4);
+          if (!created.HasValue) return;
+          SteamAPI.RunCallbacks();
+          created.Value.SetFriendsOnly();
+      }
+    answerLines: [8]
+    explanation: >-
+      `SteamAPI.RunCallbacks` is Steamworks.NET. Facepunch's pump is `SteamClient.RunCallbacks()` (or the default
+      `asyncCallbacks`), and it belongs in your bootstrap's `Update`, not after an `await` that already needed it to complete.
+  - id: app-480-noise
+    type: single
+    prompt: Why is an unfiltered lobby search on App ID 480 full of lobbies you didn't create?
+    options:
+      - Valve seeds 480 with fake lobbies for testing
+      - Spacewar (480) is shared by thousands of developers testing their own games
+      - Lobby searches ignore the App ID
+      - Lobbies on 480 never expire
+    answer: 1
+    explanation: >-
+      480 is Valve's sample app, used by everyone who doesn't have their own App ID yet. You search the same lobby list as
+      all of them, so you filter on your own key and version.

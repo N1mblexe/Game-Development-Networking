@@ -1,0 +1,69 @@
+passPct: 70
+questions:
+  - id: player-key
+    type: single
+    prompt: You need a dictionary of per-player data that survives name changes and is safe to save to disk. What should the key be?
+    options:
+      - "`Friend.Name`"
+      - "`SteamId.AccountId` (the 32-bit account number)"
+      - "`SteamId.Value` (the full 64-bit ID)"
+      - The player's index in the lobby member list
+    answer: 2
+    explanation: >-
+      Display names change and aren't unique, and the 32-bit account ID drops the account type and universe. The full
+      64-bit `SteamId` is stable and identifies users, lobbies and servers alike. Store it as a string in JSON.
+  - id: avatar-orientation
+    type: truefalse
+    prompt: "Steam avatar `Image.Data` can be loaded into a `Texture2D` with `LoadRawTextureData` as-is, and it displays the right way up."
+    answer: false
+    explanation: >-
+      Steam images are RGBA with the first row at the **top**, while Unity textures start at the bottom. Without flipping
+      the rows, every avatar renders upside down.
+  - id: avatar-bug
+    type: codeline
+    prompt: This converter produces upside-down avatars. Click the line that needs to change.
+    code: |-
+      public static Texture2D ToTexture(SteamImage image)
+      {
+          var tex = new Texture2D((int)image.Width, (int)image.Height, TextureFormat.RGBA32, false);
+          tex.LoadRawTextureData(image.Data);
+          tex.Apply();
+          return tex;
+      }
+    answerLines: [4]
+    explanation: >-
+      `image.Data` is top-down. Copy it row by row into a new array in reverse order (as `SteamAvatarCache.ToTexture` does)
+      and load that instead.
+  - id: friend-struct
+    type: multi
+    prompt: Which statements about Facepunch's `Friend` struct are true? Select all that apply.
+    options:
+      - It holds only a `SteamId`, and its properties read live data from the Steam client
+      - "`IsPlayingThisGame` is true when their current game has your App ID"
+      - "`GameInfo?.Lobby` is null when they aren't in a lobby"
+      - "`Name` is unique among your friends"
+      - It is a snapshot, so you must re-fetch the friends list to see a status change
+    answers: [0, 1, 2]
+    explanation: >-
+      `Friend` is a thin wrapper around a Steam ID, and every property calls into the Steam client, so values are current.
+      Names aren't unique, which is why the Steam ID is the key.
+  - id: avatar-flow
+    type: order
+    prompt: Order the steps of loading a friend's avatar through `SteamAvatarCache`.
+    items:
+      - Check the cache for an existing texture
+      - "`await SteamFriends.GetMediumAvatarAsync(id)`"
+      - Flip the RGBA rows from top-down to bottom-up
+      - Create an RGBA32 `Texture2D` and load the flipped bytes
+      - Store the texture in the cache and assign it to the UI
+    explanation: >-
+      Downloads are async and cost a round trip, so you check the cache first and store the result. The flip is what
+      turns Steam's top-down rows into Unity's bottom-up layout.
+  - id: persona-event
+    type: fill
+    prompt: Which `SteamFriends` event should a friends panel listen to instead of polling every frame?
+    answers: [OnPersonaStateChange, SteamFriends.OnPersonaStateChange]
+    placeholder: SteamFriends.On…
+    explanation: >-
+      `SteamFriends.OnPersonaStateChange` fires for name, status, game and avatar changes. Mark the list dirty and rebuild
+      at most once per frame, because it can fire many times a second right after login.

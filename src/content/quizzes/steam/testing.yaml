@@ -1,0 +1,79 @@
+passPct: 70
+questions:
+  - id: clones-one-user
+    type: single
+    prompt: Why can't two ParrelSync clones on one PC test a lobby invite between two players?
+    options:
+      - ParrelSync blocks native plugins
+      - Both processes talk to the same Steam client and are logged in as the same account
+      - Lobbies don't work in the editor
+      - The relay refuses connections from the same IP address
+    answer: 1
+    explanation: >-
+      Every process on the machine connects to the one running Steam client, so both report the same `SteamId`. Lobby
+      membership, invites, presence and auth all need two different accounts.
+  - id: single-machine-scope
+    type: multi
+    prompt: What can you meaningfully test with two processes on one machine? Select all that apply.
+    options:
+      - Your message protocol over local UDP (`CreateNormalSocket` / `ConnectNormal`)
+      - Invites between two players
+      - Auth tickets between two different accounts
+      - Message parsing and bounds checks
+    answers: [0, 3]
+    explanation: >-
+      Local UDP mode exercises your socket code and protocol. Anything that depends on two identities (invites, presence,
+      relayed connections between players, auth) needs two accounts.
+  - id: conditioner-bug
+    type: codeline
+    prompt: After disabling this component, connections still feel laggy. Click the buggy line.
+    code: |-
+      void OnEnable()
+      {
+          SteamNetworkingUtils.FakeSendPacketLag = lagMs;
+          SteamNetworkingUtils.FakeRecvPacketLag = lagMs;
+          SteamNetworkingUtils.FakeSendPacketLoss = lossPct;
+          SteamNetworkingUtils.FakeRecvPacketLoss = lossPct;
+      }
+
+      void OnDisable()
+      {
+          SteamNetworkingUtils.FakeSendPacketLag = 0;
+          SteamNetworkingUtils.FakeRecvPacketLag = lagMs;
+          SteamNetworkingUtils.FakeSendPacketLoss = 0;
+          SteamNetworkingUtils.FakeRecvPacketLoss = 0;
+      }
+    answerLines: [12]
+    explanation: >-
+      `OnDisable` should reset every setting to 0, but line 12 leaves the receive lag in place. These are global settings
+      for every Steam networking connection in the process.
+  - id: cold-invite-test
+    type: order
+    prompt: Order the steps for testing a cold-start invite on your own App ID with two accounts.
+    items:
+      - Install a build on both PCs and make the two accounts friends
+      - Account A hosts a lobby and sends an invite
+      - Account B closes the game completely
+      - Account B clicks **Join Game** in Steam chat
+      - "Steam launches B's build with `+connect_lobby <id>`, and B lands in A's lobby"
+    explanation: >-
+      The cold path only happens when the game isn't running. On 480, Steam would launch Spacewar instead of your build,
+      which is why this test needs your own App ID (or starting your build with the argument yourself).
+  - id: same-account
+    type: truefalse
+    prompt: Logging the same Steam account into two PCs is a good way to get two players for a lobby test.
+    answer: false
+    explanation: >-
+      Steam treats it as one user: lobbies see one member, and auth tickets can fail with `LoggedInElseWhere`. Use two
+      accounts.
+  - id: bug-report-string
+    type: single
+    prompt: Which single call gives the most useful text to paste into a networking bug report?
+    options:
+      - "`SteamClient.SteamId.ToString()`"
+      - "`connection.DetailedStatus()`"
+      - "`SteamNetworkingUtils.LocalPingLocation`"
+      - "`lobby.GetData(\"state\")`"
+    answer: 1
+    explanation: >-
+      `DetailedStatus()` reports the route (relayed or direct), the relays in use, ping, packet loss and queue sizes.

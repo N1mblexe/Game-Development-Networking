@@ -1,0 +1,73 @@
+passPct: 70
+questions:
+  - id: invisible-lobby
+    type: single
+    prompt: You create a lobby with `CreateLobbyAsync(4)`, set some data and send no invites. Your friends can't see or join it from the friends list. Why?
+    options:
+      - Lobbies need at least two members before they're visible
+      - "`CreateLobbyAsync` creates an invisible lobby; you must call `SetPublic()`, `SetFriendsOnly()` or `SetPrivate()`"
+      - Lobby data must be set before the lobby is created
+      - Friends can only join through the overlay invite dialog
+    answer: 1
+    explanation: >-
+      Facepunch's `CreateLobbyAsync` always creates the lobby as **Invisible**. Set the type right after creating it,
+      along with `SetJoinable(true)` and your search keys.
+  - id: setdata-bug
+    type: codeline
+    prompt: This handler runs on every member when they enter the lobby. Click the line that silently does nothing for most of them.
+    code: |-
+      void HandleEntered(Lobby lobby)
+      {
+          Current = lobby;
+          lobby.SetMemberData("ready", "0");
+          lobby.SetData("map", "arena");
+      }
+    answerLines: [5]
+    explanation: >-
+      Only the **owner** can write lobby data, so `SetData` fails for every other member. Members write their own member
+      data (line 4 is fine), and the owner writes lobby data.
+  - id: search-visibility
+    type: multi
+    prompt: Which lobby types can appear in a `LobbyList` search? Select all that apply.
+    options:
+      - Public
+      - FriendsOnly
+      - Private
+      - Invisible
+    answers: [0, 3]
+    explanation: >-
+      Valve documents that searches only return joinable **Public** and **Invisible** lobbies. Friends-only and private
+      lobbies are reached through the friends list or invites.
+  - id: host-join-order
+    type: order
+    prompt: Order the events when a host creates a lobby and another player finds and joins it.
+    items:
+      - "Host: `await SteamMatchmaking.CreateLobbyAsync(4)`"
+      - "Host: `OnLobbyEntered` fires; the host is owner and first member"
+      - "Host: `SetPublic()`, `SetJoinable(true)`, `SetData(...)`"
+      - "Player: `LobbyList.WithKeyValue(...).RequestAsync()`"
+      - "Player: `await lobby.Join()` returns `RoomEnter.Success`"
+      - "Host: `OnLobbyMemberJoined` fires"
+      - "Player: reads `lobby.Owner.Id` as the host to connect to"
+    explanation: >-
+      The lobby has to exist and be public before anyone can find it. Joining raises events on both sides, and the
+      joiner then knows whom to connect to.
+  - id: ready-flag
+    type: single
+    prompt: Each player toggles a "ready" checkbox before the match. Where should that flag live?
+    options:
+      - In lobby data, written by each player
+      - In member data, written by each player for themselves
+      - In rich presence
+      - In a reliable socket message only
+    answer: 1
+    explanation: >-
+      Member data is per-member and each member can set only their own, which is exactly a ready flag. Lobby data can only
+      be written by the owner.
+  - id: requestasync-null
+    type: truefalse
+    prompt: "`LobbyQuery.RequestAsync()` returns an empty array when no lobby matches."
+    answer: false
+    explanation: >-
+      It returns `null`, so `foreach` over the result throws exactly when the list is empty. Coalesce with
+      `?? Array.Empty<Lobby>()`.

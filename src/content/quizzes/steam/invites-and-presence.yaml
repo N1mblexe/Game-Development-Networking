@@ -1,0 +1,78 @@
+passPct: 70
+questions:
+  - id: cold-start
+    type: single
+    prompt: A friend accepts your invite while your game is **not** running. How does the newly launched game learn which lobby to join?
+    options:
+      - "`SteamFriends.OnGameLobbyJoinRequested` fires after `Init`"
+      - "Steam passes `+connect_lobby <lobby id>` on the command line"
+      - "`SteamMatchmaking.OnLobbyInvite` fires on startup"
+      - The lobby is joined automatically before the game starts
+    answer: 1
+    explanation: >-
+      A cold start fires no callback. Steam launches the game with `+connect_lobby <id>`, and you parse it yourself once
+      Steam is initialized.
+  - id: join-requested-sources
+    type: multi
+    prompt: "With the game running, which actions fire `SteamFriends.OnGameLobbyJoinRequested`? Select all that apply."
+    options:
+      - The player clicks **Join Game** on an invite in Steam chat
+      - The player picks **Join Game** on a friend who is in a joinable lobby
+      - An invite arrives but the player hasn't clicked it yet
+      - The game is launched from a closed state by an invite
+    answers: [0, 1]
+    explanation: >-
+      Accepting an invite and joining a friend from the friends list both end in `OnGameLobbyJoinRequested`. An arriving
+      invite fires `SteamMatchmaking.OnLobbyInvite` instead, and a cold start uses the command line.
+  - id: stale-connect
+    type: codeline
+    prompt: Friends keep launching into lobbies that no longer exist. Click the line that causes it.
+    code: |-
+      public static void InLobby(Lobby lobby)
+      {
+          string id = lobby.Id.ToString();
+          SteamFriends.SetRichPresence("status", "In a lobby");
+          SteamFriends.SetRichPresence("connect", $"+connect_lobby {id}");
+      }
+
+      public static void InMenu()
+      {
+          SteamFriends.SetRichPresence("status", "In the main menu");
+          SteamFriends.SetRichPresence("connect", $"+connect_lobby {lastLobbyId}");
+      }
+    answerLines: [11]
+    explanation: >-
+      Back in the menu, the player still advertises the old lobby through `connect`, so **Join Game** stays enabled. Clear
+      presence (`ClearRichPresence()`) or set `connect` to an empty value when leaving.
+  - id: cold-start-order
+    type: order
+    prompt: Order the cold-start invite flow.
+    items:
+      - The friend clicks **Join Game** while the game is closed
+      - "Steam launches the game with `+connect_lobby <id>`"
+      - "`SteamClient.Init` succeeds in the bootstrap"
+      - The invite handler parses the command line in `Start`
+      - "`await lobby.Join()`"
+      - "`OnLobbyEntered` fires and the lobby screen opens"
+    explanation: >-
+      The argument is only useful once Steam is initialized, which is why `SteamInviteHandler` parses it in `Start`, after
+      the bootstrap's `Awake`.
+  - id: steam-display-480
+    type: truefalse
+    prompt: On App ID 480 you can make the friends list show "In a lobby (2/4)" next to your name by setting `steam_display`.
+    answer: false
+    explanation: >-
+      `steam_display` takes a localization token from a rich presence file you upload for your own app. You can't upload
+      one for Spacewar, so on 480 only `status` and `connect` are useful.
+  - id: overlay-editor
+    type: single
+    prompt: "Your invite button checks `SteamUtils.IsOverlayEnabled`, and it's false. Where are you most likely running?"
+    options:
+      - In a development build with the overlay enabled
+      - In the Unity editor
+      - On a second Steam account
+      - With asyncCallbacks set to true
+    answer: 1
+    explanation: >-
+      The overlay is injected into the game's rendering and generally isn't hooked into the Unity editor. Test invite
+      flows in a build, or fall back to `lobby.InviteFriend` with your own friend picker.

@@ -1,0 +1,72 @@
+passPct: 70
+questions:
+  - id: ticket-proves
+    type: multi
+    prompt: What does a successfully validated auth session ticket tell the host? Select all that apply.
+    options:
+      - The ticket was issued to the Steam ID that presented it
+      - The account has a license for your App ID
+      - The Steam ID of the copy's owner (different under Family Sharing)
+      - The client is running an unmodified build
+      - The messages the client sends are honest
+    answers: [0, 1, 2]
+    explanation: >-
+      A ticket proves identity, license and ownership (plus ban status for apps that use VAC or publisher bans). It isn't
+      anti-cheat, so the host still validates every message.
+  - id: claimed-id-bug
+    type: codeline
+    prompt: This host reads a Steam ID from the Hello message. Click the line that makes the auth check meaningless.
+    code: |-
+      case MsgType.Hello:
+          SteamId claimed = r.ReadULong();
+          byte[] ticket = r.ReadBytes(HostAuthGate.MaxTicketBytes);
+          BeginAuthResult result = SteamUser.BeginAuthSession(ticket, claimed);
+          if (result != BeginAuthResult.OK) connection.Close(false, 1003, "Auth rejected");
+          break;
+    answerLines: [4]
+    explanation: >-
+      Pass the Steam ID that Steam attached to the connection (`identity.SteamId`), not one the client wrote into its
+      message. Key every per-player structure by that verified identity.
+  - id: auth-order
+    type: order
+    prompt: Order the auth ticket flow between a client and the host.
+    items:
+      - "Client: `await SteamUser.GetAuthSessionTicketAsync(hostSteamId)`"
+      - "Client: send `Hello(ticket.Data)` reliably"
+      - "Host: `SteamUser.BeginAuthSession(ticket, connectionSteamId)` returns `OK`"
+      - "Host: `OnValidateAuthTicketResponse` arrives with `AuthResponse.OK`"
+      - "Host: send `Welcome` and treat the peer as verified"
+      - "On leaving: the client calls `ticket.Cancel()`, the host calls `EndAuthSession`"
+    explanation: >-
+      `BeginAuthSession` is only a quick local check. The real verdict arrives later in the callback, and both sides
+      clean up when the session ends.
+  - id: ticket-identity
+    type: single
+    prompt: "In this module's P2P session, what should the client pass as the identity to `GetAuthSessionTicketAsync`?"
+    options:
+      - Its own Steam ID
+      - "The host's Steam ID (`lobby.Owner.Id`), the system that will validate the ticket"
+      - The lobby's Steam ID
+      - Nothing; the parameterless overload is the current API
+    answer: 1
+    explanation: >-
+      The identity is whoever will **validate** the ticket. For peer-to-peer, Valve says to pass the other user's Steam ID.
+      A ticket presented to someone else fails with `AuthTicketNetworkIdentityFailure`.
+  - id: begin-ok
+    type: truefalse
+    prompt: "When `BeginAuthSession` returns `BeginAuthResult.OK`, the peer is verified and can be trusted."
+    answer: false
+    explanation: >-
+      `OK` only means the ticket passed a quick local check. Trust the peer only when `OnValidateAuthTicketResponse`
+      reports `AuthResponse.OK`, which can take a while.
+  - id: duplicate-request
+    type: single
+    prompt: A player leaves and rejoins the same host, and `BeginAuthSession` now returns `DuplicateRequest`. What did the host forget?
+    options:
+      - "To call `SteamUser.EndAuthSession(steamId)` when the player left"
+      - To request a new ticket on the host's side
+      - To call `Close()` on its listen socket
+      - To pump `Receive()`
+    answer: 0
+    explanation: >-
+      Every `BeginAuthSession` needs a matching `EndAuthSession`. Without it the old session is still open for that Steam ID.
