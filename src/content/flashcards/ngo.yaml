@@ -1,0 +1,474 @@
+cards:
+  # ---------------------------------------------------------------- 01 setup
+  - id: setup-three-things
+    lesson: ngo/setup
+    front: What three things does every NGO project need before players can see each other?
+    back: A NetworkManager, a network prefab (NetworkObject on the root) registered as the player prefab, and networked scenes in the build list.
+  - id: setup-layers
+    lesson: ngo/setup
+    front: Which package moves NGO's bytes over the network?
+    back: Unity Transport (com.unity.transport). NGO sits on top of it and installs a compatible version automatically.
+  - id: setup-start-methods
+    lesson: ngo/setup
+    front: Which NetworkManager methods start the three roles?
+    back: StartServer (dedicated server), StartHost (server plus local client) and StartClient. Each returns false if it fails immediately.
+  - id: setup-host-id
+    lesson: ngo/setup
+    front: What client id does a host's own local client have?
+    back: 0, which is NetworkManager.ServerClientId. Remote clients get new ids as they connect.
+  - id: setup-player-in-scene
+    lesson: ngo/setup
+    front: Should you place the player prefab in the scene?
+    back: No. NGO spawns the player prefab for each approved client, and an in-scene placed object can't be a player object.
+  - id: setup-mppm
+    lesson: ngo/setup
+    front: What does Multiplayer Play Mode give you?
+    back: Up to three additional Editor instances (plus local builds) that share the project's assets, so you can test several players without building.
+  - id: setup-mismatch
+    lesson: ngo/setup
+    front: Why must you rebuild every instance after changing prefabs or NetworkManager settings?
+    back: NGO checks that the client's config and prefabs match the server's. A mismatched build is refused or fails to spawn objects.
+  - id: setup-ngo3
+    lesson: ngo/setup
+    front: What's the main extra cost of upgrading from NGO 2.x to 3.0?
+    back: NGO 3.0 adds Netcode for Entities as a required dependency (with Entities, Burst and Collections) and turns obsolete APIs into errors.
+
+  # ---------------------------------------------------------------- 02 network-manager
+  - id: nm-subsystems
+    lesson: ngo/network-manager
+    front: When does NetworkManager.SceneManager exist?
+    back: Only while the NetworkManager is running, after StartHost, StartServer or StartClient. It's null before starting and after Shutdown.
+  - id: nm-tick-rate
+    lesson: ngo/network-manager
+    front: What's NGO's default tick rate, and what does it mean for NetworkVariables?
+    back: 30 Hz. A change can wait up to about 33 ms before it's collected and sent.
+  - id: nm-set-connection-data
+    lesson: ngo/network-manager
+    front: What do the arguments of UnityTransport.SetConnectionData(address, port, listenAddress) mean?
+    back: The address clients connect to, the port, and optionally the address the server listens on. "0.0.0.0" listens on every interface.
+  - id: nm-connection-event
+    lesson: ngo/network-manager
+    front: What's the difference between ClientConnected and PeerConnected in OnConnectionEvent?
+    back: ClientConnected is about the local client or (on the server) a new client. PeerConnected tells a client that another client joined.
+  - id: nm-kick
+    lesson: ngo/network-manager
+    front: How do you kick a player with a message?
+    back: On the server, call NetworkManager.DisconnectClient(clientId, reason). The client reads it from NetworkManager.DisconnectReason.
+  - id: nm-restart
+    lesson: ngo/network-manager
+    front: When is it safe to start a new session after Shutdown()?
+    back: After OnClientStopped and OnServerStopped have fired. Shutdown isn't instant, so ShutdownInProgress may still be true.
+  - id: nm-protocol-version
+    lesson: ngo/network-manager
+    front: Why bump Protocol Version when you ship an update?
+    back: Older clients are rejected during the handshake instead of joining and failing later in confusing ways.
+  - id: nm-host-is
+    lesson: ngo/network-manager
+    front: How should gameplay code detect a host?
+    back: It usually shouldn't. Write against IsServer, IsClient and IsOwner. A host is simply IsServer && IsClient.
+
+  # ---------------------------------------------------------------- 03 network-objects
+  - id: no-two-ids
+    lesson: ngo/network-objects
+    front: What's the difference between GlobalObjectIdHash and NetworkObjectId?
+    back: GlobalObjectIdHash identifies which prefab or scene object (set in the Editor). NetworkObjectId identifies the spawned instance in this session.
+  - id: no-spawn
+    lesson: ngo/network-objects
+    front: How does the server spawn a pickup prefab for everyone?
+    back: NetworkManager.SpawnManager.InstantiateAndSpawn(prefab, …), or Instantiate followed by NetworkObject.Spawn().
+  - id: no-register
+    lesson: ngo/network-objects
+    front: Clients log "prefab hash not found" when the server spawns an object. Why?
+    back: The prefab isn't in a Network Prefabs List on that build. Register it and rebuild every instance.
+  - id: no-client-destroy
+    lesson: ngo/network-objects
+    front: May a client Destroy a spawned NetworkObject?
+    back: No, NGO throws. Only the authority despawns. A client asks the server with an RPC.
+  - id: no-nesting
+    lesson: ngo/network-objects
+    front: How many NetworkObjects can a network prefab contain?
+    back: One. Combine separate network prefabs at runtime with TrySetParent or AttachableBehaviour.
+  - id: no-in-scene-order
+    lesson: ngo/network-objects
+    front: In what order do Awake, Start and OnNetworkSpawn run for in-scene placed vs dynamically spawned objects?
+    back: In-scene placed objects run Awake, Start, OnNetworkSpawn. Dynamically spawned objects run Awake, OnNetworkSpawn, Start.
+  - id: no-change-ownership
+    lesson: ngo/network-objects
+    front: Who can change ownership in client-server, and how?
+    back: Only the server, with ChangeOwnership(clientId) or RemoveOwnership(). A client requests it with an RPC.
+  - id: no-dont-destroy-with-owner
+    lesson: ngo/network-objects
+    front: What happens to a client's objects when it disconnects?
+    back: By default they're destroyed. With Dont Destroy With Owner ticked, they stay and ownership returns to the server.
+
+  # ---------------------------------------------------------------- 04 network-behaviour
+  - id: nb-what-adds
+    lesson: ngo/network-behaviour
+    front: What does NetworkBehaviour add to MonoBehaviour?
+    back: Network context (IsServer, IsOwner, HasAuthority, …), spawn, despawn and ownership callbacks, and the ability to declare NetworkVariables and RPCs.
+  - id: nb-on-network-spawn
+    lesson: ngo/network-behaviour
+    front: Why do netcode initialization in OnNetworkSpawn instead of Start?
+    back: Start may run before the object is networked (for in-scene objects), so IsOwner and IsServer aren't set yet. OnNetworkSpawn always has valid context.
+  - id: nb-post-spawn
+    lesson: ngo/network-behaviour
+    front: When should you use OnNetworkPostSpawn?
+    back: For logic that depends on sibling behaviours, because it runs after every behaviour on the object has finished OnNetworkSpawn.
+  - id: nb-has-authority
+    lesson: ngo/network-behaviour
+    front: What does HasAuthority mean in each topology?
+    back: In client-server it's the same as IsServer. In distributed authority it means "I own this object".
+  - id: nb-guard-update
+    lesson: ngo/network-behaviour
+    front: Why guard Update with IsSpawned and IsOwner?
+    back: Update runs on every machine for every player, spawned or not. Without the guard, input moves every player locally.
+  - id: nb-ondestroy
+    lesson: ngo/network-behaviour
+    front: How must you override OnDestroy in a NetworkBehaviour?
+    back: public override void OnDestroy(), calling base.OnDestroy(), because the base method does internal clean-up.
+  - id: nb-inactive-children
+    lesson: ngo/network-behaviour
+    front: What happens to NetworkBehaviours on a child GameObject that's inactive when the object spawns?
+    back: They're excluded from the spawn for the object's lifetime. Disable the component, not the GameObject.
+  - id: nb-ownership-callback-order
+    lesson: ngo/network-behaviour
+    front: In what order do the ownership callbacks run?
+    back: OnLostOwnership, then OnGainedOwnership, then OnOwnershipChanged(previous, current) on every instance.
+
+  # ---------------------------------------------------------------- 05 network-variables
+  - id: nv-when
+    lesson: ngo/network-variables
+    front: What question decides between a NetworkVariable and an RPC?
+    back: Should a player who joins mid-match know this? If yes, it's state and belongs in a NetworkVariable.
+  - id: nv-defaults
+    lesson: ngo/network-variables
+    front: What are a NetworkVariable's default permissions?
+    back: Everyone reads, the server writes.
+  - id: nv-client-write
+    lesson: ngo/network-variables
+    front: What happens when a client writes a server-write NetworkVariable?
+    back: NGO logs a write-permission error and the value doesn't change. Send a request RPC instead.
+  - id: nv-late-joiner
+    lesson: ngo/network-variables
+    front: Why apply the current value in OnNetworkSpawn after subscribing to OnValueChanged?
+    back: A late joiner receives the value in the spawn data before anyone subscribed, so OnValueChanged doesn't fire for it.
+  - id: nv-same-frame
+    lesson: ngo/network-variables
+    front: Health goes 50, 40, 30 within one frame. What do clients see?
+    back: 50, then 30. NetworkVariables sync state, not history, and only the latest value is sent.
+  - id: nv-string
+    lesson: ngo/network-variables
+    front: How do you replicate a player name?
+    back: With a fixed string type such as FixedString32Bytes from Unity.Collections. Plain string isn't supported.
+  - id: nv-networklist-awake
+    lesson: ngo/network-variables
+    front: Where must a NetworkList be created?
+    back: In Awake. Initializing it at the declaration causes native memory leak errors.
+  - id: nv-update-traits
+    lesson: ngo/network-variables
+    front: How do you limit how often a noisy NetworkVariable is sent?
+    back: SetUpdateTraits with MinSecondsBetweenUpdates (and MaxSecondsBetweenUpdates for periodic resends).
+
+  # ---------------------------------------------------------------- 06 rpcs
+  - id: rpc-declare
+    lesson: ngo/rpcs
+    front: What are the two rules for every RPC method?
+    back: It's on a NetworkBehaviour of a spawned NetworkObject, and its name ends in Rpc.
+  - id: rpc-body-where
+    lesson: ngo/rpcs
+    front: Where does the body of [Rpc(SendTo.Server)] run when a client calls it?
+    back: Only on the server. The caller just sends the arguments as a message.
+  - id: rpc-sender
+    lesson: ngo/rpcs
+    front: How does an RPC find out who sent it?
+    back: Add an RpcParams rpcParams = default parameter and read rpcParams.Receive.SenderClientId.
+  - id: rpc-single-target
+    lesson: ngo/rpcs
+    front: How do you send an RPC to one specific client?
+    back: Declare it with SendTo.SpecifiedInParams and pass RpcTarget.Single(clientId, RpcTargetUse.Temp).
+  - id: rpc-invoke-permission
+    lesson: ngo/rpcs
+    front: Does InvokePermission = RpcInvokePermission.Owner make an RPC safe?
+    back: No. It only stops non-owners from calling it. The server must still validate the arguments, rate and game state.
+  - id: rpc-ordering
+    lesson: ngo/rpcs
+    front: Are reliable RPCs on different NetworkObjects ordered relative to each other?
+    back: No. Reliable RPCs are ordered per NetworkObject only, and there's no ordering against NetworkVariable updates.
+  - id: rpc-legacy-clientrpc
+    lesson: ngo/rpcs
+    front: What's the modern equivalent of a legacy [ClientRpc]?
+    back: '[Rpc(SendTo.ClientsAndHost)]'
+  - id: rpc-legacy-serverrpc
+    lesson: ngo/rpcs
+    front: What's the modern equivalent of a legacy [ServerRpc] with default settings?
+    back: '[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)], because legacy ServerRpcs require ownership by default.'
+  - id: rpc-client-to-client
+    lesson: ngo/rpcs
+    front: Does SendTo.NotMe from a client travel directly to other clients?
+    back: No. In client-server the server forwards it, which doubles the latency compared to a direct link.
+
+  # ---------------------------------------------------------------- 07 network-components
+  - id: nc-nt-sends
+    lesson: ngo/network-components
+    front: What does a NetworkTransform send each tick?
+    back: Only the axes that changed by more than their threshold. Non-authority instances buffer the states and interpolate.
+  - id: nc-authority-mode
+    lesson: ngo/network-components
+    front: What are NetworkTransform's two authority modes, and the default?
+    back: Server (the default) and Owner. Only the authority's changes are synchronized.
+  - id: nc-owner-tradeoff
+    lesson: ngo/network-components
+    front: What's the trade-off of owner-authoritative movement?
+    back: The owner's input feels instant, but the client decides its position, so movement is client-authoritative and easier to cheat.
+  - id: nc-teleport
+    lesson: ngo/network-components
+    front: Where must NetworkTransform.Teleport be called?
+    back: On the authority (CanCommitToTransform). It throws elsewhere. For an owner-authoritative transform, the server asks the owner with an RPC.
+  - id: nc-interp-type
+    lesson: ngo/network-components
+    front: Which interpolation type do the docs recommend for new projects?
+    back: Lerp. LegacyLerp is the default only for backward compatibility.
+  - id: nc-animator-trigger
+    lesson: ngo/network-components
+    front: How must you fire an Animator trigger on a networked character?
+    back: With NetworkAnimator.SetTrigger, on the authority. Animator.SetTrigger only fires locally.
+  - id: nc-animator-late
+    lesson: ngo/network-components
+    front: What doesn't NetworkAnimator send to late joiners?
+    back: Triggers. They get the current state, transitions and parameter values.
+  - id: nc-rigidbody
+    lesson: ngo/network-components
+    front: What does NetworkRigidbody do to non-authority instances?
+    back: Makes their Rigidbody kinematic, so only the authority simulates and the others follow NetworkTransform updates.
+  - id: nc-physics-callbacks
+    lesson: ngo/network-components
+    front: Why avoid changing a Rigidbody inside an RPC or OnValueChanged?
+    back: NGO processes messages in EarlyUpdate, before FixedUpdate's physics step. Store the request and apply it in FixedUpdate.
+
+  # ---------------------------------------------------------------- 08 connection-and-scenes
+  - id: cs-approval-fields
+    lesson: ngo/connection-and-scenes
+    front: Which response fields does a connection approval callback usually set?
+    back: Approved, Reason (for rejections), CreatePlayerObject, Position and Rotation, and Pending for asynchronous checks.
+  - id: cs-payload
+    lesson: ngo/connection-and-scenes
+    front: Where does the approval payload come from, and is it secure?
+    back: From NetworkConfig.ConnectionData set on the client before StartClient. NGO neither encrypts nor authenticates it.
+  - id: cs-host-approval
+    lesson: ngo/connection-and-scenes
+    front: Does the host's own client go through connection approval?
+    back: Yes, with the server's id. It can't be declined, but CreatePlayerObject, Position and Rotation are respected.
+  - id: cs-client-connected-when
+    lesson: ngo/connection-and-scenes
+    front: When does the server raise ClientConnected for a joining client?
+    back: After the client has synchronized (loaded scenes, spawned objects) and sent SynchronizeComplete.
+  - id: cs-load-scene
+    lesson: ngo/connection-and-scenes
+    front: How does the server load a scene for everyone?
+    back: NetworkManager.SceneManager.LoadScene(name, mode), checking for SceneEventProgressStatus.Started.
+  - id: cs-load-event-completed
+    lesson: ngo/connection-and-scenes
+    front: Which scene event tells you everyone finished loading?
+    back: LoadEventCompleted (OnLoadEventCompleted), with the lists of clients that completed and that timed out.
+  - id: cs-single-survives
+    lesson: ngo/connection-and-scenes
+    front: Which objects survive a LoadSceneMode.Single load?
+    back: Dynamically spawned objects with DestroyWithScene false, the default, including players. destroyWithScene objects and the old scene's in-scene objects go away.
+  - id: cs-unity-scenemanager
+    lesson: ngo/connection-and-scenes
+    front: What goes wrong if the server uses UnityEngine.SceneManagement.SceneManager while connected?
+    back: The scene loads only on the server. Connected clients stay where they are.
+  - id: cs-in-scene-destroy
+    lesson: ngo/connection-and-scenes
+    front: How do you temporarily remove an in-scene placed NetworkObject?
+    back: Despawn(false) on the server and disable it, then re-enable it and call Spawn() later. Don't destroy it.
+
+  # ---------------------------------------------------------------- 09 custom-serialization
+  - id: ser-inetworkserializable
+    lesson: ngo/custom-serialization
+    front: Why does INetworkSerializable use one method for reading and writing?
+    back: SerializeValue writes on the sender and reads on the receiver, so the field order can't drift apart.
+  - id: ser-conditional
+    lesson: ngo/custom-serialization
+    front: How do you serialize an optional field?
+    back: Serialize a flag first, then the field only when the flag is set. Both sides take the same branch because the flag is read first.
+  - id: ser-iequatable
+    lesson: ngo/custom-serialization
+    front: Why implement IEquatable on a struct used in a NetworkVariable?
+    back: NGO only marks the variable dirty when the new value differs, and uses your Equals for that. NetworkList elements require it.
+  - id: ser-external-type
+    lesson: ngo/custom-serialization
+    front: How do you serialize a type you can't modify?
+    back: Write WriteValueSafe/ReadValueSafe extension methods for FastBufferWriter/Reader. NetworkVariables also need the UserNetworkVariableSerialization delegates.
+  - id: ser-dispose
+    lesson: ngo/custom-serialization
+    front: Why must FastBufferWriter be disposed?
+    back: It wraps native memory that the garbage collector never frees. Use a using statement.
+  - id: ser-safe
+    lesson: ngo/custom-serialization
+    front: What's the difference between WriteValue and WriteValueSafe?
+    back: WriteValueSafe checks bounds and throws OverflowException. WriteValue doesn't, so call TryBeginWrite first.
+  - id: ser-named-message
+    lesson: ngo/custom-serialization
+    front: When do custom named messages beat RPCs?
+    back: When the sender has no spawned NetworkObject (such as a MonoBehaviour on the NetworkManager) or for session-level traffic.
+  - id: ser-message-size
+    lesson: ngo/custom-serialization
+    front: What delivery should a named message larger than about 1,300 bytes use?
+    back: NetworkDelivery.ReliableFragmentedSequenced. Other deliveries throw an OverflowException in development builds.
+  - id: ser-sender-check
+    lesson: ngo/custom-serialization
+    front: Why does a named message handler check senderClientId?
+    back: Named messages have no invoke permission, so any client could send that name. Ignore messages from senders that mustn't send them.
+
+  # ---------------------------------------------------------------- 10 prediction-anticipation
+  - id: ant-what
+    lesson: ngo/prediction-anticipation
+    front: Does NGO include full client-side prediction and reconciliation?
+    back: No. It offers client anticipation (anticipated variables and transforms, OnReanticipate, Smooth). A rollback-and-replay loop is up to you.
+  - id: ant-value
+    lesson: ngo/prediction-anticipation
+    front: Which AnticipatedNetworkVariable value do you display, and which do you use for server decisions?
+    back: Display Value (the anticipated value). Decide with AuthoritativeValue, the server's value.
+  - id: ant-anticipate-server
+    lesson: ngo/prediction-anticipation
+    front: What does Anticipate(value) do on the server?
+    back: Sets both the anticipated and the authoritative value, so the same code runs on client and server.
+  - id: ant-transform-methods
+    lesson: ngo/prediction-anticipation
+    front: How do you move an AnticipatedNetworkTransform on the client?
+    back: With AnticipateMove, AnticipateRotate, AnticipateScale or AnticipateState. Direct transform writes are overwritten.
+  - id: ant-stale
+    lesson: ngo/prediction-anticipation
+    front: What is stale data in NGO's anticipation system?
+    back: A server update produced before the server processed your latest anticipated request, detected with the anticipation counter.
+  - id: ant-modes
+    lesson: ngo/prediction-anticipation
+    front: When do you choose Ignore vs Reanticipate for StaleDataHandling?
+    back: Ignore for one-off actions such as ammo. Reanticipate for constantly changing values such as movement.
+  - id: ant-onreanticipate
+    lesson: ngo/prediction-anticipation
+    front: What does OnReanticipate(double lastRoundTripTime) receive and when does it run?
+    back: Roughly how far back the object was rolled. It runs once per frame per NetworkObject after server data replaced an anticipated value.
+  - id: ant-replay
+    lesson: ngo/prediction-anticipation
+    front: What does reconciliation do in OnReanticipate?
+    back: Starts from AuthoritativeState, replays the inputs the server hasn't processed yet, AnticipateMoves the result, and Smooths small errors.
+  - id: ant-same-frame
+    lesson: ngo/prediction-anticipation
+    front: Why anticipate and send the RPC in the same frame?
+    back: The anticipation counter assumes they go out together. Otherwise NGO can't tell stale updates from fresh ones.
+
+  # ---------------------------------------------------------------- 11 distributed-authority
+  - id: da-what
+    lesson: ngo/distributed-authority
+    front: What is NGO's distributed authority topology?
+    back: No game server. Each client is the authority for the objects it owns, and a hosted Unity service relays state and keeps the session alive.
+  - id: da-enable
+    lesson: ngo/distributed-authority
+    front: How do you switch a project to distributed authority?
+    back: Install Multiplayer Services, set Network Topology to Distributed Authority, and connect through a session with WithDistributedAuthorityNetwork().
+  - id: da-isserver
+    lesson: ngo/distributed-authority
+    front: Why does code gated on IsServer stop working in distributed authority?
+    back: There's no server, so IsServer is false everywhere. Use HasAuthority or IsSessionOwner instead.
+  - id: da-netvar
+    lesson: ngo/distributed-authority
+    front: What happens to a NetworkVariable with Server write permission in distributed authority?
+    back: NGO treats it as Owner write: only the owner writes, and everyone can read.
+  - id: da-session-owner
+    lesson: ngo/distributed-authority
+    front: What does the session owner do?
+    back: Loads scenes, synchronizes late joiners and owns SessionOwner objects. If it leaves, another client is promoted.
+  - id: da-flags
+    lesson: ngo/distributed-authority
+    front: Name the five OwnershipStatus values.
+    back: None, Distributable, Transferable, RequestRequired and SessionOwner.
+  - id: da-request
+    lesson: ngo/distributed-authority
+    front: How does a client get a RequestRequired object?
+    back: It calls RequestOwnership(). The owner can refuse in OnOwnershipRequested, and the result arrives in OnOwnershipRequestResponse.
+  - id: da-approval
+    lesson: ngo/distributed-authority
+    front: Is connection approval available in distributed authority?
+    back: No. Gate the session with its options (max players, password, privacy) instead.
+  - id: da-tradeoff
+    lesson: ngo/distributed-authority
+    front: What's the main risk of distributed authority?
+    back: Clients are trusted with the objects they own, so cheating is easier. It suits co-op and casual games better than competitive ones.
+
+  # ---------------------------------------------------------------- 12 debugging-tools
+  - id: dbg-loopback
+    lesson: ngo/debugging-tools
+    front: Why is testing only on one machine misleading?
+    back: Loopback has no latency, jitter or loss, so delay-dependent bugs never appear.
+  - id: dbg-network-simulator
+    lesson: ngo/debugging-tools
+    front: Where does the Network Simulator come from, and what can it do?
+    back: From Multiplayer Tools. It applies presets for delay, jitter and loss, lag spikes, disconnects and scripted scenarios, in the Editor and in builds.
+  - id: dbg-debug-simulator
+    lesson: ngo/debugging-tools
+    front: Does UnityTransport's Debug Simulator still work in NGO 2.13?
+    back: No. It's obsolete and has no effect. Use the Network Simulator component.
+  - id: dbg-lag-spike
+    lesson: ngo/debugging-tools
+    front: How do you trigger a lag spike from code?
+    back: networkSimulator.TriggerLagSpike(TimeSpan.FromMilliseconds(800)).
+  - id: dbg-profiler-modules
+    lesson: ngo/debugging-tools
+    front: Which Profiler modules show NGO traffic?
+    back: NGO Messages (per message type) and NGO Objects (per NetworkObject). You add them manually in the Profiler.
+  - id: dbg-profiler-filter
+    lesson: ngo/debugging-tools
+    front: How do you show only outgoing RPCs larger than 100 bytes in the network profiler?
+    back: Combine filters such as t:RPC dir:out b>100.
+  - id: dbg-rnsm
+    lesson: ngo/debugging-tools
+    front: Is the Runtime Network Stats Monitor in release builds?
+    back: Not by default. Enable it in the Multiplayer Tools project settings or with UNITY_MP_TOOLS_NET_STATS_MONITOR_ENABLED_IN_RELEASE.
+  - id: dbg-mppm-tags
+    lesson: ngo/debugging-tools
+    front: How can each MPPM instance start as host or client automatically?
+    back: Give instances Player Tags and read them at startup (CurrentPlayer.ReadOnlyTags() in MPPM 1.x, CurrentPlayer.Tags on Unity 6.3+).
+  - id: dbg-host-only
+    lesson: ngo/debugging-tools
+    front: Why isn't testing as the host enough?
+    back: The host has zero latency to the server and shares a process with it. Test from a remote client under a simulator preset.
+
+  # ---------------------------------------------------------------- 13 unity-services
+  - id: ugs-relay
+    lesson: ngo/unity-services
+    front: What problem does Unity Relay solve?
+    back: NAT. Host and clients connect out to a relay server, so nobody needs an open port, and IPs aren't exchanged.
+  - id: ugs-relay-transport
+    lesson: ngo/unity-services
+    front: How do you point Unity Transport at a Relay allocation?
+    back: transport.SetRelayServerData(allocation.ToRelayServerData("dtls")), then StartHost or StartClient.
+  - id: ugs-join-code
+    lesson: ngo/unity-services
+    front: How does a client find the host's Relay allocation?
+    back: The host gets a join code with GetJoinCodeAsync, and the client calls JoinAllocationAsync(joinCode).
+  - id: ugs-lobby
+    lesson: ngo/unity-services
+    front: What does Unity Lobby add on top of Relay?
+    back: Rooms players can list, quick-join or join by code, with capacity, privacy, passwords and custom data such as the relay code.
+  - id: ugs-heartbeat
+    lesson: ngo/unity-services
+    front: What happens to a raw lobby whose host stops sending heartbeats?
+    back: It becomes inactive after 30 seconds by default, so the host should heartbeat about every 15 seconds.
+  - id: ugs-sessions
+    lesson: ngo/unity-services
+    front: What do Multiplayer Services sessions do for an NGO game?
+    back: Combine a lobby with a Relay, distributed-authority or direct connection, keep it alive, and start NGO as host or client for you.
+  - id: ugs-session-leave
+    lesson: ngo/unity-services
+    front: How do you leave a session-managed game?
+    back: await session.LeaveAsync(). Don't call NetworkManager.Shutdown yourself, because the session owns its lifetime.
+  - id: ugs-package
+    lesson: ngo/unity-services
+    front: Which package contains Relay, Lobby and Sessions in Unity 6?
+    back: Multiplayer Services (com.unity.services.multiplayer). The standalone Relay package is deprecated in Unity 6.
+  - id: ugs-vs-steam
+    lesson: ngo/unity-services
+    front: When do you pick Steam's lobbies and relay over Unity's services?
+    back: For a Steam-only PC game, where friends and invites come for free. Cross-platform games need a platform-agnostic backend like UGS.
