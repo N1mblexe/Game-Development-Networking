@@ -6,9 +6,10 @@ import Callout from './Callout.astro';
 import CodeTabs from './CodeTabs.astro';
 import Diagram from './Diagram.astro';
 import KeyTakeaways from './KeyTakeaways.astro';
+import Link from './Link.astro';
 import Sequence from './Sequence.astro';
 import Sim from './Sim.astro';
 import Steps from './Steps.astro';
 import Term from './Term.astro';
 
-export const mdxComponents = { Callout, CodeTabs, Diagram, KeyTakeaways, Sequence, Sim, Steps, Term };
+export const mdxComponents = { Callout, CodeTabs, Diagram, KeyTakeaways, Sequence, Sim, Steps, Term, a: Link };
