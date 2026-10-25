@@ -385,6 +385,18 @@ function TopologyView({ name }: { name: V }) {
           </ul>
         </div>
       </div>
+      {/* Text alternative: the whole message sequence, independent of the stepper position. */}
+      <div className="sr-only">
+        <p>
+          {LABELS[name]}. Authority: {d.authority} Messages, in order:
+        </p>
+        <ol>
+          {d.steps.map((st, i) => (
+            <li key={i}>{st.text}</li>
+          ))}
+        </ol>
+      </div>
+
       <p className="flex items-center gap-2 text-sm text-muted">
         <ActorIcon kind="service" className="h-4 w-4 shrink-0" />
         <span>

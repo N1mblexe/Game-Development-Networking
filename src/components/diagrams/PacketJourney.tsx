@@ -325,6 +325,18 @@ export default function PacketJourney() {
           ))}
         </div>
       </div>
+
+      {/* Text alternative: every stage in order, independent of the stepper position. */}
+      <div className="sr-only">
+        <p>A packet’s journey in {stages.length} stages, from {stations[0].label} to {stations[stations.length - 1].label}:</p>
+        <ol>
+          {stages.map((st) => (
+            <li key={st.title}>
+              {st.title} (at {stations[st.station].label}): {st.text}
+            </li>
+          ))}
+        </ol>
+      </div>
     </div>
   );
 }

@@ -129,6 +129,7 @@ const letterId = (l: string) => (l === '#' ? 'letter-num' : `letter-${l.toLowerC
                       {t.aliases.length > 0 && <span class="text-sm text-muted">also {t.aliases.join(', ')}</span>}
                       {mod && (
                         <span
+                          data-pagefind-ignore
                           class="ml-auto rounded-full border px-2 py-0.5 text-xs font-medium"
                           style={`color:${mod.color};border-color:color-mix(in srgb, ${mod.color} 45%, transparent)`}
                         >

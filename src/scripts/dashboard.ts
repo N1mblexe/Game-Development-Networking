@@ -43,11 +43,29 @@ function setStat(name: string, value: string, sub?: string) {
   if (s && sub !== undefined) s.textContent = sub;
 }
 
+/**
+ * "Where you left off": the first incomplete lesson after the most recently completed one (course order),
+ * wrapping around to earlier gaps. Falls back to the first incomplete lesson.
+ */
+function nextLesson(p: Progress, lessons: LessonInfo[]): LessonInfo | undefined {
+  let last = -1;
+  let lastAt = '';
+  lessons.forEach((l, i) => {
+    const at = p.lessons[l.key]?.completedAt;
+    if (at && at >= lastAt) {
+      lastAt = at;
+      last = i;
+    }
+  });
+  const ordered = [...lessons.slice(last + 1), ...lessons.slice(0, last + 1)];
+  return ordered.find((l) => !isLessonComplete(p, l.key));
+}
+
 function renderContinue(p: Progress, d: DashboardData) {
   const card = document.querySelector<HTMLElement>('[data-continue]');
   if (!card || d.lessons.length === 0) return;
   const done = d.lessons.filter((l) => isLessonComplete(p, l.key)).length;
-  const next = d.lessons.find((l) => !isLessonComplete(p, l.key));
+  const next = nextLesson(p, d.lessons);
   const q = <T extends Element = HTMLElement>(sel: string) => card.querySelector<T>(sel);
 
   card.dataset.state = !next ? 'finished' : done === 0 ? 'start' : 'continue';
@@ -55,8 +73,15 @@ function renderContinue(p: Progress, d: DashboardData) {
   const title = q('[data-continue-title]');
   const meta = q('[data-continue-meta]');
   const summary = q('[data-continue-summary]');
-  const link = q<HTMLAnchorElement>('[data-continue-link]');
+  // The card itself is usually the link (closest() includes the element itself).
+  const link = card.closest<HTMLAnchorElement>('[data-continue-link]') ?? q<HTMLAnchorElement>('[data-continue-link]');
   const label = q('[data-continue-label]');
+
+  const pct = Math.round((done / d.lessons.length) * 100);
+  const bar = q('[data-continue-bar]');
+  if (bar) bar.style.width = `${pct}%`;
+  const pctText = q('[data-continue-pct]');
+  if (pctText) pctText.textContent = `${pct}% of the course`;
 
   if (!next) {
     if (eyebrow) eyebrow.textContent = 'All lessons complete';
@@ -75,11 +100,6 @@ function renderContinue(p: Progress, d: DashboardData) {
   if (link) link.href = next.url;
   if (label) label.textContent = done === 0 ? 'Start lesson' : 'Continue';
   card.style.setProperty('--module', next.color);
-  const bar = q('[data-continue-bar]');
-  const pct = Math.round((done / d.lessons.length) * 100);
-  if (bar) bar.setAttribute('style', `width:${pct}%`);
-  const pctText = q('[data-continue-pct]');
-  if (pctText) pctText.textContent = `${pct}% of the course`;
 }
 
 function render(p: Progress) {
