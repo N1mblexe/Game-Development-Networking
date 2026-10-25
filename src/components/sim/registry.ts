@@ -145,12 +145,24 @@ export const sims = {
     title: 'Bandwidth Calculator',
     description: 'Estimate bandwidth from players, entities, fields, tick rate and bit-packing.',
     lessons: ['theory/reliability-serialization'],
-    load: stub,
+    load: () => import('./BandwidthCalculator'),
     defaultPreset: 'coop-4p',
     presets: {
-      'coop-4p': { label: '4-player co-op', props: {} },
-      'arena-16p': { label: '16-player arena', props: {} },
-      'battle-royale': { label: '100-player battle royale', props: {} },
+      'coop-4p': {
+        label: '4-player co-op',
+        description: 'Small numbers everywhere: even raw floats fit comfortably.',
+        props: { players: 4, entities: 40, sendRateHz: 30, inputRateHz: 30, inputBytes: 12, transportHeaderBytes: 10, ipv6: false, quantize: true, delta: true, changedPct: 40 },
+      },
+      'arena-16p': {
+        label: '16-player arena',
+        description: 'A fast shooter at 60 Hz: raw full snapshots no longer fit in one packet.',
+        props: { players: 16, entities: 64, sendRateHz: 60, inputRateHz: 60, inputBytes: 16, transportHeaderBytes: 10, ipv6: false, quantize: true, delta: true, changedPct: 50 },
+      },
+      'battle-royale': {
+        label: '100-player battle royale',
+        description: 'Interest management caps what each client receives; server egress is what hurts.',
+        props: { players: 100, entities: 120, sendRateHz: 30, inputRateHz: 30, inputBytes: 12, transportHeaderBytes: 10, ipv6: false, quantize: true, delta: true, changedPct: 35 },
+      },
     },
   },
   'nat-traversal': {
