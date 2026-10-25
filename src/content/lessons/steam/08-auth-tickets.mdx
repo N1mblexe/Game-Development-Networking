@@ -96,7 +96,7 @@ What you should notice:
 | Client | `SteamUser.GetAuthSessionTicket(NetIdentity identity)` | Synchronous version: returns at once, before Steam has confirmed the ticket |
 | Client | `AuthTicket.Data`, `AuthTicket.Cancel()` / `Dispose()` | Send `Data`. Cancel when the session ends. |
 | Host | `SteamUser.BeginAuthSession(byte[] ticketData, SteamId steamid)` | Returns `BeginAuthResult` (`OK`, `InvalidTicket`, `DuplicateRequest`, `InvalidVersion`, `GameMismatch`, `ExpiredTicket`) |
-| Host | `SteamUser.OnValidateAuthTicketResponse` | `Action<SteamId, SteamId, AuthResponse>`: player, owner, verdict |
+| Host | `SteamUser.OnValidateAuthTicketResponse` | A static `Action` event with `(SteamId steamId, SteamId ownerId, AuthResponse response)`: player, owner, verdict |
 | Host | `SteamUser.EndAuthSession(SteamId)` | Call when that player leaves |
 
 The `identity` argument is the system that will **validate** the ticket. Valve's docs: for peer-to-peer, pass the
