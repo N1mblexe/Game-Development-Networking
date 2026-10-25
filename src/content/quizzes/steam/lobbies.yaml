@@ -43,7 +43,7 @@ questions:
     prompt: Order the events when a host creates a lobby and another player finds and joins it.
     items:
       - "Host: `await SteamMatchmaking.CreateLobbyAsync(4)`"
-      - "Host: `OnLobbyEntered` fires; the host is owner and first member"
+      - "Host: the lobby now exists, with the host as its owner and first member"
       - "Host: `SetPublic()`, `SetJoinable(true)`, `SetData(...)`"
       - "Player: `LobbyList.WithKeyValue(...).RequestAsync()`"
       - "Player: `await lobby.Join()` returns `RoomEnter.Success`"

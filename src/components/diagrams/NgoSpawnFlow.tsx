@@ -51,7 +51,7 @@ const steps: SequenceStep[] = [
     kind: 'local',
     tone: 'warn',
     label: 'Look up the hash in the registered NetworkPrefabs',
-    note: 'Failure point: if the prefab is missing from the NetworkManager’s NetworkPrefabs list, the client logs “Failed to create object locally. NetworkPrefab could not be found. Is the prefab registered with NetworkManager?” and the object never appears for that client.',
+    note: 'Failure point: if the prefab is missing from the NetworkManager’s NetworkPrefabs list, the client logs “Failed to create object locally. NetworkPrefab could not be found. Is the prefab registered with this NetworkManager” and the object never appears for that client.',
   },
   {
     from: 'c',

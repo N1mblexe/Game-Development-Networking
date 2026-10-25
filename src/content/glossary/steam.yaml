@@ -14,7 +14,7 @@ terms:
     term: Facepunch.Steamworks
     short: An idiomatic C# wrapper for Steamworks (used by Rust and Garry's Mod) with static classes, async Tasks, C# events and structs such as Lobby and Friend.
     long: >-
-      Distributed as a GitHub release zip with a ready-made `Unity` folder. This course targets version 2.5.2. Its names
+      Distributed as a GitHub release zip with a ready-made `Release/Unity` folder. This course targets version 2.5.2. Its names
       differ from Valve's C++ API (for example `SteamMatchmaking.CreateLobbyAsync` instead of `CreateLobby` plus a
       `LobbyCreated_t` call result), so you translate concepts from Valve's documentation.
     lesson: steam/steamworks-overview
@@ -130,7 +130,8 @@ terms:
     short: Valve's relay network. It carries traffic between Steam IDs through any NAT, hides players' IP addresses, and authenticates and encrypts the traffic.
     long: >-
       Both peers make outbound connections to nearby relays and Valve routes between them over its backbone. Steam may
-      also use a direct route when it's better; your code connects to a Steam ID either way.
+      also use a direct route when it's better (which does share IP addresses between the peers); your code connects to
+      a Steam ID either way.
     lesson: steam/networking-sockets
     seeAlso: [steam-networking-sockets]
   - id: socket-manager

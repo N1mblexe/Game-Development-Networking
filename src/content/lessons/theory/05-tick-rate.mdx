@@ -15,6 +15,8 @@ sources:
     url: https://gafferongames.com/post/fix_your_timestep/
   - title: Valve Developer Wiki, Source Multiplayer Networking (tick, update and command rates)
     url: https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking
+  - title: Minecraft Wiki, Tick (20 game ticks per second)
+    url: https://minecraft.wiki/w/Tick
   - title: Riot Games, Peeking into VALORANT's Netcode (128-tick servers)
     url: https://technology.riotgames.com/news/peeking-valorants-netcode
   - title: 'NGO docs: NetworkTime and ticks'
@@ -60,10 +62,10 @@ The tick interval is simply 1 / tick rate:
 | Tick rate | Interval | Example |
 |---|---|---|
 | 10 Hz | 100 ms | Slow strategy games, MMOs with many entities |
-| 20 Hz | 50 ms | Minecraft servers, many survival games |
+| 20 Hz | 50 ms | Minecraft (20 game ticks per second), many survival games |
 | 30 Hz | 33.3 ms | Netcode for GameObjects' default, many co-op games |
 | 60 Hz | 16.7 ms | Fast action games, physics-heavy games |
-| 64 Hz | 15.6 ms | Counter-Strike: Global Offensive matchmaking servers |
+| 64 Hz | 15.6 ms | Many competitive shooters |
 | 128 Hz | 7.8 ms | VALORANT servers |
 
 The send rate may be lower than the tick rate. Source engine games historically ticked at 66 Hz but sent snapshots at 20 Hz

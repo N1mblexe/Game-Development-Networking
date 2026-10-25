@@ -78,7 +78,7 @@ const steps: SequenceStep[] = [
     kind: 'unreliable',
     label: 'Connect to the host’s SteamId',
     code: 'SteamNetworkingSockets.ConnectRelay<MyConnectionManager>(hostId);',
-    note: 'Steam Datagram Relay routes the connection through Valve’s relay network, so neither player needs port forwarding and IP addresses stay hidden.',
+    note: 'Steam Datagram Relay can route the connection through Valve’s relay network, so neither player needs port forwarding. While traffic is relayed, IP addresses stay hidden; a direct (ICE) route, if Steam picks one, shares them.',
   },
   {
     from: 'r',
@@ -105,7 +105,7 @@ export default function SteamLobbyP2PFlow() {
       title="Steam lobby to P2P connection"
       actors={actors}
       steps={steps}
-      intro="Two players meet in a Steam lobby, then open a direct SteamId-to-SteamId connection over the Steam Datagram Relay."
+      intro="Two players meet in a Steam lobby, then open a SteamId-to-SteamId connection that Steam can carry over the Steam Datagram Relay."
       footer={
         <DiagramNote>
           <strong>Lobby ≠ connection.</strong> The lobby (through the Steam backend) is how players find each other. The socket (through

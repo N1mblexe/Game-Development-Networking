@@ -116,8 +116,10 @@ public sealed class PoseHistory
         uint t0 = (uint)System.Math.Floor(tick);
         HitboxPose a = _poses[t0 % Size], b = _poses[(t0 + 1) % Size];
         position = default; rotation = default;
-        if (a.Tick != t0 || b.Tick != t0 + 1) return false;   // too old: already overwritten
+        if (a.Tick != t0) return false;                        // too old: already overwritten
         float f = (float)(tick - t0);
+        if (f == 0f) { position = a.Position; rotation = a.Rotation; return true; }  // whole tick, e.g. the newest one
+        if (b.Tick != t0 + 1) return false;                    // next tick not recorded (yet)
         position = Vec3.Lerp(a.Position, b.Position, f);
         rotation = Quat.Slerp(a.Rotation, b.Rotation, f);
         return true;

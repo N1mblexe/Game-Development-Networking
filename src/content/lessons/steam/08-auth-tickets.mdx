@@ -305,7 +305,8 @@ one across matches.
 
 Session tickets are meant to be checked by another Steam client or game server through `BeginAuthSession`. To
 authenticate with your own HTTPS backend, which calls the `ISteamUserAuth/AuthenticateUserTicket` Web API, Valve requires
-a different ticket: `SteamUser.GetAuthTicketForWebApiAsync(identity)` in Facepunch.
+a different ticket: `SteamUser.GetAuthTicketForWebApiAsync(string identity)` in Facepunch, where `identity` is the
+string your backend expects (Valve's `pchIdentity`), not a Steam ID.
 
 </Callout>
 

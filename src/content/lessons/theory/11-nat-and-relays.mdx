@@ -105,8 +105,11 @@ The <Term id="rendezvous-server">rendezvous server</Term> (often the <Term id="m
 the punch succeeds, game traffic flows directly between the players, with no extra latency and no relay bill.
 
 The approach works when both NATs use endpoint-independent mapping. In Ford, Srisuresh and Kegel's 2005 measurements, about **82%** of
-NATs supported UDP hole punching. Both NATs in a pair have to cooperate, so the share of player *pairs* that can connect directly is lower again, and lower still on mobile networks and behind CGNAT. In other words,
-**a game that relies only on hole punching will fail for some of its players**.
+NATs supported UDP hole punching. Both NATs in a pair have to cooperate, so the share of player *pairs* that can connect directly is lower again, and lower still on mobile networks and behind CGNAT.
+As a rough estimate only: if 82% of NATs cooperate and the two NATs in a pair are independent, about 1 − 0.82² ≈ 33% of
+pairs can't punch through. Routers have improved since 2005 and CGNAT has spread since, so treat that as an order of
+magnitude, not a measurement; no platform publishes a definitive current figure. The direction is clear, though: **a
+game that relies only on hole punching will fail for some of its players**.
 
 ## Try it
 
@@ -130,7 +133,9 @@ option in order: local network addresses, then STUN-discovered public addresses 
 
 Relays cost:
 
-- **Latency.** Packets take a detour. A relay in the same region as both players might add 5–20 ms. A badly placed one can add 100 ms.
+- **Latency.** Packets take a detour. As a rough rule of thumb (not a measured standard), a relay in the same region as
+  both players might add 5–20 ms, while a badly placed one can add 100 ms. The real cost is the extra distance and hops.
+  Steam's relays can sometimes even beat the direct path (see below).
 - **Money.** Every byte passes through the relay operator's servers, so someone pays for the bandwidth.
 
 Relays also have real benefits beyond connectivity:
@@ -139,8 +144,8 @@ Relays also have real benefits beyond connectivity:
 - **Better routes.** Steam Datagram Relay routes traffic over Valve's own backbone, which can be faster than the public internet path. Valve also says its relayed traffic is authenticated, encrypted and rate-limited.
 - **Disconnect detection.** The relay knows when a host goes away, even when the host can't say so.
 
-The common production pattern, which Unity's NGO docs describe as widely used, is **try direct, fall back to a relay**: attempt hole punching, and use
-the relay when it fails. Many games simply relay everything, for the IP privacy alone.
+A common production pattern, and one of the options Unity's NGO docs list ("NAT punch with relay fallback"), is **try
+direct, fall back to a relay**: attempt hole punching, and use the relay when it fails. Many games simply relay everything, for the IP privacy alone.
 
 ## Keep the mapping alive
 
@@ -221,7 +226,7 @@ A real implementation also authenticates punch packets with a token from the ren
 
 - **NAT** lets many private devices share one public address, and drops unsolicited incoming packets. That's why players can't simply host.
 - **STUN** tells a client its public endpoint. **Hole punching** has both peers send to each other at once so both NATs create mappings.
-- Hole punching needs **endpoint-independent mapping**. **Symmetric NAT** and some CGNAT break it, so a significant share of player pairs (often a fifth to a third) need another path.
+- Hole punching needs **endpoint-independent mapping**. **Symmetric NAT** and some CGNAT break it, so a significant share of player pairs (a rough estimate from Ford et al.'s data puts it near a third) need another path.
 - **Relays** (TURN, Unity Relay, Steam Datagram Relay) always work and hide IP addresses, at the cost of some latency and bandwidth.
 - Production games **try direct and fall back to a relay**, or relay everything. Send **keep-alives** so NAT mappings don't expire.
 

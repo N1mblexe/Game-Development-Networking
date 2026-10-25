@@ -203,7 +203,7 @@ const DATA: Record<V, TVariant> = {
         kind: 'unreliable',
       },
     ],
-    pros: ['Works through any NAT or firewall', 'Players’ IP addresses stay hidden', 'Far cheaper than running game servers'],
+    pros: ['Works through any NAT, no port forwarding', 'Players’ IP addresses stay hidden', 'Far cheaper than running game servers'],
     cons: ['Extra hop adds latency', 'Session still ends if the host leaves', 'Depends on a third-party service'],
     usedBy: 'Steam lobby games (SDR), Unity Relay with NGO.',
   },

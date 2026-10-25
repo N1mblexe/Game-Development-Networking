@@ -74,7 +74,7 @@ How much upload does a host need? Suppose 8 players, a 30 Hz send rate and 400-b
 
 > 7 remote clients × 30 packets/s × (400 + 28 header bytes) ≈ 90 KB/s ≈ **0.72 Mbit/s** upload
 
-That fits on most connections. With 16 players and 1 KB snapshots it is about 3.6 Mbit/s, which a lot of home connections
+That fits on most connections. With 16 players and 1 KB snapshots it is about 3.7 Mbit/s, which a lot of home connections
 and mobile hotspots can't sustain while someone is also streaming video.
 
 ## Peer-to-peer
@@ -107,8 +107,9 @@ A relay isn't a separate authority model. It changes the **path** that packets t
 connection to the relay, so NAT never blocks anything, and the relay forwards packets between them. The authority model on
 top is usually a listen server, with the host's game still running the simulation.
 
-Relays solve connectivity and hide players' IP addresses from each other. They cost a little extra latency (typically
-5–30 ms, depending on how close the relay is), and someone pays for the bandwidth. Unity offers Relay as a service, and
+Relays solve connectivity and hide players' IP addresses from each other. They cost a little extra latency (as a rough
+rule of thumb, from a few milliseconds to a few tens of milliseconds, depending on how close the relay is), and someone
+pays for the bandwidth. Unity offers Relay as a service, and
 Steam offers the Steam Datagram Relay network, which can even *reduce* latency by routing over Valve's backbone instead of
 the public internet.
 

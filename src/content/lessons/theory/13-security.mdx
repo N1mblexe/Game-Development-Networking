@@ -19,14 +19,18 @@ sources:
     url: https://gafferongames.com/post/client_server_connection/
   - title: 'Microsoft: Deserialization risks in use of BinaryFormatter'
     url: https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-security-guide
-  - title: 'NGO docs: RPC (RequireOwnership, RpcParams)'
+  - title: 'NGO docs: RPC (RpcParams)'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/advanced-topics/message-system/rpc.html
+  - title: 'NGO 2.13 changelog (2.7.0: RpcInvokePermission, RequireOwnership deprecated)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/changelog/CHANGELOG.html
   - title: 'NGO docs: Connection approval'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/basics/connection-approval.html
   - title: 'Steamworks docs: User Authentication and Ownership'
     url: https://partner.steamgames.com/doc/features/auth
   - title: 'Steamworks docs: Steam Datagram Relay'
     url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+  - title: 'Steamworks docs: ISteamNetworkingSockets (default encryption)'
+    url: https://partner.steamgames.com/doc/api/ISteamNetworkingSockets
 ---
 
 Every copy of your game that ships is running on a machine you don't control. The player can attach a debugger, edit memory with
@@ -136,7 +140,7 @@ checks, but it is the only reliable defence against information cheats.
 Below gameplay, the connection itself needs protection.
 
 - **Authenticate connections.** Before a client can send gameplay messages, it must prove who it is, for example with a platform session ticket (Steam's auth tickets) or a short-lived token from your backend. This is also where you enforce bans.
-- **Encrypt traffic.** Encryption (<Term id="dtls">DTLS</Term> for UDP) stops packet sniffing and tampering on shared networks, and makes it harder to write proxy cheats. Steam Networking Sockets and Unity Relay connections can be encrypted, and Unity Transport supports DTLS secure connections.
+- **Encrypt traffic.** Encryption (<Term id="dtls">DTLS</Term> for UDP) stops packet sniffing and tampering on shared networks, and makes it harder to write proxy cheats. Steam Networking Sockets encrypts every connection by default, Unity Relay connections can be encrypted, and Unity Transport supports DTLS secure connections.
 - **Reject <Term id="replay-attack">replays</Term> and duplicates.** An attacker who captures a valid "buy item" packet shouldn't be able to send it again. Sequence numbers (lesson 10), and an encrypted channel that includes them, prevent that.
 - **Parse defensively.** Every length prefix is a lie until checked. Cap array sizes and string lengths before allocating, and treat a failed read as a reason to drop the packet or the connection, not as an exception that kills the server. Never use `BinaryFormatter` or any serializer that creates arbitrary types from network data.
 - **Hide addresses and absorb floods.** In P2P and listen-server games, a player's IP address is a target. Relays such as Steam Datagram Relay hide IP addresses and rate-limit traffic, and dedicated-server hosts provide <Term id="ddos">DDoS</Term> mitigation.
@@ -150,7 +154,7 @@ Validation catches the impossible. For the *improbable*, games add:
 - **Replays and reports**: let players report, and keep enough server-side data to review a match.
 
 <Callout type="unity" title="Preview: security tools in Unity and Steam">
-  NGO's `[Rpc]` attribute takes `RequireOwnership = true` to reject calls from non-owners, and an `RpcParams` parameter gives you
+  NGO's `[Rpc]` attribute takes `InvokePermission = RpcInvokePermission.Owner` to reject calls from non-owners (since 2.7, replacing the deprecated `RequireOwnership`), and an `RpcParams` parameter gives you
   `rpcParams.Receive.SenderClientId`, the sender according to the transport, which is the one to trust. **Connection approval** lets the server
   inspect a payload, such as a token, before a client joins. On Steam, **auth session tickets** let a server verify a player's Steam identity and
   ownership of the game. You'll wire these together in the NGO + Steam module's approval lesson.

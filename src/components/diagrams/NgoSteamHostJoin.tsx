@@ -88,7 +88,7 @@ const DATA: Record<V, { intro: string; steps: SequenceStep[] }> = {
         kind: 'local',
         label: 'Steam is initialized',
         code: 'SteamClient.Init(appId)',
-        note: 'FacepunchTransport.Initialize calls SteamClient.Init(steamAppId) if Steam is not running yet; many games initialize Steam themselves at boot.',
+        note: 'FacepunchTransport.Initialize calls SteamClient.Init(steamAppId, false) if SteamClient is not initialized yet (SteamClient.IsValid is false), then runs callbacks every frame; many games initialize Steam themselves at boot.',
       },
       {
         from: 'h',

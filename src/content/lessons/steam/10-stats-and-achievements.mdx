@@ -89,8 +89,10 @@ these API names:
 - Stats: `NumGames`, `NumWins`, `NumLosses` (`INT`), `FeetTraveled`, `MaxFeetTraveled` (`FLOAT`) and `AverageSpeed` (`AVGRATE`).
 - Achievements: `ACH_WIN_ONE_GAME`, `ACH_WIN_100_GAMES`, `ACH_TRAVEL_FAR_ACCUM` and `ACH_TRAVEL_FAR_SINGLE`.
 
-Keep the API names in one place (serialized fields below) and swap them when you get your own App ID. Unlocking
-Spacewar's achievements on your account is harmless, and you can reset them.
+Those names come from the guides' sample code. Valve doesn't publish Spacewar's live configuration, and only Valve can
+change it, so if a call on one of these names returns `false`, log it before you assume your own code is wrong. Keep the
+API names in one place (serialized fields below) and swap them when you get your own App ID. Unlocking Spacewar's
+achievements on your account is harmless, and you can reset them.
 
 </Callout>
 
@@ -182,9 +184,9 @@ Valve warns that `StoreStats` can be **rate limited**: call it "on the order of 
 state changes such as the end of a round. If the process exits with unsaved changes Steam stores them for you, but a
 crash loses them.
 
-When a store fails because a value broke a constraint (Increment Only, Max Change, min/max), the result is
-`Result.InvalidParam`, Steam reverts the rejected stats, and it sends the server's values back. Log it: your
-partner-site settings and your code disagree.
+When a store fails because a value broke a constraint (Increment Only, Max Change, min/max) or was out of date, the
+result is `Result.InvalidParam`: the server rejects those stats and sends back its own values so the local copy can be
+brought back in sync. Log it: your partner-site settings and your code disagree.
 
 ## The `SteamProgress` component
 
@@ -263,7 +265,7 @@ public sealed class SteamProgress : MonoBehaviour
     void HandleStored(Result result)
     {
         if (result == Result.OK) return;
-        // InvalidParam: a value broke a constraint and Steam reverted it, so don't retry.
+        // InvalidParam: the server rejected a value and sent back its own, so don't retry.
         Debug.LogWarning($"[Stats] StoreStats failed: {result}");
         dirty = result != Result.InvalidParam;
     }
@@ -330,7 +332,9 @@ public static class SteamLeaderboards
     static async Task<Leaderboard?> GetAsync()
     {
         if (cached.HasValue) return cached;
-        // With your own App ID, create the board on the partner site and use FindLeaderboardAsync.
+        // On 480 you can't use the partner site, so FindOrCreate is the only option, and the board
+        // lives in an app everyone shares. With your own App ID, create the board on the partner
+        // site and use FindLeaderboardAsync. Either way, be ready for null.
         cached = await SteamUserStats.FindOrCreateLeaderboardAsync(
             SessionsBoard, LeaderboardSort.Descending, LeaderboardDisplay.Numeric);
         return cached;

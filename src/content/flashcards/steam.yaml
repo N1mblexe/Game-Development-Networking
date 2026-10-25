@@ -35,7 +35,7 @@ cards:
   - id: facepunch-version
     lesson: steam/steamworks-overview
     front: Which Facepunch.Steamworks version and distribution does this course use?
-    back: 2.5.2 from the GitHub release zip, whose Unity folder has ready-made .meta files. NuGet stops at 2.3.3.
+    back: 2.5.2 from the GitHub release zip, whose Release/Unity folder has ready-made .meta files. NuGet stops at 2.3.3.
 
   # ------------------------------------------------------------------ setup-and-callbacks
   - id: init-call
