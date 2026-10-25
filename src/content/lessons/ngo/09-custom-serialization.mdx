@@ -351,7 +351,7 @@ once on `OnClientStarted`, and only a dedicated server registers from `OnServerS
 
 - Built-in types, fixed strings and network references serialize automatically. For your own types, implement `INetworkSerializable`.
 - `NetworkSerialize` runs in both directions, which keeps reads and writes in step. Use flags for conditional fields, and implement `IEquatable` for change detection and NetworkList elements.
-- `FastBufferWriter`/`FastBufferReader` wrap native memory: dispose them, size them, and use the `Safe` methods unless you reserve space first.
+- `FastBufferWriter` and `FastBufferReader` wrap native memory: dispose them, size them, and use the `Safe` methods unless you reserve space first.
 - Custom named messages carry session-level data without a NetworkObject. Validate `senderClientId`, and use fragmented delivery above about 1,300 bytes.
 - Validate every deserialized value on the server, whether it arrived as an RPC argument or a custom message.
 

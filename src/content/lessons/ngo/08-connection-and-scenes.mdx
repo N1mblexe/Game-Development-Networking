@@ -64,12 +64,12 @@ What you should notice:
 - The server only raises `ClientConnected` after the client finished synchronizing. That's why lesson 5's scoreboard can
   add an entry there and know that the client will receive it.
 - Every step has a clock. If approval doesn't finish within **Client Connection Buffer Timeout**
-  (`NetworkConfig.ClientConnectionBufferTimeout`), the server drops the connection.
+  (`ClientConnectionBufferTimeout` in `NetworkConfig`), the server drops the connection.
 
 ## Connection approval
 
 Turn on **Connection Approval** on the NetworkManager (or set `NetworkConfig.ConnectionApproval = true`) and assign
-`NetworkManager.ConnectionApprovalCallback`, an `Action` that receives a `ConnectionApprovalRequest` and a `ConnectionApprovalResponse`.
+`ConnectionApprovalCallback` on the NetworkManager, an `Action` that receives a `ConnectionApprovalRequest` and a `ConnectionApprovalResponse`.
 Only one callback can be registered at a time. The request carries:
 
 - `ClientNetworkId`: the joining client's id.
@@ -320,9 +320,9 @@ by default) appear in `ClientsThatTimedOut`, which `MatchFlow` uses to kick them
 
 <Callout type="pitfall" title="Using Unity's SceneManager while connected">
 
-`UnityEngine.SceneManagement.SceneManager.LoadScene("Arena")` on the server loads the scene **only there**. Connected
+Unity's own `SceneManager.LoadScene("Arena")` on the server loads the scene **only there**. Connected
 clients stay where they are, and only late joiners would get it during synchronization. While a session is running, load
-networked scenes with `NetworkManager.SceneManager.LoadScene`. Also don't use Unity's `sceneLoaded` callback to decide
+networked scenes with `LoadScene` on `NetworkManager.SceneManager`. Also don't use Unity's `sceneLoaded` callback to decide
 that loading is done: it fires before NGO has finished, so RPCs or NetworkVariable writes made there can go to objects
 that don't exist yet on clients. Wait for `LoadEventCompleted` (or `SynchronizeComplete` for a late joiner).
 
@@ -367,7 +367,7 @@ soon as you create it, and keep the lists identical across builds.
 - A joining client is approved, synchronized (scenes, then objects) and only then reported as `ClientConnected` on the server.
 - `ConnectionApprovalCallback` reads `request.Payload` and fills in `Approved`, `Reason`, `CreatePlayerObject`, `Position` and `Pending`. The host passes through it and is always approved.
 - The approval payload is neither encrypted nor authenticated: treat it as untrusted input.
-- Load networked scenes on the server with `NetworkManager.SceneManager.LoadScene`, check the `SceneEventProgressStatus`, and act on `LoadEventCompleted`.
+- Load networked scenes on the server with `LoadScene` on `NetworkManager.SceneManager`, check the `SceneEventProgressStatus`, and act on `LoadEventCompleted`.
 - Single-mode loads keep dynamically spawned objects unless they were spawned with `destroyWithScene: true`. In-scene placed objects live and die with their scene.
 
 </KeyTakeaways>

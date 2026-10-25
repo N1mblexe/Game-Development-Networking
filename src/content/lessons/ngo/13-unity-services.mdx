@@ -262,7 +262,7 @@ public class ArenaSessions : MonoBehaviour
     { id: 'c', label: 'Client', kind: 'client' },
   ]}
   steps={[
-    { from: 'h', to: 'u', label: 'Sign in, CreateSessionAsync(options.WithRelayNetwork())', kind: 'reliable' },
+    { from: 'h', to: 'u', label: 'Sign in, create session (Relay)', kind: 'reliable' },
     { from: 'u', to: 'h', label: 'Session + Relay allocation + join code "K7QX2P"', note: 'The package sets the relay data and calls StartHost().', kind: 'reliable' },
     { from: 'h', to: 'c', label: 'Share the code (UI, chat, voice)', kind: 'event' },
     { from: 'c', to: 'u', label: 'Sign in, JoinSessionByCodeAsync("K7QX2P")', kind: 'reliable' },
@@ -300,7 +300,7 @@ so cross-play works.
 
 Anonymous sign-in caches a player per machine profile. Several Multiplayer Play Mode instances on one machine can end
 up with the same player id, so the second one "joins" as the first and the session sees one player. The NGO distributed
-authority quickstart avoids this by giving each instance its own profile with `AuthenticationService.Instance.SwitchProfile(name)`
+authority quickstart avoids this by giving each instance its own profile with `SwitchProfile(name)` on `AuthenticationService.Instance`
 before signing in. Use the instance's MPPM tag (lesson 12) as the profile name.
 
 </Callout>

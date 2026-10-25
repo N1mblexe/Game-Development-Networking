@@ -73,7 +73,7 @@ shines for co-op, social and casual games, where cheap hosting and no host migra
 <Steps>
 
 1. Install the **Multiplayer Services** package (`com.unity.services.multiplayer`) and link the project to a Unity Cloud project (**Edit > Project Settings > Services**).
-2. On the NetworkManager, set **Network Topology** to **Distributed Authority** (`NetworkConfig.NetworkTopology = NetworkTopologyTypes.DistributedAuthority`). The field appears once the Multiplayer Services package is installed.
+2. On the NetworkManager, set **Network Topology** to **Distributed Authority** (in code, set `NetworkConfig.NetworkTopology` to `DistributedAuthority`). The field appears once the Multiplayer Services package is installed.
 3. Set **Network Transport** as the NGO quickstart describes, selecting **DistributedAuthorityTransport** from the transport list.
 4. Don't call `StartHost`/`StartClient` yourself. Create or join a session, and the Multiplayer Services integration starts NGO for you.
 
@@ -237,19 +237,19 @@ public class CarryableCrate : NetworkBehaviour
 
 By default, requests are approved automatically. Assigning `OnOwnershipRequested` lets the current owner refuse, here
 while it's still carrying the crate. For a `Transferable` object you skip the request and call
-`NetworkObject.ChangeOwnership(NetworkManager.LocalClientId)`. If the flags don't allow it,
+`ChangeOwnership` with `NetworkManager.LocalClientId`. If the flags don't allow it,
 `OnOwnershipPermissionsFailure` reports why.
 
 ## The session owner
 
 The first client in a session is the **session owner**. If it leaves, the service promotes another client automatically
-and raises `NetworkManager.OnSessionOwnerPromoted(ulong newSessionOwner)`. Its responsibilities:
+and raises `NetworkManager.OnSessionOwnerPromoted`, which receives the new session owner's id. Its responsibilities:
 
 - Loading and unloading scenes for everyone.
 - Synchronizing late-joining clients with the current game state.
 - Owning every object flagged `SessionOwner`.
 - Whatever global logic you assign it, which you gate with `IsSessionOwner` (on any `NetworkBehaviour`) or
-  `NetworkManager.LocalClient.IsSessionOwner`.
+  `IsSessionOwner` on `NetworkManager.LocalClient`.
 
 Lesson 3's `PickupSpawner` used `IsServer`. In co-op it becomes a session-owner object: set its NetworkObject's
 **Ownership** to **Session Owner** and gate on authority, which for that object is always the session owner.
