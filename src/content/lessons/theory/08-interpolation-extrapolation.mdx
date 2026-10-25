@@ -35,7 +35,7 @@ guesses beyond the last known point.
 
 ## Interpolation: render the past, smoothly
 
-The key idea, used by Source, Overwatch and most shooters since, is to deliberately render remote entities **slightly in
+The key idea, used by Valve's Source engine and most shooters since, is to deliberately render remote entities **slightly in
 the past**. If the client always shows the world as it was 100 ms ago, then at almost any moment it already has a snapshot
 from just before that time *and* one from just after. Rendering is a plain blend between two real positions, with no
 guessing.
@@ -167,8 +167,8 @@ Hz in `FixedUpdate`, rendering runs at 144 fps, and the renderer blends between 
 with the network interpolation in this lesson.
 
 <Callout type="unity" title="Preview: interpolation in NGO">
-  NGO's `NetworkTransform` interpolates by default (the **Interpolate** setting is on), with several interpolator types such as Lerp and
-  Smooth Dampening, and maximum interpolation times per axis. Replicated objects are rendered against `NetworkManager.ServerTime`, which runs
+  NGO's `NetworkTransform` interpolates by default (the **Interpolate** setting is on), with interpolation types `LegacyLerp`, `Lerp` and
+  `SmoothDampening`, and separate maximum interpolation times for position, rotation and scale. Replicated objects are rendered against `NetworkManager.ServerTime`, which runs
   **behind** the server, exactly like the render time above. If you sync positions yourself with a `NetworkVariable`, you need to add your own
   buffer. Steam Networking Sockets delivers bytes, so you'd build this yourself.
 </Callout>
