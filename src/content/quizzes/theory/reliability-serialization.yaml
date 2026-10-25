@@ -1,0 +1,94 @@
+passPct: 70
+questions:
+  - id: what-gets-resent
+    type: single
+    prompt: >-
+      Packet 41 carried some movement state and the reliable message "item picked up". The ack bitfield shows that packet 41 was
+      never received. What does the sender do?
+    options:
+      - Resend packet 41 unchanged, with the same sequence number
+      - Put the "item picked up" message into the next packet, which gets a new sequence number
+      - Resend both the movement state and the message in a new packet
+      - Nothing, because acks are sent unreliably and can't be trusted
+    answer: 1
+    difficulty: 2
+    explanation: >-
+      Reliability is tracked per **message**, not per packet. The movement state in packet 41 is already stale, because packet 42
+      carried newer state, so resending it would waste bytes. Only the message that must arrive is copied into the next outgoing
+      packet, which has its own new sequence number. The receiver de-duplicates messages by their message id.
+  - id: quantization-bits
+    type: numeric
+    prompt: >-
+      Your level is 512 m wide (−256 m to +256 m) and you want 1 cm precision on each position axis. How many bits per axis do you
+      need after quantization?
+    answer: 16
+    tolerance: 0
+    unit: bits
+    difficulty: 2
+    explanation: >-
+      Steps = range ÷ precision = 512 ÷ 0.01 = 51,200. Bits = ceil(log2(51,200)) = ceil(15.64) = **16**. That's half the 32 bits of a
+      float, and 2^16 = 65,536 steps leave a little headroom. Three axes cost 48 bits instead of 96.
+  - id: wraparound-compare
+    type: truefalse
+    prompt: >-
+      For 16-bit sequence numbers, a plain `if (seq > newest)` check is enough to decide whether a packet is newer than the newest one
+      received so far.
+    answer: false
+    difficulty: 2
+    explanation: >-
+      A 16-bit counter wraps from 65535 to 0 after about 18 minutes at 60 packets per second. After the wrap, packet 3 is newer than
+      packet 65530, but `3 > 65530` is false. Treat the numbers as a circle: `a` is newer than `b` if it is ahead by less than half the
+      range (32768).
+  - id: channel-design
+    type: multi
+    prompt: >-
+      A game sends chat messages, item pickups, a quest's scripted steps (which must happen in order) and player positions. Which channel
+      assignments are sensible? Select all that apply.
+    options:
+      - Positions on an unreliable channel
+      - Chat on its own reliable ordered channel
+      - Quest steps on a reliable ordered channel
+      - Everything on one reliable ordered channel, to be safe
+      - Item pickups on a reliable unordered channel
+    answers: [0, 1, 2, 4]
+    difficulty: 2
+    explanation: >-
+      Ordering is per channel, so a lost message only blocks the messages behind it **in the same channel**. Putting everything on one
+      reliable ordered channel recreates TCP's head-of-line blocking: a lost chat line would freeze movement and pickups too. Give
+      ordered channels only to messages that depend on each other, and send constantly refreshed state unreliably.
+  - id: per-client-bandwidth
+    type: numeric
+    prompt: >-
+      A 20-player game sends every client one packet per tick at 20 Hz. Each packet holds 20 players × 12 bytes of bit-packed state,
+      plus 10 bytes of game header and 28 bytes of IPv4 + UDP header. What is the download per client, in kbit/s?
+    answer: 44.5
+    tolerance: 1
+    unit: kbit/s
+    difficulty: 3
+    explanation: >-
+      Packet size = 20 × 12 + 10 + 28 = 278 bytes. 278 bytes × 20 packets/s = 5,560 bytes/s, and × 8 = **44.5 kbit/s**. Remember that
+      link speeds are in bits and packet sizes in bytes, and that the 38 header bytes are paid on every packet, whatever its payload.
+  - id: reader-mismatch
+    type: codeline
+    prompt: >-
+      Clients receive garbage health values and wildly wrong positions for every player after the first one. Which line of the reader
+      is wrong?
+    code: |-
+      void Write(BitWriter w, PlayerState s) {
+          w.WriteBits(s.Id, 8);
+          w.WriteBits(s.Health, 10);
+          w.WriteQuantized(s.X, -512f, 512f, 20);
+      }
+      PlayerState Read(BitReader r) {
+          var s = new PlayerState();
+          s.Id = r.ReadBits(8);
+          s.Health = r.ReadBits(8);
+          s.X = r.ReadQuantized(-512f, 512f, 20);
+          return s;
+      }
+    answerLines: [9]
+    difficulty: 2
+    explanation: >-
+      The writer writes health in **10** bits, but the reader reads 8. Every field after that is read two bits out of place, so the
+      position and every later player in the packet are garbage. Bit-packed formats have no field names or delimiters: writer and reader
+      must agree exactly on order and sizes, which is why it pays to generate both from one definition or share one `Serialize` method.

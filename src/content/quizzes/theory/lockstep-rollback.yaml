@@ -1,0 +1,82 @@
+passPct: 70
+questions:
+  - id: rollback-frames
+    type: numeric
+    prompt: >-
+      A fighting game runs at 60 fps with 2 frames of input delay. The remote player's input for a frame arrives 100 ms after that
+      frame's input was sampled. When the prediction for that input was wrong, how many frames must the game roll back and resimulate?
+    answer: 4
+    tolerance: 0
+    unit: frames
+    difficulty: 3
+    explanation: >-
+      100 ms at 60 fps is 6 frames of transit. The 2 frames of input delay hide 2 of them, because the input isn't needed until 2 frames
+      after it was sampled. That leaves **4** frames that were simulated with a guess and must be resimulated. Every frame of input delay
+      is one frame less to roll back.
+  - id: nondeterminism-sources
+    type: multi
+    prompt: Which of these can make two machines' lockstep simulations diverge? Select all that apply.
+    options:
+      - Iterating over a `Dictionary` to apply damage
+      - Calling `UnityEngine.Random.Range` inside the simulation
+      - Using fixed-point integer maths for movement
+      - Moving units with `Time.deltaTime` in `Update`
+      - Reading a `Physics.Raycast` result from PhysX
+      - Processing all players' inputs in a fixed order by player id
+    answers: [0, 1, 3, 4]
+    difficulty: 2
+    explanation: >-
+      Dictionary iteration order can depend on hash codes and insertion history, `UnityEngine.Random` isn't a shared, seeded stream,
+      frame time differs per machine, and PhysX isn't guaranteed to be deterministic across machines. Fixed-point maths and a fixed
+      input order are exactly what deterministic simulations use instead.
+  - id: detect-desync
+    type: single
+    prompt: How does a lockstep game usually find out that a desync has happened?
+    options:
+      - Players report that they see different things
+      - The server compares every unit's position with each client's every tick
+      - Every few turns, machines exchange a checksum of the simulation state and compare them
+      - The transport detects that packets were lost
+    answer: 2
+    difficulty: 1
+    explanation: >-
+      A desync is silent: both machines keep simulating happily, just different games. A cheap hash of the important state, exchanged
+      every few turns, catches the divergence immediately. Logging the full state at that point lets you find the first field that
+      disagreed. Sending every unit's position would defeat the point of lockstep.
+  - id: rollback-order
+    type: order
+    prompt: A remote input for an earlier frame arrives and differs from the prediction. Put the rollback steps in order.
+    items:
+      - Restore the saved state from the start of that frame
+      - Apply the real remote input for that frame
+      - Resimulate every frame up to the present, re-predicting unconfirmed inputs
+      - Render the corrected present state
+    difficulty: 2
+    explanation: >-
+      All of this happens within one rendered frame, which is why rollback needs a cheap, side-effect-free simulation and small,
+      copyable state. The player sees the corrected present, with the first frames of the opponent's action skipped.
+  - id: lockstep-slow-player
+    type: truefalse
+    prompt: In deterministic lockstep, a player with a 300 ms lag spike only affects their own game.
+    answer: false
+    difficulty: 1
+    explanation: >-
+      Nobody may simulate turn N without **everyone's** input for turn N, so one late player stalls the whole game. Rollback avoids
+      most of this by predicting the late input and correcting it later.
+  - id: sim-random-bug
+    type: codeline
+    prompt: This step function runs on every machine in a rollback game. Which line will eventually cause a desync?
+    code: |-
+      public static GameState Step(GameState s, Input p1, Input p2) {
+          s.Fighter1 = Move(s.Fighter1, p1, FixedDt);
+          s.Fighter2 = Move(s.Fighter2, p2, FixedDt);
+          if (s.Rng.NextInt(100) < 5) s.SpawnItem();
+          s.IsCrit = UnityEngine.Random.value < 0.1f;
+          return s;
+      }
+    answerLines: [5]
+    difficulty: 2
+    explanation: >-
+      `UnityEngine.Random` is a global generator that isn't part of the saved state, so it differs between machines and isn't restored
+      on rollback. Line 4 is fine: `s.Rng` is a seeded generator stored **inside** the game state, so it is identical everywhere and
+      rewinds with everything else.
