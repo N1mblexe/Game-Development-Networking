@@ -1,0 +1,191 @@
+terms:
+  - id: steamworks
+    term: Steamworks
+    aliases: [Steamworks SDK, Steamworks API]
+    short: Valve's SDK and backend for games on Steam. A native library talks to the running Steam client, which provides friends, lobbies, networking, auth and stats.
+    long: >-
+      The SDK (`steam_api64.dll`, `libsteam_api.so`, `libsteam_api.dylib`) exposes interfaces such as `ISteamFriends`,
+      `ISteamMatchmaking`, `ISteamNetworkingSockets` and `ISteamUserStats`. It does little by itself: it talks over IPC
+      to the local Steam client, which talks to Valve's servers. Unity reaches it through a C# wrapper such as
+      Facepunch.Steamworks.
+    lesson: steam/steamworks-overview
+    seeAlso: [steam-client, facepunch-steamworks, steamworks-net, app-id]
+  - id: facepunch-steamworks
+    term: Facepunch.Steamworks
+    short: An idiomatic C# wrapper for Steamworks (used by Rust and Garry's Mod) with static classes, async Tasks, C# events and structs such as Lobby and Friend.
+    long: >-
+      Distributed as a GitHub release zip with a ready-made `Unity` folder. This course targets version 2.5.2. Its names
+      differ from Valve's C++ API (for example `SteamMatchmaking.CreateLobbyAsync` instead of `CreateLobby` plus a
+      `LobbyCreated_t` call result), so you translate concepts from Valve's documentation.
+    lesson: steam/steamworks-overview
+    seeAlso: [steamworks, steamworks-net]
+  - id: steamworks-net
+    term: Steamworks.NET
+    short: A C# wrapper that mirrors Valve's C++ Steamworks API one to one, with CallResult and Callback helpers. An alternative to Facepunch.Steamworks.
+    long: >-
+      Its calls match Valve's documentation almost line for line. It uses the same `Steamworks` namespace as
+      Facepunch.Steamworks, so a project should use only one of the two.
+    lesson: steam/steamworks-overview
+    seeAlso: [facepunch-steamworks, steamworks]
+  - id: steam-client
+    term: Steam client
+    short: The Steam application the player has running. Your game's Steamworks library talks to it over IPC, and it talks to Valve's servers on your behalf.
+    long: >-
+      This is why Steam must be running and logged in for `SteamClient.Init` to succeed, and why every API answers for the
+      logged-in account. Every process on one machine shares the same Steam client and account.
+    lesson: steam/steamworks-overview
+    seeAlso: [steamworks, steam-callbacks]
+  - id: app-id
+    term: App ID
+    aliases: [AppID, Steam App ID]
+    short: The number that identifies your game on Steam. Every Steamworks call is made on behalf of an App ID, passed to SteamClient.Init.
+    long: >-
+      Stats, achievements, lobbies, rich presence localization and licenses are all per App ID. Until Valve gives you
+      your own, you develop against 480 (Spacewar).
+    lesson: steam/steamworks-overview
+    seeAlso: [spacewar, steamworks]
+  - id: spacewar
+    term: Spacewar (App ID 480)
+    aliases: ['480', App ID 480]
+    short: Valve's sample Steamworks game. Any account can develop against App ID 480, but its lobby list, stats and achievements are shared with every other developer.
+    long: >-
+      On 480 you filter lobby searches on your own keys, you get Spacewar's stats and achievements (such as `NumGames` and
+      `ACH_WIN_ONE_GAME`), you can't upload a rich presence localization file, and cold-start invites launch Spacewar
+      rather than your build.
+    lesson: steam/steamworks-overview
+    seeAlso: [app-id, steam-achievements]
+  - id: steam-callbacks
+    term: Steam callbacks
+    aliases: [callback pump, RunCallbacks]
+    short: Results and events that the Steam client queues for your game. Nothing reaches your code until the queue is pumped, by asyncCallbacks or SteamClient.RunCallbacks().
+    long: >-
+      In Facepunch.Steamworks, awaited `…Async` calls and static events such as `SteamMatchmaking.OnLobbyEntered` both
+      complete inside the pump. With `asyncCallbacks: false` and no `RunCallbacks()` call, awaits never return and events
+      never fire.
+    lesson: steam/setup-and-callbacks
+    seeAlso: [steam-client]
+  - id: steam-id
+    term: Steam ID
+    aliases: [SteamId, SteamID]
+    short: A 64-bit ID for a Steam user, lobby or game server. Facepunch's SteamId struct. Use it, not the display name, as the key for players.
+    long: >-
+      It encodes the account type and universe as well as the account number. Store `SteamId.Value` (or its decimal
+      string) rather than the 32-bit `AccountId`. Relayed connections and auth tickets report a Steam ID that Steam has
+      verified.
+    lesson: steam/users-and-friends
+    seeAlso: [steam-lobby, auth-session-ticket]
+  - id: steam-overlay
+    term: Steam overlay
+    aliases: [overlay, Steam Game Overlay]
+    short: Steam's in-game UI (Shift+Tab), injected into the game's rendering. Invites, profiles and achievement notifications use it, and it generally doesn't work in the Unity editor.
+    long: >-
+      Check `SteamUtils.IsOverlayEnabled` before relying on it, and test overlay features such as
+      `SteamFriends.OpenGameInviteOverlay` in a build with the overlay enabled in Steam's settings.
+    lesson: steam/invites-and-presence
+    seeAlso: [rich-presence]
+  - id: steam-lobby
+    term: Steam lobby
+    aliases: [lobby (Steam)]
+    short: A Steam-hosted room with members, one owner, owner-written lobby data, per-member data and chat. Players find and join it, then connect to its owner.
+    long: >-
+      Created with `SteamMatchmaking.CreateLobbyAsync` (always invisible at first), found with `SteamMatchmaking.LobbyList`
+      and joined with `lobby.Join()`. Steam promotes a new owner if the owner leaves, and destroys the lobby when the last
+      member leaves.
+    lesson: steam/lobbies
+    seeAlso: [lobby-data, lobby-member-data, steam-id]
+  - id: lobby-data
+    term: Lobby data
+    short: String key/value pairs on a Steam lobby. Only the owner can write them; everyone, including searchers, can read them.
+    long: >-
+      Use it for what searchers filter on (game key, version, mode) and what members must agree on (match settings,
+      state). Keep it small and rarely changed; it isn't a replication channel.
+    lesson: steam/lobbies
+    seeAlso: [steam-lobby, lobby-member-data]
+  - id: lobby-member-data
+    term: Lobby member data
+    aliases: [member data]
+    short: Key/value pairs per member of a Steam lobby. Each member can set only their own, which suits flags such as "ready".
+    lesson: steam/lobbies
+    seeAlso: [steam-lobby, lobby-data]
+  - id: rich-presence
+    term: Rich presence
+    short: Key/value strings Steam attaches to a player and shows to friends. Keys such as status, connect and steam_display have special meaning.
+    long: >-
+      Set with `SteamFriends.SetRichPresence(key, value)` and read with `friend.GetRichPresence(key)`. `connect` enables
+      **Join Game**; `steam_display` needs a localization token from a file uploaded for your own App ID.
+    lesson: steam/invites-and-presence
+    seeAlso: [steam-overlay, steam-lobby]
+  - id: steam-networking-sockets
+    term: Steam Networking Sockets
+    aliases: [ISteamNetworkingSockets, SteamNetworkingSockets]
+    short: Steam's connection-oriented networking API. A host listens, clients connect by Steam ID, and each message chooses reliable or unreliable delivery.
+    long: >-
+      In Facepunch.Steamworks: `SteamNetworkingSockets.CreateRelaySocket` / `ConnectRelay` with `SocketManager` and
+      `ConnectionManager` subclasses. It replaces the deprecated `ISteamNetworking` P2P API.
+    lesson: steam/networking-sockets
+    seeAlso: [steam-datagram-relay, socket-manager, connection-manager, send-type]
+  - id: steam-datagram-relay
+    term: Steam Datagram Relay
+    aliases: [SDR]
+    short: Valve's relay network. It carries traffic between Steam IDs through any NAT, hides players' IP addresses, and authenticates and encrypts the traffic.
+    long: >-
+      Both peers make outbound connections to nearby relays and Valve routes between them over its backbone. Steam may
+      also use a direct route when it's better; your code connects to a Steam ID either way.
+    lesson: steam/networking-sockets
+    seeAlso: [steam-networking-sockets]
+  - id: socket-manager
+    term: SocketManager
+    short: Facepunch's host-side class for a listen socket. Subclass it and override OnConnecting, OnConnected, OnDisconnected and OnMessage; call Receive() every frame.
+    long: >-
+      Created by `SteamNetworkingSockets.CreateRelaySocket` (or `CreateNormalSocket`). The default `OnConnecting` accepts
+      everyone, and `Connected` lists the active connections.
+    lesson: steam/networking-sockets
+    seeAlso: [connection-manager, steam-networking-sockets]
+  - id: connection-manager
+    term: ConnectionManager
+    short: Facepunch's client-side class for one outgoing connection. Subclass it, override OnConnected, OnDisconnected and OnMessage, and call Receive() every frame.
+    lesson: steam/networking-sockets
+    seeAlso: [socket-manager, steam-networking-sockets]
+  - id: send-type
+    term: SendType
+    aliases: [send flags]
+    short: Facepunch's flags enum that chooses delivery per message - Unreliable, Reliable, NoNagle (send now) and NoDelay (drop if not ready, unreliable only).
+    long: >-
+      Combine flags with `|`, for example `SendType.Unreliable | SendType.NoNagle`. Reliable messages are retransmitted and
+      arrive in order; unreliable ones may be lost, reordered or duplicated.
+    lesson: steam/messages-and-channels
+    seeAlso: [steam-networking-sockets]
+  - id: auth-session-ticket
+    term: Auth session ticket
+    aliases: [AuthTicket, session ticket]
+    short: A signed blob a client gets from Steam so another player or server can verify its Steam ID, its license for your app, its ban status and the copy's owner.
+    long: >-
+      The client calls `SteamUser.GetAuthSessionTicketAsync(identity)` and sends `ticket.Data`. The host calls
+      `SteamUser.BeginAuthSession` and waits for `OnValidateAuthTicketResponse`. Both sides clean up with `Cancel()` and
+      `EndAuthSession`. It proves identity, not honesty.
+    lesson: steam/auth-tickets
+    seeAlso: [steam-id]
+  - id: steam-user-stats
+    term: SteamUserStats
+    aliases: [ISteamUserStats]
+    short: The Steamworks interface (Facepunch's SteamUserStats class) for per-user stats, achievements and leaderboards. Sets are local; StoreStats uploads them.
+    lesson: steam/stats-and-achievements
+    seeAlso: [steam-achievements, steam-leaderboards]
+  - id: steam-achievements
+    term: Steam achievements
+    aliases: [achievements]
+    short: Named locked/unlocked flags per user, defined on the partner site with icons and localized text. Facepunch's Achievement struct unlocks them with Trigger().
+    long: >-
+      Unlocks only reach Steam (and show the overlay notification) after `StoreStats`. Partner-site changes must be
+      published before the API names work.
+    lesson: steam/stats-and-achievements
+    seeAlso: [steam-user-stats, spacewar]
+  - id: steam-leaderboards
+    term: Steam leaderboards
+    aliases: [leaderboards]
+    short: Named, sorted Steam tables with one integer score per user plus up to 64 integers of detail. Found with FindLeaderboardAsync or FindOrCreateLeaderboardAsync.
+    long: >-
+      Submit with `SubmitScoreAsync` (keep best) or `ReplaceScore`, and download with the `GetScores…Async` methods.
+      Valve limits uploads to 10 per 10 minutes. `Writes: Trusted` boards accept scores only from the Web API.
+    lesson: steam/stats-and-achievements
+    seeAlso: [steam-user-stats]
