@@ -266,7 +266,7 @@ What you should notice:
 
 <Callout type="pitfall" title="Calling StartClient before targetSteamId is set">
 
-FacepunchTransport reads `targetSteamId` **inside** `StartClient()`, when it calls `ConnectRelay<ConnectionManager>(targetSteamId)`.
+FacepunchTransport reads `targetSteamId` **inside** `StartClient()`, when it calls `SteamNetworkingSockets.ConnectRelay(targetSteamId)`.
 If the field is still 0, or still holds the host from your *previous* session, the transport happily dials the wrong peer,
 `StartClient()` still returns `true`, and the player stares at "Connecting…" until Steam's initial connection timeout expires. Set
 the field on every join, right before starting. A typical way to get this wrong is an `async` gap: kicking off `StartClient()` and

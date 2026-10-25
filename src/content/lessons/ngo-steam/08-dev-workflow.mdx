@@ -267,7 +267,7 @@ Multiplayer Tools package for the fast loop. For Steam builds, Facepunch exposes
 
 ## The slow loop: two machines, two accounts
 
-The Steam half needs two real Steam clients logged in as two different accounts, and that means two machines (a laptop, a second PC or a
+The Steam half needs <Term id="two-account-testing">two-account testing</Term>: two real Steam clients logged in as two different accounts, and that means two machines (a laptop, a second PC or a
 friend on a call). Here's a setup that works:
 
 <Steps>
@@ -359,7 +359,7 @@ strings costs frame time. Steam queues the messages from its own threads, and Fa
 handler runs on the main thread.
 
 Where the logs end up: a Unity player writes `Player.log` to a per-platform folder (on Windows, under
-`%USERPROFILE%\AppData\LocalLow\<Company>\<Product>\`), and the `-logFile <path>` command-line argument redirects it. On the Steam side, Valve's
+`%USERPROFILE%\AppData\LocalLow\CompanyName\ProductName\`), and the `-logFile` command-line argument redirects it. On the Steam side, Valve's
 debugging page documents the `-lognetapi` Steam client parameter, which writes P2P networking details to the Steam client's logs folder.
 
 <Callout type="pitfall" title="Testing only the fast loop">

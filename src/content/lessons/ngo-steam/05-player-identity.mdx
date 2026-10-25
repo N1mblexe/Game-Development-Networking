@@ -225,7 +225,7 @@ What you should notice:
 
 A large avatar is a 128×128 RGBA bitmap according to Valve's docs, which is 64 KB of raw pixels. Sending one per player over NGO would
 cost more than everything else in the join, and every peer can download the same picture from Steam itself. So the only thing that crosses the network is
-the 8-byte SteamId. Each peer turns it into a texture on its own:
+the 8-byte SteamId. Each peer turns it into a texture on its own and keeps it in an <Term id="avatar-cache">avatar cache</Term>:
 
 ```csharp title="AvatarCache.cs"
 using System;
@@ -311,7 +311,7 @@ object exists. Each answers different questions:
 |---|---|---|
 | "Which SteamId sent this RPC?" | Host | `rpcParams.Receive.SenderClientId`, then `SteamAuthApproval.TryGetSteamId` |
 | "Which SteamId just disconnected?" | Host | `SteamAuthApproval`. The player object is already despawned (lesson 7). |
-| "Show the name above this player's head" | Everyone | `GetComponent<PlayerIdentity>()` on the object |
+| "Show the name above this player's head" | Everyone | The `PlayerIdentity` component on that player object |
 | "My friend Alex is in this session: where?" | Everyone | `PlayerIdentity.TryGetBySteamId(alexId, ...)` |
 | "Kick SteamId X" | Host | `TryGetBySteamId`, then `NetworkManager.DisconnectClient(player.OwnerClientId, reason)` |
 

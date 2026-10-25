@@ -62,8 +62,8 @@ because someone shipped without it.
 4. **The restart check on.** `SteamBootstrap` calls `SteamClient.RestartAppIfNecessary(appId)` before `Init` in player builds and quits if it returns
    `true`. Valve calls this "optional but highly recommended", and says it should be the first Steamworks call you make. Skip it only if you use
    Steam's DRM wrapper, which does the same check.
-5. **Version keys bumped together.** Every build that can't play with the previous one bumps `SessionKeys.BuildVersion` (the lobby `version`
-   key, checked before connecting) **and** `ProtocolVersion` (NGO's handshake) in the same commit (lessons 1 and 4).
+5. **Version keys bumped together.** Every build that can't play with the previous one bumps `SessionKeys.BuildVersion` (the
+   <Term id="lobby-version-key">lobby version key</Term>, checked before connecting) **and** `ProtocolVersion` (NGO's handshake) in the same commit (lessons 1 and 4).
 6. **Timeouts chosen, not inherited.** Steam's connect and connected timeouts, your auth timeout and NGO's `ClientConnectionBufferTimeout`
    must fit together, and every wait has a visible cancel button (below).
 7. **Release logging.** NetworkManager Log Level *Normal*, Steam networking debug output at *Warning*, the patched transport logging its

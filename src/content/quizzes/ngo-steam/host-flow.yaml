@@ -1,0 +1,66 @@
+passPct: 70
+questions:
+- id: host-order
+  type: order
+  prompt: Put the host steps in the order that never lets anyone join too early.
+  items:
+  - CreateLobbyAsync (the lobby is invisible)
+  - Configure ProtocolVersion, transport and approval
+  - NetworkManager.StartHost()
+  - SetData for game, version, mode and host
+  - SetFriendsOnly or SetPublic, then SetJoinable(true)
+  - SetRichPresence("connect", "+connect_lobby <id>")
+  - NetworkManager.SceneManager.LoadScene(gameplay)
+  explanation: The invisible lobby gives a safe window. NGO starts listening before anything is published, visibility comes after the host key exists, and the network scene load comes last because SceneManager only exists once NGO runs.
+- id: publish-too-early
+  type: codeline
+  prompt: A fast friend sometimes gets stuck on "Connecting..." when joining this host. Click the line(s) that make the lobby joinable too early.
+  code: |
+    Lobby? lobby = await SteamMatchmaking.CreateLobbyAsync(4);
+    lobby.Value.SetPublic();
+    lobby.Value.SetJoinable(true);
+    NetworkManager.Singleton.StartHost();
+    lobby.Value.SetData("host", SteamClient.SteamId.ToString());
+  answerLines:
+  - 2
+  - 3
+  explanation: The lobby becomes visible and joinable before `StartHost()` opens the relay socket. Keep it invisible until NGO is listening and the host key is written, then open it.
+- id: invisible-tf
+  type: truefalse
+  prompt: Facepunch's `SteamMatchmaking.CreateLobbyAsync` creates a public lobby by default.
+  answer: false
+  explanation: It creates an invisible lobby. That's useful as a safe window, and it's why forgetting `SetFriendsOnly()` or `SetPublic()` leaves your lobby browser empty.
+- id: connect-key
+  type: single
+  prompt: Which rich presence key enables the **Join Game** button in a friend's Steam client?
+  options:
+  - steam_display
+  - connect
+  - steam_player_group
+  - status
+  answer: 1
+  explanation: 'Valve: the `connect` key "contains the command-line for how a friend can connect to a game". The sample sets it to `+connect_lobby <id>`, so a cold start through the friends list looks like an invite.'
+- id: before-starthost
+  type: multi
+  prompt: What must be set **before** `StartHost()`? Select all that apply.
+  options:
+  - NetworkConfig.ProtocolVersion
+  - NetworkConfig.NetworkTransport
+  - The connection approval callback
+  - NetworkManager.SceneManager.LoadScene
+  - FacepunchTransport.targetSteamId
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: NGO reads the config and approval setup during start. `SceneManager` only exists after starting, and `targetSteamId` is only read by `StartClient()`, so the host never sets it.
+- id: duplicate-nm
+  type: single
+  prompt: After returning to the menu, a second NetworkManager appears and your serialized references point at the idle one. What is the fix the lesson recommends?
+  options:
+  - Destroy the NetworkManager in OnDisable
+  - Put NetworkManager and the session services in a Boot scene that is loaded once, and always use NetworkManager.Singleton
+  - Call SetSingleton() on the new instance
+  - Load the menu additively
+  answer: 1
+  explanation: NGO moves the NetworkManager to DontDestroyOnLoad and doesn't destroy duplicates. A Boot scene loaded once avoids creating a second one.

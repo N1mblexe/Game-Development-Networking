@@ -61,8 +61,8 @@ the lobby's key/value data, but no game packet travels "through" the lobby. Valv
 connection to the host using the host's SteamId as the address.
 
 That connection is FacepunchTransport's business. When NGO calls `StartServer()` on it, the transport calls
-`SteamNetworkingSockets.CreateRelaySocket<SocketManager>()`. When NGO calls `StartClient()`, it calls
-`SteamNetworkingSockets.ConnectRelay<ConnectionManager>(targetSteamId)`. From then on, NGO hands the transport
+`SteamNetworkingSockets.CreateRelaySocket()` with Facepunch's `SocketManager` as the type argument. When NGO calls `StartClient()`,
+it calls `SteamNetworkingSockets.ConnectRelay(targetSteamId)` with a `ConnectionManager`. From then on, NGO hands the transport
 `ArraySegment<byte>` payloads and a `NetworkDelivery`, and the transport turns them into Steam messages.
 
 NGO sits on top and doesn't know Steam exists. It sees a `NetworkTransport` that raises `Connect`, `Data` and

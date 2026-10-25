@@ -1,0 +1,60 @@
+passPct: 70
+questions:
+- id: join-order
+  type: order
+  prompt: Order the steps of `NetworkLauncher.JoinGame`.
+  items:
+  - Lobby.Join() and check for RoomEnter.Success
+  - Validate the game tag, version and host key against the owner
+  - Await PrepareClientPayloadAsync(host) for ConnectionData
+  - Set transport.targetSteamId = host
+  - Call StartClient()
+  - Wait for ConnectionEvent.ClientConnected or a disconnect
+  explanation: Everything the transport and NGO read during startup is ready before `StartClient()`. The real outcome arrives later through NGO's events.
+- id: target-after-start
+  type: codeline
+  prompt: This client dials the wrong peer on its second join. Click the misplaced line.
+  code: |
+    var transport = GetFacepunch();
+    Net.NetworkConfig.NetworkTransport = transport;
+    Net.StartClient();
+    transport.targetSteamId = Lobbies.HostSteamId;
+  answerLines:
+  - 4
+  explanation: FacepunchTransport reads `targetSteamId` inside `StartClient()`. Set after the call, it only affects the next join, so this one dials the previous host (or 0).
+- id: three-doors
+  type: multi
+  prompt: Which of these are ways a client arrives at `JoinGame`? Select all that apply.
+  options:
+  - A lobby browser button
+  - SteamFriends.OnGameLobbyJoinRequested while the game runs
+  - +connect_lobby <id> on the command line after a cold start
+  - SteamMatchmaking.OnChatMessage
+  - NetworkManager.OnClientConnectedCallback
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: Browser, hot invite and cold start all converge on one function. Chat messages aren't joins, and OnClientConnectedCallback fires after a connection exists.
+- id: starts-true
+  type: truefalse
+  prompt: When FacepunchTransport's `StartClient()` returns true, the client is connected and approved.
+  answer: false
+  explanation: It always returns true after calling `ConnectRelay`, meaning only "dialing has started". Success is `ConnectionEvent.ClientConnected`; failure is a disconnect callback, with `DisconnectReason` set when the host gave one.
+- id: revalidate
+  type: single
+  prompt: The browser already filters on `game` and `version`. Why validate them again after joining?
+  options:
+  - Steam doesn't apply filters on App ID 480
+  - Invites and the friends list bypass search filters entirely
+  - Lobby data is encrypted until you join
+  - Filters only apply to public lobbies
+  answer: 1
+  explanation: A friend on last week's build can accept your invite without ever running your filtered query, so `JoinAsync` checks game, version and host key on every join.
+- id: request-null
+  type: fill
+  prompt: In Facepunch.Steamworks, what does `LobbyQuery.RequestAsync()` return when no lobby matches? (one word)
+  answers:
+  - 'null'
+  placeholder: one word
+  explanation: It returns `null`, not an empty array, so the sample writes `found ?? Array.Empty<Lobby>()`.

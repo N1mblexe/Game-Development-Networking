@@ -1,0 +1,68 @@
+passPct: 70
+questions:
+- id: positions-layer
+  type: single
+  prompt: In this architecture, which layer should carry players' positions and health?
+  options:
+  - Steam lobby data, updated every frame
+  - Steam lobby chat messages
+  - NGO (NetworkVariables, NetworkTransform, RPCs) over FacepunchTransport
+  - Rich presence keys
+  answer: 2
+  explanation: The lobby is a rendezvous point for search and setup. Replication is NGO's job, and FacepunchTransport carries NGO's bytes over Steam Networking Sockets. Valve also advises against updating lobby metadata at high frequency.
+- id: lifecycle-order
+  type: order
+  prompt: Put the states of the session lifecycle in order.
+  items:
+  - 'Boot: initialize Steam and start pumping callbacks'
+  - 'Menu: no lobby, no NGO'
+  - 'In lobby: lobby created or joined'
+  - 'Connecting: targetSteamId set, StartClient called, approval running'
+  - 'In session: NGO replicating, PlayerIdentity spawned'
+  - 'Teardown: NGO shut down, lobby left, presence cleared'
+  explanation: Every integration bug in the module lives at one of these transitions, for example publishing a lobby before NGO is listening, or leaving the lobby before NGO has finished shutting down.
+- id: migration-tf
+  type: truefalse
+  prompt: When the host quits, Steam migrates lobby ownership and NGO migrates the host role to the new lobby owner.
+  answer: false
+  explanation: 'Only the first half is true. Steam hands lobby ownership to another member, but NGO''s client-server mode has no host migration: every client''s NGO session ends when the host shuts down.'
+- id: lobby-data-multi
+  type: multi
+  prompt: Which of these belong in the lobby data of this sample project? Select all that apply.
+  options:
+  - A project-unique game tag
+  - The build version
+  - The game mode
+  - The host's SteamId
+  - Each player's current health
+  - Each player's position
+  answers:
+  - 0
+  - 1
+  - 2
+  - 3
+  explanation: 'Lobby data is for search and setup: filters (game, version, mode) and the host key clients connect to. Per-player gameplay state belongs in NGO.'
+- id: owner-as-target
+  type: codeline
+  prompt: This join code works in testing but fails for a player who joins after the host has quit. Click the line that causes it.
+  code: |
+    async void Join(Lobby lobby)
+    {
+        await lobby.Join();
+        var transport = NetworkManager.Singleton.GetComponent<FacepunchTransport>();
+        transport.targetSteamId = lobby.Owner.Id;
+        NetworkManager.Singleton.StartClient();
+    }
+  answerLines:
+  - 5
+  explanation: '`lobby.Owner` changes automatically when the owner leaves, so a late joiner would dial a player who isn''t running a server. Read the host''s SteamId from the `host` lobby key and check that the owner still matches it.'
+- id: two-version-checks
+  type: single
+  prompt: Why does the sample check both a lobby `version` key and NGO's `ProtocolVersion`?
+  options:
+  - NGO ignores ProtocolVersion when connection approval is on
+  - The lobby key rejects incompatible builds before connecting with a clear message; ProtocolVersion is NGO's own handshake check
+  - Steam requires a version key in every lobby
+  - ProtocolVersion is only compared in development builds
+  answer: 1
+  explanation: The lobby check happens before anyone opens a connection, so the player gets a readable message. NGO's handshake catches the same mismatch later. You want both, bumped together.

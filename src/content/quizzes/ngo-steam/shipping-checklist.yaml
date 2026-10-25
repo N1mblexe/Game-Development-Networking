@@ -1,0 +1,70 @@
+passPct: 70
+questions:
+- id: boot-order
+  type: order
+  prompt: Order what a release build does from launch to an enabled Host button.
+  items:
+  - SteamClient.RestartAppIfNecessary(yourAppId)
+  - SteamClient.Init(yourAppId)
+  - Apply timeouts and install Steam networking logging
+  - SteamNetworkingUtils.InitRelayNetworkAccess()
+  - Wait for SteamNetworkingUtils.Status == Current
+  - Enable Host and Join
+  explanation: Valve says the restart check should be the first Steamworks call. Relay access starts at boot so the first session doesn't pay the initialization delay.
+- id: restart-after-init
+  type: codeline
+  prompt: Click the line that breaks Valve's rule for the restart check.
+  code: |
+    private void Awake()
+    {
+        SteamClient.Init(appId, asyncCallbacks: false);
+        if (SteamClient.RestartAppIfNecessary(appId))
+        {
+            Application.Quit();
+            return;
+        }
+    }
+  answerLines:
+  - 3
+  explanation: '`RestartAppIfNecessary` should be the first Steamworks call, before `Init`. Lesson 2''s SteamBootstrap runs it first in player builds and only then initializes Steam.'
+- id: appid-file-tf
+  type: truefalse
+  prompt: Shipping `steam_appid.txt` next to the exe is harmless as long as it contains the correct App ID.
+  answer: false
+  explanation: 'Valve says not to ship it: it overrides the App ID Steam provides, and while it''s present `RestartAppIfNecessary` returns false regardless, which disables the restart check.'
+- id: depot-exclusions
+  type: multi
+  prompt: Which files should your depot build script exclude? Select all that apply.
+  options:
+  - '*.pdb'
+  - steam_appid.txt
+  - Unity's *_BurstDebugInformation_DoNotShip folder
+  - Unity's *_BackUpThisFolder_ButDontShipItWithYourGame folder
+  - The steam_api native library
+  - The game's Data folder
+  answers:
+  - 0
+  - 1
+  - 2
+  - 3
+  explanation: Debug files and dev-only files stay out. The steam_api library and the Data folder are required at runtime.
+- id: relay-at-boot
+  type: single
+  prompt: Why call `SteamNetworkingUtils.InitRelayNetworkAccess()` at boot even though FacepunchTransport calls it too?
+  options:
+  - The transport's call is disabled in release builds
+  - The transport only calls it once NGO is running, so without an early call the first host or join waits for relay initialization
+  - It is required for lobby searches
+  - It sets the connection timeouts
+  answer: 1
+  explanation: Relay initialization typically takes a few seconds. Starting it at boot, and enabling Host and Join once `Status` is `Current`, hides that delay.
+- id: crash-timer
+  type: single
+  prompt: Which setting mainly decides how quickly a crashed host is noticed by clients?
+  options:
+  - NetworkConfig.ClientConnectionBufferTimeout
+  - SteamNetworkingUtils.Timeout (connected timeout)
+  - SteamNetworkingUtils.ConnectionTimeout (initial)
+  - The auth timeout in SteamAuthApproval
+  answer: 1
+  explanation: The connected timeout decides how long a silent peer counts as alive. The lobby's member-left event often arrives sooner, which is why the teardown also listens to it.
