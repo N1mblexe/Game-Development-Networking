@@ -135,7 +135,7 @@ export default function ReviewSession({ cards, moduleTitles, newPerSession = DEF
 
   if (!progress) {
     return (
-      <div className="card grid min-h-60 place-items-center p-6 text-sm text-muted" aria-busy="true" data-review>
+      <div className="card grid min-h-60 max-w-3xl place-items-center p-6 text-sm text-muted" aria-busy="true" data-review>
         Loading your cards…
       </div>
     );
@@ -155,7 +155,7 @@ export default function ReviewSession({ cards, moduleTitles, newPerSession = DEF
     const left = session.queue.length;
     const state = progress.srs[current.globalId];
     return (
-      <div className="not-prose mx-auto max-w-2xl" data-review data-ready="true" data-phase="session">
+      <div className="not-prose max-w-3xl" data-review data-ready="true" data-phase="session">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
           <span className="font-semibold tabular-nums" aria-live="polite" data-counter>
             {left} left <span className="font-normal text-muted">· {done} done</span>
@@ -225,7 +225,7 @@ export default function ReviewSession({ cards, moduleTitles, newPerSession = DEF
   // ------------------------------------------------------------------ overview / finished / empty
   const tally = session?.tally;
   return (
-    <div className="not-prose grid gap-6" data-review data-ready="true" data-phase={finished ? 'finished' : 'start'}>
+    <div className="not-prose grid max-w-3xl gap-6" data-review data-ready="true" data-phase={finished ? 'finished' : 'start'}>
       <div className="card p-5 sm:p-6">
         {finished && tally && session ? (
           <>
