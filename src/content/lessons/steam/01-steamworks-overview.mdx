@@ -93,7 +93,7 @@ The networking row deserves a closer look, because it changes how you design the
 that two players at home usually can't reach each other directly, because both sit behind <Term id="nat">NAT</Term>
 (see [NAT and relays](/modules/theory/nat-and-relays/)). Steam solves this for you. When you connect to another player
 by **Steam ID** instead of by IP address, Steam routes the traffic through Valve's relay network when needed, so it
-works through any NAT, and neither player learns the other's IP address.
+works through any NAT, and while traffic is relayed neither player learns the other's IP address.
 
 ## The architecture this module builds
 
@@ -188,7 +188,7 @@ between Facepunch names and Valve's documentation, which is still the authority 
 <Callout type="steam" title="Version used in this module">
 
 The lessons target **Facepunch.Steamworks 2.5.2** (GitHub release, April 2026) on Unity 6. Download the release zip,
-not the NuGet package: at the time of writing NuGet stops at 2.3.3, and the zip contains a `Unity` folder with
+not the NuGet package: at the time of writing NuGet stops at 2.3.3, and the zip contains a `Release/Unity` folder with
 `.meta` files that already set the right platform for each DLL. Lesson 02 walks through the install.
 
 </Callout>

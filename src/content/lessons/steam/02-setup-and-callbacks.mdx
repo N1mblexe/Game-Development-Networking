@@ -46,7 +46,8 @@ Facepunch.Steamworks ships as compiled DLLs, not as a Unity package.
 <Steps>
 
 1. Download `Facepunch.Steamworks.2.5.2.zip` from the GitHub **Releases** page (the release asset, not the source code).
-2. Copy the `Unity` folder from the zip into your project, for example as `Assets/Plugins/Facepunch.Steamworks/`.
+2. Copy the `Release/Unity` folder from the zip into your project, for example as `Assets/Plugins/Facepunch.Steamworks/`.
+   (The zip also has a `Debug/Unity` copy and plain .NET builds; you only need the `Release/Unity` one.)
 3. Let Unity import it. The folder contains three managed builds of the library and Valve's native `steam_api` binaries:
 
    | File | Used on |
@@ -304,10 +305,11 @@ because of it, but it is a good thing to show in a status bar and to log.
 
 For debugging, Facepunch can print every callback it dispatches:
 
-```csharp title="SteamDebugHooks.cs"
+```csharp title="SteamBootstrap.cs"
+// Inside Awake, before SteamClient.Init:
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
-Steamworks.Dispatch.OnDebugCallback = (type, text, isServer) =>
-    UnityEngine.Debug.Log($"[Steam callback] {type}\n{text}");
+Dispatch.OnDebugCallback = (type, text, isServer) =>
+    Debug.Log($"[Steam callback] {type}\n{text}");
 #endif
 ```
 
