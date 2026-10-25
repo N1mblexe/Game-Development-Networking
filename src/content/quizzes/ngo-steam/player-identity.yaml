@@ -1,0 +1,64 @@
+passPct: 70
+questions:
+- id: who-writes
+  type: single
+  prompt: Who writes a player's SteamId and display name in `PlayerIdentity`, and when?
+  options:
+  - The owning client, in OnNetworkSpawn when IsOwner
+  - The host, in OnNetworkSpawn, from the SteamId approval verified
+  - Each client, from the lobby member list
+  - Steam, through a lobby member data callback
+  answer: 1
+  explanation: Identity is an authority question, so the host decides. Approval runs before the player prefab spawns, so the verified SteamId is available the moment the object exists.
+- id: owner-write
+  type: codeline
+  prompt: This version lets a modified client impersonate someone else. Click the line(s) responsible.
+  code: |
+    private readonly NetworkVariable<ulong> steamId = new(
+        0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+    public override void OnNetworkSpawn()
+    {
+        if (IsOwner) steamId.Value = SteamClient.SteamId;
+    }
+  answerLines:
+  - 2
+  - 6
+  explanation: Owner write permission plus "write my own SteamId" means the value is whatever the client claims. Use server write permission and assign it on the server from the verified map.
+- id: only-onvaluechanged
+  type: truefalse
+  prompt: A name tag that only listens to `OnValueChanged` will show the host's name correctly for a player who joins late.
+  answer: false
+  explanation: The value arrived with the spawn and never changed afterwards, so the event never fires. Read `Value` in `OnNetworkSpawn` and also subscribe for later changes.
+- id: what-crosses
+  type: multi
+  prompt: Which of these does the sample send over the network for each player? Select all that apply.
+  options:
+  - The SteamId (8 bytes)
+  - The display name as a fixed string
+  - The avatar's RGBA pixels
+  - A fresh auth ticket with every RPC
+  answers:
+  - 0
+  - 1
+  explanation: Only the SteamId and name are NetworkVariables. Every peer downloads avatars from Steam itself, and the ticket is sent once, in the connection payload.
+- id: avatar-order
+  type: order
+  prompt: Order the steps that turn a SteamId into an avatar texture.
+  items:
+  - await SteamFriends.GetLargeAvatarAsync(steamId)
+  - Return null (placeholder) if the Image? has no value
+  - Copy the rows into a new buffer bottom-up
+  - new Texture2D(width, height, TextureFormat.RGBA32, false)
+  - LoadRawTextureData(flipped) and Apply()
+  explanation: Steam's rows run top to bottom and Unity's texture data starts at the bottom row, hence the flip. The size comes from the Image, not a constant.
+- id: player-object-lookup
+  type: single
+  prompt: Why does the sample build its own registry instead of calling `SpawnManager.GetPlayerNetworkObject(clientId)` on clients?
+  options:
+  - It allocates
+  - In client-server mode only the server may look up other players' objects; on a client it logs an error and returns null
+  - It only works for the local player in builds
+  - It is obsolete in NGO 2.x
+  answer: 1
+  explanation: The registry of spawned PlayerIdentity components works on every peer, in both directions (SteamId to clientId and back).

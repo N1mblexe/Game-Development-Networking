@@ -1,0 +1,64 @@
+passPct: 70
+questions:
+- id: handshake-order
+  type: order
+  prompt: Order the Steam auth approval handshake.
+  items:
+  - 'Client: GetAuthSessionTicketAsync(host SteamId)'
+  - 'Client: write [version, SteamId, ticket] to ConnectionData'
+  - 'Client: StartClient sends the connection request'
+  - 'Host: cheap checks, then BeginAuthSession and response.Pending = true'
+  - 'Steam: ValidateAuthTicketResponse arrives on the host'
+  - 'Host: record the SteamId, set Approved, then Pending = false'
+  explanation: The ticket must exist before `StartClient`. The host parks the response with `Pending` and finishes when Steam answers, writing every field before clearing `Pending`.
+- id: pending-first
+  type: codeline
+  prompt: Approval sometimes lets denied clients in. Click the line that is in the wrong place.
+  code: |
+    void HandleValidateResponse(SteamId id, SteamId owner, AuthResponse result)
+    {
+        var wait = pending[id];
+        wait.Response.Pending = false;
+        wait.Response.Approved = result == AuthResponse.OK;
+        if (!wait.Response.Approved) wait.Response.Reason = "Steam authentication failed.";
+    }
+  answerLines:
+  - 4
+  explanation: NGO acts on the response as soon as it sees `Pending == false`. Set `Approved`, `Reason` and anything else first, and clear `Pending` last.
+- id: approval-client-tf
+  type: truefalse
+  prompt: Only the host needs `NetworkConfig.ConnectionApproval = true`; clients can leave it off.
+  answer: false
+  explanation: '`ConnectionApproval` is part of NGO''s config hash. If host and client differ, the host drops the client before your approval callback runs.'
+- id: reused-ticket
+  type: single
+  prompt: A client retries a failed connection by resending the ticket from its first attempt. What does the host get?
+  options:
+  - AuthResponse.OK, because the ticket is still valid
+  - AuthResponse.AuthTicketInvalidAlreadyUsed
+  - BeginAuthResult.GameMismatch
+  - Nothing; Steam ignores duplicates
+  answer: 1
+  explanation: 'Valve: "Session Tickets must only be used once." Cancel the old ticket and request a new one for every attempt.'
+- id: buffer-timeout
+  type: numeric
+  prompt: What is the default value of NGO's `NetworkConfig.ClientConnectionBufferTimeout`, in seconds?
+  answer: 10
+  tolerance: 0
+  unit: s
+  explanation: The pending connection is dropped after 10 seconds by default. The sample's 8 second auth timeout stays below it so the client still receives a denial reason.
+- id: end-auth-when
+  type: multi
+  prompt: When should the host call `SteamUser.EndAuthSession` for a client? Select all that apply.
+  options:
+  - After denying a client whose BeginAuthSession succeeded
+  - When a pending auth times out
+  - When the client disconnects
+  - On host teardown, for every remaining session
+  - Immediately after BeginAuthSession returns OK
+  answers:
+  - 0
+  - 1
+  - 2
+  - 3
+  explanation: Every session you begin must be ended once you're no longer playing with that user. Ending it right after `BeginAuthSession` would throw away the validation you are waiting for.

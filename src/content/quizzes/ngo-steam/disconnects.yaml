@@ -1,0 +1,68 @@
+passPct: 70
+questions:
+- id: host-teardown-order
+  type: order
+  prompt: Order a host's teardown when the player clicks Leave.
+  items:
+  - Lock the lobby (SetJoinable(false))
+  - NetworkManager.Shutdown()
+  - NGO disconnects each client with "Disconnected due to host shutting down." and waits up to 5 s
+  - OnClientStopped(true) fires
+  - EndAllSessions() for Steam auth
+  - Lobby.Leave() and clear rich presence
+  - Load the menu scene
+  explanation: The host shutdown is soft, so the Steam steps continue from `OnClientStopped`. Locking first stops new joiners, and leaving the lobby last means clients get NGO's reason first.
+- id: leave-too-soon
+  type: codeline
+  prompt: Click the line(s) that run too early in this host Leave handler.
+  code: |
+    public void LeaveAsHost()
+    {
+        Lobbies.Lock();
+        NetworkManager.Singleton.Shutdown();
+        Lobbies.Leave();
+        SceneManager.LoadScene("Menu");
+    }
+  answerLines:
+  - 5
+  - 6
+  explanation: '`Shutdown()` returns while NGO is still disconnecting clients (up to 5 seconds). Leaving the lobby and loading the menu belong in the `OnClientStopped` handler.'
+- id: transport-failure-tf
+  type: truefalse
+  prompt: With FacepunchTransport, `NetworkManager.OnTransportFailure` fires when a client can't reach the host.
+  answer: false
+  explanation: The transport never raises `TransportFailure`, and its `StartClient()` always returns true. Every Steam failure arrives as a `Disconnect`, followed by `OnClientStopped`.
+- id: despawn-before
+  type: single
+  prompt: On the host, when `ClientDisconnected` fires for a client, what state is that client's player object in?
+  options:
+  - Still spawned, owned by the client
+  - Already despawned (unless DontDestroyWithOwner is set)
+  - Transferred to the host automatically in every case
+  - Hidden but spawned until the next scene load
+  answer: 1
+  explanation: NGO despawns the player and owned objects first, then raises the callbacks. Save per-player state in `OnNetworkDespawn` and use the host's SteamId map in the callback.
+- id: no-migration-why
+  type: multi
+  prompt: Why doesn't NGO's client-server mode support host migration? Select all that apply.
+  options:
+  - The authoritative state, including server-only data, lives on the host
+  - Every client connection points at the host; there are no client-to-client links
+  - NGO has no protocol to elect a new server and hand over state
+  - Steam forbids lobby ownership changes
+  - FacepunchTransport deletes the lobby when the host leaves
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: Clients only hold replicas of what they can see, and the session is a star around the host. Steam does migrate lobby ownership, which a rehost can use as its successor rule.
+- id: dont-destroy
+  type: single
+  prompt: What does `NetworkObject.DontDestroyWithOwner = true` do when the owner disconnects?
+  options:
+  - The object is despawned on clients but kept on the host
+  - The object stays spawned and its ownership goes back to the server
+  - The object is transferred to a random remaining client
+  - The client keeps the object after it reconnects
+  answer: 1
+  explanation: In client-server mode NGO removes the ownership instead of despawning, so objects like a car or a placed turret outlive their owner.

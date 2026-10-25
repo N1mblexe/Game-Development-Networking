@@ -1,0 +1,63 @@
+passPct: 70
+questions:
+- id: ngo-minimum
+  type: single
+  prompt: Why does FacepunchTransport on `main` need NGO 2.2.0 or later, despite its CHANGELOG mentioning NGO 1.0.0?
+  options:
+  - It uses the Rpc attribute
+  - It overrides NetworkTransport.OnEarlyUpdate, which NGO added in 2.2.0
+  - Its package.json declares a dependency on NGO 2.2.0
+  - Steam Networking Sockets needs NGO 2.x
+  answer: 1
+  explanation: A 2026 change moved the per-frame work into an `OnEarlyUpdate` override. NGO's CHANGELOG lists that method as added in 2.2.0, so the code won't compile against 1.x. The package.json has an empty dependencies block.
+- id: shutdown-line
+  type: codeline
+  prompt: This is the unmodified transport `Shutdown`. Which line breaks your lobby every time a session ends?
+  code: |
+    public override void Shutdown()
+    {
+        connectionManager?.Close();
+        socketManager?.Close();
+        SteamClient.Shutdown();
+    }
+  answerLines:
+  - 5
+  explanation: NGO calls the transport's `Shutdown` whenever the NetworkManager stops. Shutting down Steam there makes `SteamClient.IsValid` false, so `Lobby.Leave()` and friends stop working. SteamBootstrap owns Steam's lifetime; the patched transport only closes its sockets.
+- id: reliable-mapping
+  type: multi
+  prompt: Which NGO delivery types does FacepunchTransport send as `SendType.Reliable`?
+  options:
+  - Reliable
+  - ReliableSequenced
+  - ReliableFragmentedSequenced
+  - Unreliable
+  - UnreliableSequenced
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: All three reliable variants collapse to `SendType.Reliable`, which Steam already orders and fragments. Both unreliable variants become `SendType.Unreliable`.
+- id: menu-callbacks
+  type: truefalse
+  prompt: With only FacepunchTransport pumping callbacks, `CreateLobbyAsync` completes normally in the main menu before you call StartHost.
+  answer: false
+  explanation: The transport calls `SteamClient.RunCallbacks()` in `OnEarlyUpdate`, which only runs while the NetworkManager is running. In the menu nothing pumps callbacks, so SteamBootstrap must call `RunCallbacks()` every frame from boot.
+- id: patch-order
+  type: order
+  prompt: Order the steps for turning the git package into a vendored, production-ready transport.
+  items:
+  - Copy the package from Library/PackageCache into Packages/ and remove the git entry from the manifest
+  - Delete the bundled Runtime/Facepunch folder and import Facepunch.Steamworks 2.5.2
+  - Patch Shutdown (no SteamClient.Shutdown) and GetCurrentRtt (QuickStatus().Ping)
+  - Set Log Level to Developer and check the [FacepunchTransport] messages when hosting
+  explanation: Embedding comes first so your edits survive. Swapping the DLLs before patching avoids two copies of the same assemblies, and the log check confirms the transport is the one in use.
+- id: rtt-zero
+  type: single
+  prompt: What does the unpatched `GetCurrentRtt` return, and what is one consequence?
+  options:
+  - The Steam ping; nothing changes
+  - 0; NGO's time system can't offset client time by half a round trip, and any RTT display shows 0
+  - -1; NGO disconnects the client
+  - The tick interval; prediction overshoots
+  answer: 1
+  explanation: It always returns 0 (issue 247). The patch reads `Connection.QuickStatus().Ping` for the server connection on clients and for each client connection on the host.

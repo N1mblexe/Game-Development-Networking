@@ -1,0 +1,381 @@
+---
+title: 'Dev Workflow: Two Transports, Two Machines, Good Logs'
+order: 8
+summary: Iterate on gameplay in the editor with Unity Transport and Multiplayer Play Mode, switch to FacepunchTransport for Steam builds with a TransportSwitcher, test real Steam sessions with two machines and two accounts, and log enough to debug what you can't reproduce.
+durationMin: 25
+objectives:
+  - Explain why Steam sessions can't be tested with one account on one machine
+  - Write a TransportSwitcher that picks Unity Transport in the editor and FacepunchTransport in Steam builds
+  - Auto-start host and clients in Multiplayer Play Mode with player tags
+  - Set up a two-machine, two-account Steam test and avoid the RestartAppIfNecessary trap in dev builds
+  - Log NGO, transport and Steam networking events with consistent prefixes and ids
+prerequisites: [ngo-steam/disconnects, ngo/debugging-tools, steam/testing]
+tags: [ngo, steam, testing, workflow, logging, multiplayer-play-mode]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, patched as in lesson 2)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+    - { name: com.unity.multiplayer.playmode, version: '1.x on Unity 6.0 to 6.2; Unity 6.4+ exposes Unity.Multiplayer.PlayMode.CurrentPlayer.Tags' }
+sources:
+  - title: 'NGO 2.13 manual: Testing locally (Multiplayer Play Mode, up to four players)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/tutorials/testing/testing_locally.html
+  - title: 'NGO 2.13 manual: Logging'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/logging.html
+  - title: 'NGO source v2.13.3: UnityTransport.cs (SetConnectionData, SetDebugSimulatorParameters is obsolete)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Transports/UTP/UnityTransport.cs
+  - title: 'Multiplayer Play Mode 1.6: CurrentPlayer (ReadOnlyTags)'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@1.6/api/Unity.Multiplayer.Playmode.CurrentPlayer.html
+  - title: 'Unity 6 Scripting API: Unity.Multiplayer.PlayMode.CurrentPlayer.Tags'
+    url: https://docs.unity3d.com/ScriptReference/Unity.Multiplayer.PlayMode.CurrentPlayer.Tags.html
+  - title: 'Multiplayer Play Mode 2.0 manual (limits: four editor players)'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@2.0/manual/index.html
+  - title: 'Steamworks docs: Steamworks API overview (steam_appid.txt, RestartAppIfNecessary)'
+    url: https://partner.steamgames.com/doc/sdk/api
+  - title: 'Steamworks docs: Debugging the Steamworks API (-lognetapi, logs folder)'
+    url: https://partner.steamgames.com/doc/sdk/api/debugging
+  - title: 'Facepunch.Steamworks 2.5.2: SteamNetworkingUtils.cs (DebugLevel, OnDebugOutput, fake lag and loss)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/SteamNetworkingUtils.cs
+  - title: 'Facepunch.Steamworks 2.5.2: ConnectionInfo.cs (EndReason)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Networking/ConnectionInfo.cs
+  - title: 'Unity Manual: Log files'
+    url: https://docs.unity3d.com/Manual/log-files.html
+---
+
+In single-player Unity, the loop is: change a script, press Play, look. Steam multiplayer breaks that loop in two ways.
+You need at least two players, and Steam won't let one account on one PC be both of them: lesson 4's `JoinAsync` even refuses
+your own lobby, because a Steam relay connection to your own SteamId isn't a real test. If every gameplay tweak needed two
+PCs, two Steam accounts and a build, you'd stop testing.
+
+So you run **two loops**. The fast loop tests gameplay in the editor over <Term id="unity-transport">Unity Transport</Term>,
+with no Steam at all. The slow loop tests the Steam integration with real builds on two machines. A
+<Term id="transport-switcher">transport switcher</Term> lets one project do both.
+
+## Two loops, two questions
+
+| | Fast loop: editor | Slow loop: Steam builds |
+|---|---|---|
+| Transport | Unity Transport on `127.0.0.1` | FacepunchTransport over Steam Datagram Relay |
+| Players | <Term id="multiplayer-play-mode">Multiplayer Play Mode</Term>: up to four editor players | Two machines, two Steam accounts |
+| Steam | Not initialized | Lobby, invites, auth, avatars, relay |
+| Iteration time | Seconds | Minutes |
+| Answers | "Does my gameplay replicate correctly?" | "Does joining, auth and teardown work on Steam?" |
+| Run it | On every change | Before every playtest and release, and whenever you touch lobby, auth or teardown code |
+
+This split only works because of the rule from lesson 1: no `NetworkBehaviour` references Steam. Gameplay code doesn't
+care which transport carries its bytes.
+
+## TransportSwitcher
+
+Both transports live as components on the NetworkManager's GameObject. The switcher decides which one goes into
+`NetworkConfig.NetworkTransport` before anything starts. It resolves the mode lazily, so it doesn't depend on script execution order.
+
+```csharp title="TransportSwitcher.cs"
+using System;
+using Netcode.Transports.Facepunch;
+using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    public enum TransportMode { Steam, UnityTransport }
+
+    /// <summary>Unity Transport in the editor, FacepunchTransport in Steam builds.</summary>
+    public static class TransportSwitcher
+    {
+        private static TransportMode? s_Mode;
+
+        public static TransportMode Mode => s_Mode ??= Resolve();
+        public static bool UsesSteam => Mode == TransportMode.Steam;
+
+        private static TransportMode Resolve()
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // "-transport steam" or "-transport utp" overrides the default in editors and dev builds.
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "-transport")
+                    return args[i + 1] == "utp" ? TransportMode.UnityTransport : TransportMode.Steam;
+#endif
+#if UNITY_EDITOR
+            return TransportMode.UnityTransport;   // the fast loop is the default in the editor
+#else
+            return TransportMode.Steam;            // release builds always use Steam
+#endif
+        }
+
+        /// <summary>Assigns the chosen transport. Call before StartHost or StartClient.</summary>
+        public static NetworkTransport Apply(NetworkManager net)
+        {
+            NetworkTransport transport = UsesSteam
+                ? net.GetComponent<FacepunchTransport>()
+                : net.GetComponent<UnityTransport>();
+            net.NetworkConfig.NetworkTransport = transport;
+            Debug.Log($"[Transport] {Mode} ({transport.GetType().Name})");
+            return transport;
+        }
+    }
+}
+```
+
+Three small changes connect it to the earlier scripts:
+
+<Steps>
+
+1. **SteamBootstrap**: at the top of `Awake`, after the singleton check, add `if (!TransportSwitcher.UsesSteam) return;`. Editor players
+   on Unity Transport then never initialize Steam, so `SteamBootstrap.IsReady` is `false` and every Steam-dependent call already bails out.
+2. **NetworkLauncher.HostGame** (lesson 3): replace the `NetworkTransport = GetFacepunch();` line with `TransportSwitcher.Apply(Net);`,
+   and start the method with an early `HostLocal(); return;` when `TransportSwitcher.UsesSteam` is false.
+3. **SteamAuthApproval** (lesson 6) already approves everyone when `UsesSteam` is false. That branch can't exist in a release build, because
+   `Resolve` always returns `Steam` there.
+
+</Steps>
+
+The local path skips the lobby and the ticket but keeps everything else, including approval, `ProtocolVersion` and the network scene load:
+
+```csharp title="NetworkLauncher.Local.cs"
+using System;
+using Unity.Netcode.Transports.UTP;
+using UnityEngine.SceneManagement;
+
+namespace Campfire.Net
+{
+    public sealed partial class NetworkLauncher
+    {
+        private const ushort LocalPort = 7777;
+
+        /// <summary>Editor and LAN testing: Unity Transport, no Steam lobby.</summary>
+        public void HostLocal()
+        {
+            if (Net == null || Net.IsListening) return;
+
+            var utp = (UnityTransport)TransportSwitcher.Apply(Net);
+            utp.SetConnectionData("127.0.0.1", LocalPort, "0.0.0.0");   // listen on all interfaces for LAN tests
+            Net.NetworkConfig.ProtocolVersion = SessionKeys.ProtocolVersion;
+            SteamAuthApproval.Instance.ConfigureHost();                 // same approval callback, dev branch
+
+            if (!Net.StartHost()) { ShowError($"Couldn't host on port {LocalPort}. Is it in use?"); return; }
+            Net.SceneManager.LoadScene(gameplayScene, LoadSceneMode.Single);
+        }
+
+        public void JoinLocal(string address = "127.0.0.1")
+        {
+            if (Net == null || Net.IsListening) return;
+
+            var utp = (UnityTransport)TransportSwitcher.Apply(Net);
+            utp.SetConnectionData(address, LocalPort);
+            Net.NetworkConfig.ProtocolVersion = SessionKeys.ProtocolVersion;
+            Net.NetworkConfig.ConnectionApproval = true;                // must match the host's config hash (lesson 6)
+            Net.NetworkConfig.ConnectionData = Array.Empty<byte>();
+
+            if (!Net.StartClient()) ShowError("Couldn't start the local client.");
+        }
+    }
+}
+```
+
+`SetConnectionData(address, port, listenAddress)` sets the address a client connects to and, on the host, the address
+it listens on. Teardown from lesson 7 works unchanged: `OnClientStopped` fires on Unity Transport too, and the Steam steps inside it
+skip themselves because there's no lobby and no ticket.
+
+## Multiplayer Play Mode: auto-start by tag
+
+The NGO manual describes Multiplayer Play Mode as a way to "simulate up to four players simultaneously on the same development device".
+Give the main editor the tag `host` and a virtual player the tag `client` in the Multiplayer Play Mode window, and let a small editor-only
+component start them:
+
+<CodeTabs labels={['Unity 6.4 and later', 'MPPM 1.x (Unity 6.0 to 6.2)']}>
+
+```csharp title="MppmAutoStart.cs"
+#if UNITY_EDITOR
+using System.Linq;
+using Unity.Multiplayer.PlayMode;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    /// <summary>Starts host or client from Multiplayer Play Mode player tags. Editor only.</summary>
+    public sealed class MppmAutoStart : MonoBehaviour
+    {
+        private void Start()
+        {
+            if (TransportSwitcher.UsesSteam) return;
+            if (CurrentPlayer.Tags.Contains("host")) NetworkLauncher.Instance.HostLocal();
+            else if (CurrentPlayer.Tags.Contains("client")) NetworkLauncher.Instance.JoinLocal();
+        }
+    }
+}
+#endif
+```
+
+```csharp title="MppmAutoStart.cs"
+#if UNITY_EDITOR
+using System.Linq;
+using Unity.Multiplayer.Playmode;   // lowercase "m" in the 1.x package
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    public sealed class MppmAutoStart : MonoBehaviour
+    {
+        private void Start()
+        {
+            if (TransportSwitcher.UsesSteam) return;
+            string[] tags = CurrentPlayer.ReadOnlyTags();
+            if (tags.Contains("host")) NetworkLauncher.Instance.HostLocal();
+            else if (tags.Contains("client")) NetworkLauncher.Instance.JoinLocal();
+        }
+    }
+}
+#endif
+```
+
+</CodeTabs>
+
+<Sequence
+  title="Pressing Play with two tagged Multiplayer Play Mode players"
+  actors={[
+    { id: 'm', label: 'Main editor (tag: host)', kind: 'host' },
+    { id: 'v', label: 'Virtual player (tag: client)', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'm', to: 'm', label: 'TransportSwitcher: UnityTransport. SteamBootstrap skips Steam.', kind: 'local' },
+    { from: 'm', to: 'm', label: 'HostLocal: listen on port 7777, load Gameplay', kind: 'local' },
+    { from: 'v', to: 'm', label: 'JoinLocal: connect to 127.0.0.1:7777', note: 'Unity Transport retries until the host listens', kind: 'reliable' },
+    { from: 'm', to: 'm', label: 'Approval: dev branch approves (no ticket)', kind: 'local' },
+    { from: 'm', to: 'v', label: 'Approved, scene sync, player spawns as "Player 1"', kind: 'reliable' },
+  ]}
+/>
+
+What you should notice:
+
+- **Order doesn't matter much.** Unity Transport retries a client connection up to `MaxConnectAttempts` times, `ConnectTimeoutMS` apart, so a
+  client that starts a moment before the host still gets in.
+- **Identities fall back gracefully.** Without Steam, `PlayerIdentity` names players "Player N" and leaves the avatar `null` (lesson 5).
+- **Teardown is exercised for real.** Stopping the host player triggers the same `OnClientStopped` path as on Steam, so you test lesson 7's
+  code a hundred times a day for free.
+
+<Callout type="unity" title="Simulating a bad network">
+
+`SetDebugSimulatorParameters` is marked obsolete in NGO 2.13 and "has no effect". Use the **Network Simulator** from the
+Multiplayer Tools package for the fast loop. For Steam builds, Facepunch exposes Steam's own simulator as `FakeSendPacketLag`
+(milliseconds) and `FakeSendPacketLoss` (percent, 0 to 100), plus the matching `Recv` properties. Guard them with `#if DEVELOPMENT_BUILD`.
+
+</Callout>
+
+## The slow loop: two machines, two accounts
+
+The Steam half needs <Term id="two-account-testing">two-account testing</Term>: two real Steam clients logged in as two different accounts, and that means two machines (a laptop, a second PC or a
+friend on a call). Here's a setup that works:
+
+<Steps>
+
+1. **Two accounts.** On App ID 480 any account works. On your own App ID, the second account needs a license, for example a developer key
+   from the Steamworks partner site. Valve's init docs list "Ensure that you own a license for the App ID" as a common init failure.
+2. **A development build with `-transport steam`**, or a normal non-editor build, which uses Steam anyway. Turn on
+   **Development Build** so `DEVELOPMENT_BUILD` code (switcher overrides, fake lag, verbose logs) is compiled in.
+3. **Launch it the way players will.** Best: upload to a private beta branch and install it through Steam on both machines. Quick: copy the
+   build folder and run the exe directly, with a `steam_appid.txt` next to it (see the pitfall below).
+4. **Script a run.** Host on machine A, invite B from the overlay, join, play, have B quit, rejoin, then have A quit. Then do the same with B
+   joining from a cold start (game closed). Lessons 3, 4 and 7 each have a path that only this exercises.
+5. **Collect both logs.** A bug report from a Steam session without both players' logs is a guess.
+
+</Steps>
+
+<Callout type="pitfall" title="RestartAppIfNecessary in a copied dev build">
+
+`SteamBootstrap` calls `RestartAppIfNecessary(appId)` in player builds. Started directly from a folder, the exe isn't running "through
+Steam", so the call returns `true`, Steam relaunches the copy **installed in your library**, and your fresh build quits. On App ID 480, that means
+Steam launches Spacewar. Valve's docs give the escape hatch: if a `steam_appid.txt` file is present, the call returns `false` "regardless". Put one
+next to dev builds you launch directly, or untick `restartThroughSteam` for them, and make sure neither reaches your depot (lesson 9).
+
+</Callout>
+
+## Logging that survives a bug report
+
+You can't attach a debugger to your friend's PC. Logs are what you get, so make every networking line answer **who, what, when** with a
+consistent prefix:
+
+| Prefix | Written by | Must include |
+|---|---|---|
+| `[Steam]` | SteamBootstrap | Your SteamId, App ID, init failures |
+| `[Lobby]` | SteamLobbyService | Lobby id, owner, member joins and leaves, host key |
+| `[Launcher]` | NetworkLauncher | Host or join, `targetSteamId`, transport mode, session end and its reason |
+| `[Auth]` | SteamAuthApproval | Claimed SteamId, clientId, `BeginAuthResult`, `AuthResponse`, denials |
+| `[FacepunchTransport]` | the transport | Connects and disconnects, with the Steam end reason (patch below) |
+| `[SteamNet]` | Steam networking debug output | Warnings and errors from Steam's networking library |
+
+Set the NetworkManager's **Log Level** to *Developer* in dev builds, which also enables the transport's own messages because it reads
+`NetworkManager.Singleton.LogLevel`. Use *Normal* or *Error* in release.
+
+Two more additions pay for themselves the first time something goes wrong. First, patch the vendored transport so a disconnect says **why**:
+
+```csharp title="FacepunchTransport.cs (patched, client and server disconnect)"
+void IConnectionManager.OnDisconnected(ConnectionInfo info)
+{
+    InvokeOnTransportEvent(NetworkEvent.Disconnect, ServerClientId, default, Time.realtimeSinceStartup);
+
+    if (LogLevel <= LogLevel.Normal)   // was Developer: we want this one in release logs too
+        Debug.Log($"[{nameof(FacepunchTransport)}] - Disconnected from {info.Identity.SteamId}: {info.State}, {info.EndReason}");
+}
+
+// In ISocketManager.OnDisconnected, log the same fields for the remote client:
+//     Debug.Log($"[{nameof(FacepunchTransport)}] - Client {connection.Id} ({info.Identity.SteamId}) left: {info.State}, {info.EndReason}");
+```
+
+`info.EndReason` is a `NetConnectionEnd` value such as `Remote_Timeout`, `Misc_Timeout` or `App_Generic`, which tells you whether the peer
+quit, crashed or never answered. Second, forward Steam's networking diagnostics into Unity's log at a sensible level:
+
+```csharp title="SteamNetLog.cs"
+using Steamworks;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    public static class SteamNetLog
+    {
+        /// <summary>Call once after SteamClient.Init (for example at the end of SteamBootstrap.Awake).</summary>
+        public static void Install()
+        {
+            SteamNetworkingUtils.OnDebugOutput += (level, message) =>
+            {
+                if (level <= NetDebugOutput.Warning) Debug.LogWarning($"[SteamNet:{level}] {message}");
+                else Debug.Log($"[SteamNet:{level}] {message}");
+            };
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+            SteamNetworkingUtils.DebugLevel = NetDebugOutput.Msg;
+#else
+            SteamNetworkingUtils.DebugLevel = NetDebugOutput.Warning;
+#endif
+        }
+    }
+}
+```
+
+Facepunch's docs for `DebugLevel` warn against setting the highest level and filtering in the callback, because formatting all those
+strings costs frame time. Steam queues the messages from its own threads, and Facepunch delivers them during `RunCallbacks`, so the
+handler runs on the main thread.
+
+Where the logs end up: a Unity player writes `Player.log` to a per-platform folder (on Windows, a folder named after your
+company and product under `%USERPROFILE%\AppData\LocalLow`), and the `-logFile` command-line argument redirects it. On the Steam side, Valve's
+debugging page documents the `-lognetapi` Steam client parameter, which writes P2P networking details to the Steam client's logs folder.
+
+<Callout type="pitfall" title="Testing only the fast loop">
+
+Everything that's Steam-specific is invisible on Unity Transport: invisible lobbies, `targetSteamId` mistakes, ticket timeouts, the
+RestartAppIfNecessary trap, lobby ownership migration. A green editor test says your gameplay replicates. It says nothing about whether two
+friends can play. Run the slow loop before every playtest.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Run **two loops**: Unity Transport plus Multiplayer Play Mode for gameplay, and real Steam builds on **two machines with two accounts** for the integration.
+- A static **TransportSwitcher** picks Unity Transport in the editor and FacepunchTransport in Steam builds. Release builds can't select anything but Steam.
+- The local path keeps approval (with `ConnectionApproval = true` on both sides), `ProtocolVersion` and network scene loading, so teardown and gameplay are tested for real.
+- Dev builds launched outside Steam need `steam_appid.txt` or a disabled restart check, or `RestartAppIfNecessary` relaunches the library copy.
+- Log with consistent prefixes and ids, log the Steam `EndReason` on disconnects, and forward `SteamNetworkingUtils.OnDebugOutput` at Warning level in release.
+
+</KeyTakeaways>

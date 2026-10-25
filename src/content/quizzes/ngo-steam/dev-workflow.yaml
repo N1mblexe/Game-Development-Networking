@@ -1,0 +1,65 @@
+passPct: 70
+questions:
+- id: one-account
+  type: single
+  prompt: Why can't you test a Steam session with one Steam account on one PC?
+  options:
+  - Steam bans accounts that run two instances
+  - A relay connection to your own SteamId isn't a real test, and the sample's JoinAsync refuses your own lobby
+  - FacepunchTransport only works on two different OSes
+  - Steam lobbies can't be created on App ID 480
+  answer: 1
+  explanation: The Steam half needs two Steam clients logged in as two accounts, which in practice means two machines. Gameplay can be tested on one machine over Unity Transport.
+- id: local-approval-line
+  type: codeline
+  prompt: Joining the local Multiplayer Play Mode host always fails silently. Click the buggy line.
+  code: |
+    public void JoinLocal(string address)
+    {
+        var utp = (UnityTransport)TransportSwitcher.Apply(Net);
+        utp.SetConnectionData(address, 7777);
+        Net.NetworkConfig.ConnectionApproval = false;
+        Net.StartClient();
+    }
+  answerLines:
+  - 5
+  explanation: The host turned approval on in `ConfigureHost`, and `ConnectionApproval` is part of NGO's config hash. A mismatch makes the host drop the client before approval runs.
+- id: simulator-tf
+  type: truefalse
+  prompt: In NGO 2.13, `UnityTransport.SetDebugSimulatorParameters` is the recommended way to add fake latency in the editor.
+  answer: false
+  explanation: It is marked obsolete and "has no effect". Use the Network Simulator from the Multiplayer Tools package, or Steam's `SteamNetworkingUtils.FakeSendPacketLag` and related properties in Steam builds.
+- id: slow-loop-order
+  type: order
+  prompt: Order a slow-loop Steam test.
+  items:
+  - Prepare two Steam accounts (with licenses on your own App ID)
+  - Make a Development Build that uses Steam
+  - Install it through a Steam beta branch on both machines (or add steam_appid.txt for direct launches)
+  - Run the scripted host, join, quit and cold-start scenarios
+  - Collect both players' logs
+  explanation: Accounts and the build come first; launching the way players do exercises the restart check and cold-start invites; logs from both sides make bugs diagnosable.
+- id: fast-loop-blind
+  type: multi
+  prompt: Which problems will the Unity Transport editor loop **not** catch? Select all that apply.
+  options:
+  - A lobby left invisible
+  - targetSteamId set after StartClient
+  - Auth ticket timeouts
+  - RestartAppIfNecessary relaunching the library copy
+  - A NetworkVariable that isn't replicated
+  - An RPC sent to the wrong target
+  answers:
+  - 0
+  - 1
+  - 2
+  - 3
+  explanation: Everything Steam-specific is invisible on Unity Transport. Gameplay replication bugs, on the other hand, show up immediately in the fast loop.
+- id: end-reason
+  type: fill
+  prompt: Which `ConnectionInfo` property, logged by the patched transport, tells you why a Steam connection closed (for example `Remote_Timeout`)?
+  answers:
+  - EndReason
+  - info.EndReason
+  placeholder: PropertyName
+  explanation: '`ConnectionInfo.EndReason` is a `NetConnectionEnd` value. The stock transport discards it, so the lesson patches both `OnDisconnected` handlers to log it.'

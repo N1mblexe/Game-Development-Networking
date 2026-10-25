@@ -1,0 +1,348 @@
+title: NGO + Steam Together — Module Exam
+drawCount: 15
+passPct: 80
+questions:
+- id: who-is-host
+  type: single
+  tags:
+  - architecture
+  prompt: In this module's architecture, who becomes the NGO host?
+  options:
+  - Whoever has the lowest ping, chosen by Steam
+  - The player who creates the Steam lobby, who is also its first owner
+  - The first client to connect
+  - A Valve relay server
+  answer: 1
+  explanation: The lobby creator starts NGO as host and publishes its SteamId under the `host` key. Clients read that key and use it as `targetSteamId`.
+- id: through-lobby-tf
+  type: truefalse
+  tags:
+  - architecture
+  prompt: Once players are in the same Steam lobby, NGO's game packets travel through the lobby to reach the host.
+  answer: false
+  explanation: A lobby is a rendezvous point on Steam's backend. Game traffic goes over a separate Steam Networking Sockets relay connection that FacepunchTransport opens to the host's SteamId.
+- id: rehost-cost
+  type: multi
+  tags:
+  - architecture
+  - disconnects
+  prompt: What does a "rehost with saved state" strategy require that "end the session" doesn't? Select all that apply.
+  options:
+  - Periodic snapshots of the important game state
+  - A rule for which survivor starts the new host
+  - A rejoin flow for the other players
+  - NGO's built-in host migration setting
+  - A Steam partner-site switch for ownership transfer
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: 'NGO has no host migration setting, and Steam migrates lobby ownership automatically. Everything else is yours to build: snapshots, a successor rule (such as the new lobby owner) and the reconnect.'
+- id: pin-commit
+  type: single
+  tags:
+  - facepunch-transport
+  prompt: Your project is stuck on NGO 1.x. How do you install a FacepunchTransport version that still compiles?
+  options:
+  - Install version 1.0.0 from the Unity registry
+  - 'Append #<commit-hash> of an older commit to the git URL'
+  - Set the package's dependencies block to NGO 1.x
+  - Delete OnEarlyUpdate from the transport after installing
+  answer: 1
+  explanation: The package isn't on the Unity registry, and its version number was never bumped. Pinning a commit on the git URL is how you select older code.
+- id: bootstrap-twice
+  type: codeline
+  tags:
+  - facepunch-transport
+  prompt: The game throws "Calling SteamClient.Init but is already initialized" when players return to the menu scene. Click the line that needs a guard.
+  code: |
+    private void Awake()
+    {
+        DontDestroyOnLoad(gameObject);
+        SteamClient.Init(appId, asyncCallbacks: false);
+    }
+
+    private void Update() => SteamClient.RunCallbacks();
+  answerLines:
+  - 4
+  explanation: Reloading the menu creates a second bootstrap, which calls `Init` again. SteamBootstrap uses a singleton check and `if (!SteamClient.IsValid)` before `Init`.
+- id: package-contents
+  type: multi
+  tags:
+  - facepunch-transport
+  prompt: What does the FacepunchTransport package on `main` actually contain or declare? Select all that apply.
+  options:
+  - Bundled Facepunch.Steamworks DLLs (2.3.2 according to its README)
+  - An empty dependencies block in package.json
+  - An assembly definition with allowUnsafeCode enabled
+  - A dependency on com.unity.netcode.gameobjects 2.2.0
+  - A steam_appid.txt for App ID 480
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: The NGO dependency was removed, so NGO isn't installed for you. The 480 default lives in a serialized field, not in a file.
+- id: connection-id
+  type: single
+  tags:
+  - facepunch-transport
+  prompt: On the host, FacepunchTransport raises `NetworkEvent.Connect` with `connection.Id`. What is that number?
+  options:
+  - The NGO client id
+  - The peer's SteamId
+  - The transport client id (the Steam connection handle), which NGO maps to its own client id
+  - The lobby id
+  answer: 2
+  explanation: Three ids are in play. NGO maps the transport id to its client id; convert with `GetClientIdFromTransportId` and `GetTransportIdFromClientId`. The SteamId stays private to the transport.
+- id: undo-order
+  type: order
+  tags:
+  - host-flow
+  prompt: Publishing the lobby failed after StartHost() succeeded. Order the recovery.
+  items:
+  - Shut NGO down
+  - Leave the lobby
+  - Show the error to the player
+  explanation: Undo in reverse order of setup. A lobby whose host isn't listening is worse than no lobby, and the player should only see the error once the state is clean.
+- id: scenemanager-tf
+  type: truefalse
+  tags:
+  - host-flow
+  prompt: You can call `NetworkManager.SceneManager.LoadScene` before `StartHost()` to preload the gameplay scene.
+  answer: false
+  explanation: NGO's sub-systems, including `SceneManager`, only exist after the NetworkManager has started. Calling it earlier throws.
+- id: setdata-limits
+  type: single
+  tags:
+  - host-flow
+  prompt: When does Facepunch's `Lobby.SetData` throw an `ArgumentException`?
+  options:
+  - When called by a non-owner
+  - When the key is longer than 255 characters or the value longer than 8192
+  - When more than four keys are set in one frame
+  - When the value contains spaces
+  answer: 1
+  explanation: Those are the documented length checks. A non-owner's write simply doesn't take effect, and consecutive writes are batched by Steam.
+- id: join-api
+  type: single
+  tags:
+  - client-flow
+  prompt: Why does the sample use `Lobby.Join()` instead of `SteamMatchmaking.JoinLobbyAsync`?
+  options:
+  - JoinLobbyAsync is editor-only
+  - Lobby.Join() returns a RoomEnter result you can check for Success; JoinLobbyAsync in 2.5.2 can return a lobby even when entering failed
+  - Lobby.Join() also starts the NGO client
+  - JoinLobbyAsync skips the version check
+  answer: 1
+  explanation: '`RoomEnter.Success` is the only good outcome; `Full`, `DoesntExist`, `NotAllowed` and others are failures you can show the player.'
+- id: null-results
+  type: codeline
+  tags:
+  - client-flow
+  prompt: This throws a NullReferenceException when nobody is hosting. Click the line.
+  code: |
+    public async Task<int> CountLobbiesAsync()
+    {
+        Lobby[] found = await SteamMatchmaking.LobbyList
+            .WithKeyValue("game", "campfire")
+            .RequestAsync();
+        return found.Length;
+    }
+  answerLines:
+  - 6
+  explanation: '`RequestAsync()` returns null, not an empty array, when nothing matches. Write `found?.Length ?? 0` or `found ?? Array.Empty<Lobby>()`.'
+- id: cold-start-arg
+  type: fill
+  tags:
+  - client-flow
+  prompt: When a player accepts an invite while the game is closed, Steam launches it with which command-line parameter in front of the lobby id?
+  answers:
+  - +connect_lobby
+  placeholder: +parameter
+  explanation: Steam passes `+connect_lobby <64-bit lobby id>`. The sample reads both the OS command line and `SteamApps.CommandLine`, and the host's `connect` rich presence uses the same syntax.
+- id: fixedstring-size
+  type: single
+  tags:
+  - player-identity
+  prompt: Why does `PlayerIdentity` store the name in a `FixedString128Bytes` written with `CopyFromTruncated`?
+  options:
+  - NetworkVariables can't hold any string type
+  - Steam names can be up to 128 UTF-8 bytes, the type holds 125, and the constructor would throw on overflow while CopyFromTruncated trims
+  - FixedString64Bytes isn't supported by NGO
+  - Truncation removes profanity
+  answer: 1
+  explanation: Steam's `k_cchPersonaNameMax` is 128 UTF-8 bytes. Fixed strings avoid managed-string allocations, and truncation avoids an exception for very long multi-byte names.
+- id: chat-sender-tf
+  type: truefalse
+  tags:
+  - player-identity
+  prompt: In `ChatRelay`, the client should include its own SteamId in the RPC so the host knows who sent the message.
+  answer: false
+  explanation: The host reads `rpcParams.Receive.SenderClientId`, which NGO fills in from the connection and a client can't forge, then looks up the SteamId itself.
+- id: after-await
+  type: multi
+  tags:
+  - player-identity
+  prompt: After `await AvatarCache.GetAsync(id)` in `LoadAvatar`, what does the sample check before using the texture? Select all that apply.
+  options:
+  - this == null (the component was destroyed)
+  - IsSpawned
+  - steamId.Value still equals the id it asked for
+  - IsOwner
+  - NetworkManager.IsHost
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: 'The object can be destroyed, despawned or reassigned while the download runs. Ownership and host status are irrelevant: every peer shows every player''s avatar.'
+- id: steamid-bytes
+  type: numeric
+  tags:
+  - player-identity
+  prompt: How many bytes does a SteamId take as the `NetworkVariable<ulong>` that crosses the network instead of the avatar?
+  answer: 8
+  tolerance: 0
+  unit: bytes
+  explanation: A SteamId is a 64-bit value. Each peer turns those 8 bytes into a name lookup and an avatar download of its own.
+- id: identity-failure
+  type: single
+  tags:
+  - steam-auth-approval
+  prompt: A host receives `AuthResponse.AuthTicketNetworkIdentityFailure`. What happened?
+  options:
+  - The client is VAC banned
+  - The ticket was created for a different remote identity than the host that is validating it
+  - The client doesn't own the game
+  - The ticket expired after 21 days
+  answer: 1
+  explanation: The client passes the host's SteamId to `GetAuthSessionTicketAsync`. A ticket forwarded to another host fails with this response.
+- id: payload-parse
+  type: codeline
+  tags:
+  - steam-auth-approval
+  prompt: This payload parser runs on the host for every connection request. Click the line that makes it accept garbage.
+  code: |
+    static bool TryReadPayload(byte[] payload, out ulong steamId, out byte[] ticket)
+    {
+        using var reader = new BinaryReader(new MemoryStream(payload));
+        steamId = reader.ReadUInt64();
+        int length = reader.ReadUInt16();
+        ticket = reader.ReadBytes(length);
+        return true;
+    }
+  answerLines:
+  - 7
+  explanation: It never checks the payload size, version, a zero SteamId, or whether `ReadBytes` returned fewer bytes than claimed. The lesson's version rejects all of those before Steam is asked anything.
+- id: host-pending-tf
+  type: truefalse
+  tags:
+  - steam-auth-approval
+  prompt: The host's own client goes through the same Pending approval as remote clients, so the host waits for its own ticket validation.
+  answer: false
+  explanation: '`StartHost` calls the approval callback for client 0 synchronously and reads `Approved` immediately. A denied host is approved anyway with a warning, so the sample approves it without a ticket.'
+- id: family-sharing
+  type: single
+  tags:
+  - steam-auth-approval
+  prompt: In `OnValidateAuthTicketResponse(steamId, ownerId, result)`, when is `ownerId` different from `steamId`?
+  options:
+  - When the ticket is invalid
+  - When the game is being played through Steam Family Sharing
+  - When the client is the lobby owner
+  - Never; they are always equal
+  answer: 1
+  explanation: Valve documents `m_OwnerSteamID` as the account that owns the game, which differs from the player's SteamId under Family Sharing.
+- id: crash-order
+  type: order
+  tags:
+  - disconnects
+  prompt: A client's game crashes. Order what happens on the host.
+  items:
+  - Steam's connected timeout expires for that connection
+  - FacepunchTransport raises NetworkEvent.Disconnect
+  - NGO despawns the player and its owned objects
+  - NGO raises ClientDisconnected and OnClientDisconnectCallback
+  - SteamAuthApproval calls EndAuthSession for the SteamId
+  explanation: Nothing is sent on a crash, so the timeout is the first signal. NGO cleans up objects before notifying you, which is why the auth map is separate from PlayerIdentity.
+- id: friendly-reason
+  type: single
+  tags:
+  - disconnects
+  prompt: '`NetworkManager.DisconnectReason` on a client starts with "[Disconnect Event]". What does that tell you?'
+  options:
+  - The host sent an approval denial
+  - No host-sent reason exists; this is NGO's technical text, so show a generic "Lost connection" message
+  - The transport raised TransportFailure
+  - Steam auth failed
+  answer: 1
+  explanation: When the host sent a reason (approval, kick, shutdown), `DisconnectReason` returns it. Otherwise it returns NGO's log-oriented description of the disconnect event.
+- id: da-promotion-tf
+  type: truefalse
+  tags:
+  - disconnects
+  prompt: NGO's distributed authority session-owner promotion gives this module's FacepunchTransport sessions host migration for free.
+  answer: false
+  explanation: Session-owner promotion belongs to the distributed authority topology, which runs on Unity's hosted service rather than a Steam relay socket. This module's listen-server sessions have no migration.
+- id: debug-output-thread
+  type: single
+  tags:
+  - dev-workflow
+  prompt: Where does Facepunch invoke `SteamNetworkingUtils.OnDebugOutput` handlers?
+  options:
+  - On Steam's networking thread, so you must marshal to Unity yourself
+  - On the main thread, during the dispatch loop driven by RunCallbacks
+  - Only in the Steam client's log file
+  - On a thread-pool thread per message
+  answer: 1
+  explanation: Steam may call the native hook from other threads, but Facepunch queues the messages and delivers them from its dispatch loop, so `Debug.Log` in the handler is safe.
+- id: mppm-facts
+  type: multi
+  tags:
+  - dev-workflow
+  prompt: Which statements about Multiplayer Play Mode in this workflow are true? Select all that apply.
+  options:
+  - It supports up to four editor players
+  - Player tags can drive auto-starting a host or a client
+  - The tag API differs between MPPM 1.x (ReadOnlyTags) and Unity 6.4+ (Tags)
+  - Each virtual player logs into a separate Steam account automatically
+  answers:
+  - 0
+  - 1
+  - 2
+  explanation: MPPM runs several editor players on one machine, which is why the sample uses Unity Transport there and skips Steam entirely.
+- id: timeout-mismatch
+  type: codeline
+  tags:
+  - shipping-checklist
+  - steam-auth-approval
+  prompt: Denied players on slow connections see "Connection lost" instead of the denial reason. Click the line that causes it.
+  code: |
+    void ConfigureHost()
+    {
+        Net.NetworkConfig.ConnectionApproval = true;
+        Net.NetworkConfig.ClientConnectionBufferTimeout = 10;
+        authTimeoutSeconds = 15f;
+        Net.ConnectionApprovalCallback = Approve;
+    }
+  answerLines:
+  - 5
+  explanation: NGO drops the pending connection after 10 seconds, before the 15-second auth timeout can send a reason. Keep your auth timeout below `ClientConnectionBufferTimeout`.
+- id: sdr-switch-tf
+  type: truefalse
+  tags:
+  - shipping-checklist
+  prompt: Before shipping, you must enable Steam Datagram Relay for your App ID in the Steamworks partner site, or FacepunchTransport's relay sockets won't work.
+  answer: false
+  explanation: Valve's SDR page says that on Steam you only need to use the listen and connect APIs and "Steam will take care of everything else". What you control is when relay access starts and how the UI waits for it.
+- id: log-folder
+  type: single
+  tags:
+  - shipping-checklist
+  prompt: Which Unity API gives the path of the current player log, for an "Open log folder" button?
+  options:
+  - Application.persistentDataPath
+  - Application.consoleLogPath
+  - Debug.logger.path
+  - Application.dataPath
+  answer: 1
+  explanation: '`Application.consoleLogPath` points at the current Player.log, wherever the platform puts it.'

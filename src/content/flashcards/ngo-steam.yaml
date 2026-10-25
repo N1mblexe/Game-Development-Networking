@@ -1,0 +1,289 @@
+cards:
+- id: arch-three-layers
+  lesson: ngo-steam/architecture
+  front: What are the three layers of an NGO + Steam game and their jobs?
+  back: The Steam lobby handles matchmaking, presence and invites; FacepunchTransport carries NGO's bytes over Steam Networking Sockets; NGO handles replication.
+- id: arch-lobby-not-connection
+  lesson: ngo-steam/architecture
+  front: Do game packets travel through a Steam lobby?
+  back: No. A lobby is a rendezvous point on Steam's backend. Clients open a separate relay connection to the host's SteamId.
+- id: arch-who-hosts
+  lesson: ngo-steam/architecture
+  front: Who becomes the NGO host in this module?
+  back: The player who creates the lobby. As lobby owner it writes its own SteamId under the `host` lobby key.
+- id: arch-host-key-why
+  lesson: ngo-steam/architecture
+  front: Why do clients read the `host` key instead of `lobby.Owner.Id`?
+  back: Steam migrates lobby ownership when the owner leaves, but the NGO host doesn't migrate. Comparing the key with the owner reveals an ended session.
+- id: arch-host-quits
+  lesson: ngo-steam/architecture
+  front: What happens to clients' NGO sessions when the host quits?
+  back: They end. NGO disconnects every client with "Disconnected due to host shutting down." and each client's NetworkManager shuts down.
+- id: arch-strategies
+  lesson: ngo-steam/architecture
+  front: What are the two basic strategies for losing the host?
+  back: End the session (simple, good for short matches) or rehost with saved state (more work, good for long co-op sessions).
+- id: arch-version-twice
+  lesson: ngo-steam/architecture
+  front: Which two version checks does the sample use?
+  back: A lobby `version` key checked before connecting, and NGO's `NetworkConfig.ProtocolVersion` checked in the handshake. Bump them together.
+- id: arch-no-steam-in-gameplay
+  lesson: ngo-steam/architecture
+  front: Why should no NetworkBehaviour reference Steamworks?
+  back: So gameplay can run on Unity Transport in the editor without Steam, and the Steam integration stays in a few dedicated scripts.
+- id: ft-install-url
+  lesson: ngo-steam/facepunch-transport
+  front: How do you install FacepunchTransport?
+  back: From the git URL `https://github.com/Unity-Technologies/multiplayer-community-contributions.git?path=/Transports/com.community.netcode.transport.facepunch`.
+- id: ft-ngo-version
+  lesson: ngo-steam/facepunch-transport
+  front: Which NGO version does FacepunchTransport on `main` need, and why?
+  back: NGO 2.2.0 or later, because it overrides `NetworkTransport.OnEarlyUpdate`, which NGO added in 2.2.0. Its CHANGELOG is stale.
+- id: ft-bundled-dlls
+  lesson: ngo-steam/facepunch-transport
+  front: Which Facepunch.Steamworks version does the package bundle, and what does the course use?
+  back: It bundles 2.3.2 DLLs. The course deletes them and installs Facepunch.Steamworks 2.5.2, keeping exactly one copy.
+- id: ft-start-calls
+  lesson: ngo-steam/facepunch-transport
+  front: What do the transport's StartServer and StartClient call?
+  back: '`SteamNetworkingSockets.CreateRelaySocket` and `SteamNetworkingSockets.ConnectRelay(targetSteamId)`. Both return true immediately.'
+- id: ft-delivery-map
+  lesson: ngo-steam/facepunch-transport
+  front: How does the transport map NGO delivery types to Steam?
+  back: All reliable variants become `SendType.Reliable`; Unreliable and UnreliableSequenced become `SendType.Unreliable`.
+- id: ft-callbacks
+  lesson: ngo-steam/facepunch-transport
+  front: When does the transport pump Steam callbacks?
+  back: Only in `OnEarlyUpdate`, so only while the NetworkManager runs. SteamBootstrap must pump them from boot.
+- id: ft-two-bugs
+  lesson: ngo-steam/facepunch-transport
+  front: Which two transport behaviours does the course patch?
+  back: '`GetCurrentRtt` always returns 0, and `Shutdown` calls `SteamClient.Shutdown()`.'
+- id: ft-accepts-all
+  lesson: ngo-steam/facepunch-transport
+  front: Which incoming connections does FacepunchTransport accept?
+  back: 'All of them: `ISocketManager.OnConnecting` calls `connection.Accept()`. Filtering is connection approval''s job.'
+- id: hf-order
+  lesson: ngo-steam/host-flow
+  front: What is the host order of operations?
+  back: Invisible lobby, configure NGO, StartHost, lobby data, visibility, rich presence, network scene load.
+- id: hf-invisible
+  lesson: ngo-steam/host-flow
+  front: What lobby type does Facepunch's CreateLobbyAsync create?
+  back: An invisible one. Call `SetFriendsOnly()` or `SetPublic()` plus `SetJoinable(true)` once NGO is listening.
+- id: hf-host-data
+  lesson: ngo-steam/host-flow
+  front: Which lobby data keys does the host write?
+  back: '`game` (project tag), `version`, `mode` and `host` (its own SteamId as a decimal string).'
+- id: hf-owner-only
+  lesson: ngo-steam/host-flow
+  front: Who can write lobby data?
+  back: Only the lobby owner. Steam batches consecutive SetData calls.
+- id: hf-connect-presence
+  lesson: ngo-steam/host-flow
+  front: What does the host set as the `connect` rich presence value?
+  back: '`+connect_lobby <lobby id>`, so Join Game from the friends list and invites produce the same command line.'
+- id: hf-no-target
+  lesson: ngo-steam/host-flow
+  front: Does the host set `targetSteamId`?
+  back: No. It's only read by StartClient; the host listens on its own SteamId automatically.
+- id: hf-boot-scene
+  lesson: ngo-steam/host-flow
+  front: How do you avoid duplicate NetworkManagers after returning to the menu?
+  back: Keep NetworkManager and the session services in a Boot scene loaded once, and always use `NetworkManager.Singleton`.
+- id: hf-undo
+  lesson: ngo-steam/host-flow
+  front: What do you do if a step fails after StartHost?
+  back: 'Undo in reverse: shut NGO down, then leave the lobby.'
+- id: cf-three-doors
+  lesson: ngo-steam/client-flow
+  front: What are the three ways a client arrives?
+  back: The lobby browser, a hot invite (`SteamFriends.OnGameLobbyJoinRequested`) and a cold start with `+connect_lobby <id>`.
+- id: cf-one-function
+  lesson: ngo-steam/client-flow
+  front: Where do all three doors lead in the sample?
+  back: To `NetworkLauncher.JoinGame(lobbyId)`.
+- id: cf-null-results
+  lesson: ngo-steam/client-flow
+  front: What does `RequestAsync()` return when no lobby matches?
+  back: '`null`, not an empty array.'
+- id: cf-roomenter
+  lesson: ngo-steam/client-flow
+  front: How do you know a lobby join succeeded?
+  back: '`Lobby.Join()` returns `RoomEnter.Success`. Every other value is a failure.'
+- id: cf-revalidate
+  lesson: ngo-steam/client-flow
+  front: Why re-check game, version and host after joining?
+  back: Invites and the friends list bypass search filters.
+- id: cf-before-start
+  lesson: ngo-steam/client-flow
+  front: What must be set before StartClient?
+  back: '`targetSteamId`, `NetworkTransport`, `ProtocolVersion` and `ConnectionData`.'
+- id: cf-start-true
+  lesson: ngo-steam/client-flow
+  front: What does StartClient returning true mean on FacepunchTransport?
+  back: Only that dialing started. The result arrives as `ClientConnected` or a disconnect callback.
+- id: cf-480-pollution
+  lesson: ngo-steam/client-flow
+  front: Why filter on a project-unique `game` key while on App ID 480?
+  back: Thousands of developers share Spacewar's lobby list, often with colliding keys such as `version`.
+- id: pi-three-ids
+  lesson: ngo-steam/player-identity
+  front: Which ids describe one player in a session?
+  back: The NGO client id (session only), the transport id (host transport only) and the SteamId (permanent).
+- id: pi-clientid-reuse
+  lesson: ngo-steam/player-identity
+  front: Why not key persistent data by NGO client id?
+  back: Client ids are created per connection and can be reused by a later player, and the same friend gets a new one on reconnect.
+- id: pi-host-writes
+  lesson: ngo-steam/player-identity
+  front: Who writes PlayerIdentity's NetworkVariables?
+  back: The host, in OnNetworkSpawn, from the SteamId that approval verified. Write permission is Server.
+- id: pi-name-source
+  lesson: ngo-steam/player-identity
+  front: Where does the host get a player's display name?
+  back: From `new Friend(steamId).Name`; members of the same lobby are known to each other.
+- id: pi-late-join
+  lesson: ngo-steam/player-identity
+  front: How should clients read identity values?
+  back: Read `Value` in OnNetworkSpawn and subscribe to `OnValueChanged` for later changes.
+- id: pi-avatar-local
+  lesson: ngo-steam/player-identity
+  front: How do avatars reach each peer?
+  back: Each peer calls `SteamFriends.GetLargeAvatarAsync(steamId)` locally; only the SteamId crosses the network.
+- id: pi-flip
+  lesson: ngo-steam/player-identity
+  front: Why flip a Steam avatar's rows before LoadRawTextureData?
+  back: Steam's RGBA rows run top to bottom, while Unity's texture data starts at the bottom row.
+- id: pi-registry
+  lesson: ngo-steam/player-identity
+  front: How does a client find the player object for a SteamId?
+  back: Through the PlayerIdentity registry. `GetPlayerNetworkObject` for other players works only on the server.
+- id: sa-why
+  lesson: ngo-steam/steam-auth-approval
+  front: Why is connection approval mandatory with FacepunchTransport?
+  back: The transport accepts every incoming connection, so approval is the only gate.
+- id: sa-ticket-proves
+  lesson: ngo-steam/steam-auth-approval
+  front: What does a validated auth ticket prove?
+  back: The SteamId is real, belongs to the sender, and the account owns the App ID.
+- id: sa-identity-bound
+  lesson: ngo-steam/steam-auth-approval
+  front: What identity does the client pass to GetAuthSessionTicketAsync?
+  back: The host's SteamId, so the ticket is useless to any other host.
+- id: sa-payload
+  lesson: ngo-steam/steam-auth-approval
+  front: What is in the sample's connection payload?
+  back: A version byte, the claimed SteamId, a 2-byte ticket length and the ticket bytes.
+- id: sa-pending
+  lesson: ngo-steam/steam-auth-approval
+  front: How does the host wait for Steam without blocking NGO?
+  back: It sets `response.Pending = true`, keeps the response, and finishes in `OnValidateAuthTicketResponse`, clearing Pending last.
+- id: sa-approval-both
+  lesson: ngo-steam/steam-auth-approval
+  front: Why must clients also set ConnectionApproval = true?
+  back: It's part of NGO's config hash; a mismatch makes the host drop the client before approval runs.
+- id: sa-timeout
+  lesson: ngo-steam/steam-auth-approval
+  front: How long may the auth wait be?
+  back: Shorter than `ClientConnectionBufferTimeout` (10 s by default); the sample uses 8 s.
+- id: sa-end-cancel
+  lesson: ngo-steam/steam-auth-approval
+  front: How are auth sessions cleaned up?
+  back: The host calls `EndAuthSession` on denial, timeout, disconnect and teardown; the client calls `Cancel()` on its ticket when leaving.
+- id: dc-one-teardown
+  lesson: ngo-steam/disconnects
+  front: What is the teardown rule of this module?
+  back: Many triggers, one idempotent teardown that runs from `OnClientStopped`.
+- id: dc-soft-shutdown
+  lesson: ngo-steam/disconnects
+  front: What does Shutdown() do on a host with clients?
+  back: NGO disconnects each client with a reason, waits until they leave or 5 seconds pass, then shuts down internally.
+- id: dc-client-auto
+  lesson: ngo-steam/disconnects
+  front: Does a client need to call Shutdown when the host disconnects it?
+  back: No. NGO shuts the client down itself; react in `OnClientStopped`.
+- id: dc-despawn-first
+  lesson: ngo-steam/disconnects
+  front: What happens to a leaving client's objects on the host?
+  back: NGO despawns its player and owned objects before raising the disconnect callbacks, unless DontDestroyWithOwner is set.
+- id: dc-transport-failure
+  lesson: ngo-steam/disconnects
+  front: Does FacepunchTransport raise OnTransportFailure?
+  back: No. Every Steam failure, including an unreachable host, arrives as a Disconnect.
+- id: dc-reason
+  lesson: ngo-steam/disconnects
+  front: When should a client read DisconnectReason?
+  back: In the disconnect event. It holds the host-sent reason, or NGO's technical text starting with "[Disconnect Event]".
+- id: dc-no-migration
+  lesson: ngo-steam/disconnects
+  front: Why does NGO's client-server mode lack host migration?
+  back: The authoritative state and every connection live on the host, and there's no protocol to elect a new server or hand state over.
+- id: dc-rehost
+  lesson: ngo-steam/disconnects
+  front: Which successor does the sketched rehost use?
+  back: The new lobby owner Steam picked. It starts a host, restores a snapshot and writes its SteamId into the host key.
+- id: dw-two-loops
+  lesson: ngo-steam/dev-workflow
+  front: What are the two test loops?
+  back: A fast editor loop on Unity Transport with Multiplayer Play Mode, and a slow loop with Steam builds on two machines and accounts.
+- id: dw-switcher
+  lesson: ngo-steam/dev-workflow
+  front: What does TransportSwitcher decide?
+  back: Unity Transport in the editor and FacepunchTransport in Steam builds, assigned to `NetworkConfig.NetworkTransport` before starting.
+- id: dw-release-steam
+  lesson: ngo-steam/dev-workflow
+  front: Can a release build select Unity Transport?
+  back: No. The `-transport` override is compiled only into the editor and development builds.
+- id: dw-mppm-limit
+  lesson: ngo-steam/dev-workflow
+  front: How many players does Multiplayer Play Mode simulate?
+  back: Up to four editor players on one machine.
+- id: dw-mppm-tags
+  lesson: ngo-steam/dev-workflow
+  front: How do MPPM players auto-start as host or client?
+  back: 'Read player tags: `CurrentPlayer.Tags` on Unity 6.4+, `CurrentPlayer.ReadOnlyTags()` in MPPM 1.x.'
+- id: dw-restart-trap
+  lesson: ngo-steam/dev-workflow
+  front: Why does a copied dev build sometimes launch Spacewar instead?
+  back: RestartAppIfNecessary returns true outside Steam and relaunches the library copy. A steam_appid.txt makes it return false.
+- id: dw-endreason
+  lesson: ngo-steam/dev-workflow
+  front: What does the transport patch for logging add?
+  back: It logs `info.State` and `info.EndReason` on disconnects, which the stock transport discards.
+- id: dw-simulator
+  lesson: ngo-steam/dev-workflow
+  front: How do you add fake latency in each loop?
+  back: Network Simulator (Multiplayer Tools) for Unity Transport, and `SteamNetworkingUtils.FakeSendPacketLag` and related properties for Steam.
+- id: sc-appid
+  lesson: ngo-steam/shipping-checklist
+  front: Where must your own App ID replace 480?
+  back: In SteamBootstrap and in the vendored transport's `steamAppId` field. Search the project for 480.
+- id: sc-appid-file
+  lesson: ngo-steam/shipping-checklist
+  front: Why must steam_appid.txt never ship?
+  back: It overrides Steam's App ID, and while present RestartAppIfNecessary returns false, disabling the restart check.
+- id: sc-restart
+  lesson: ngo-steam/shipping-checklist
+  front: When should RestartAppIfNecessary run?
+  back: As the first Steamworks call, before Init, in player builds. Quit if it returns true.
+- id: sc-depot
+  lesson: ngo-steam/shipping-checklist
+  front: What should a depot build script exclude?
+  back: '`*.pdb`, `steam_appid.txt` and Unity''s DoNotShip and ButDontShipItWithYourGame folders.'
+- id: sc-relay-boot
+  lesson: ngo-steam/shipping-checklist
+  front: Why call InitRelayNetworkAccess at boot?
+  back: Relay setup takes a few seconds, and the transport only starts it once NGO runs. Enable Host and Join when Status is Current.
+- id: sc-timeouts
+  lesson: ngo-steam/shipping-checklist
+  front: Which Steam timeouts does SessionTimeouts set?
+  back: '`SteamNetworkingUtils.ConnectionTimeout` (initial connect) and `SteamNetworkingUtils.Timeout` (connected), in milliseconds.'
+- id: sc-matrix
+  lesson: ngo-steam/shipping-checklist
+  front: Where should the test matrix run?
+  back: On the release build installed through a Steam beta branch, with two accounts on two machines.
+- id: sc-ux
+  lesson: ngo-steam/shipping-checklist
+  front: What must disconnect UX always provide?
+  back: 'A visible reason and a next step: cancel, rejoin, update or back to menu.'

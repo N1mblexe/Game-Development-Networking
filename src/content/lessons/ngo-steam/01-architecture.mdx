@@ -1,0 +1,244 @@
+---
+title: The Architecture of an NGO + Steam Game
+order: 1
+summary: Three layers with three jobs. The Steam lobby finds and gathers players, FacepunchTransport carries NGO's bytes over Steam Networking Sockets, and NGO replicates the game.
+durationMin: 20
+objectives:
+  - Assign each responsibility in a Steam co-op game to the right layer (lobby, transport or NGO)
+  - Explain why the lobby owner is also the NGO host, and what Steam and NGO each do when that player leaves
+  - Choose between ending the session and rehosting with saved state when the host disappears
+  - Map the seven scripts of this module's sample project to the layers they glue together
+prerequisites: [theory/topologies, theory/nat-and-relays, ngo/network-manager, steam/lobbies, steam/networking-sockets]
+tags: [ngo, steam, architecture, lobby, transport]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Steamworks docs: Matchmaking & Lobbies'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'Steamworks API: ISteamMatchmaking (GetLobbyOwner, SetLobbyData)'
+    url: https://partner.steamgames.com/doc/api/ISteamMatchmaking
+  - title: 'Steamworks docs: Steam Datagram Relay'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+  - title: 'Steamworks API: ISteamNetworkingSockets'
+    url: https://partner.steamgames.com/doc/api/ISteamNetworkingSockets
+  - title: 'FacepunchTransport source (FacepunchTransport.cs)'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/blob/main/Transports/com.community.netcode.transport.facepunch/Runtime/FacepunchTransport.cs
+  - title: 'NGO 2.13 manual: NetworkManager (starting, shutting down)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkmanager.html
+  - title: 'NGO 2.13 manual: Listen server host architecture'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/learn/listenserverhostarchitecture.html
+  - title: 'NGO 2.13 manual: Session management'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/session-management.html
+  - title: 'Facepunch.Steamworks: Lobby.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Structs/Lobby.cs
+---
+
+You already know both halves of this module. From the NGO module you can start a host, spawn player prefabs and
+sync state with NetworkVariables. From the Steam module you can create a lobby, invite a friend and open a
+Steam Networking Sockets connection to a SteamId. The hard part of shipping a Steam co-op game is not either half on its own.
+It is the **seams** between them: which system decides who the host is, what carries the bytes, who knows a player's
+SteamId, and what happens when someone's Wi-Fi dies.
+
+Think of it like a Unity scene with three managers that must never do each other's jobs. If your `AudioManager` started
+loading scenes, you'd get bugs nobody could find. The same goes here. This lesson draws the boundaries, and the next eight
+lessons fill them in with one sample project.
+
+## Three layers, three jobs
+
+| Layer | What it is | Its job | What it must **not** do |
+|---|---|---|---|
+| **Steam lobby** | A <Term id="steam-lobby">Steam lobby</Term> on Valve's backend, used through Facepunch.Steamworks | <Term id="matchmaking">Matchmaking</Term>, presence and invites: find or create a group, publish <Term id="lobby-data">lobby data</Term> (version, mode, host SteamId), let friends join from the overlay | Carry gameplay traffic or decide game state |
+| **Transport** | <Term id="facepunch-transport">FacepunchTransport</Term>, a `NetworkTransport` for NGO | Move NGO's byte packets between peers over <Term id="steam-networking-sockets">Steam Networking Sockets</Term> and the <Term id="steam-datagram-relay">Steam Datagram Relay</Term> | Know anything about players, prefabs or lobbies |
+| **NGO** | Netcode for GameObjects 2.x and your `NetworkBehaviour`s | Replication: spawning, NetworkVariables, RPCs, ownership, scene sync, <Term id="connection-approval">connection approval</Term> | Find other players or traverse NAT |
+
+The lobby is a **rendezvous point**, not a connection. Players in a Steam lobby can see each other's SteamIds and
+the lobby's key/value data, but no game packet travels "through" the lobby. Valve's own docs describe a lobby as
+"a lot like a chat room" that lives on the Steam backend. After the group has gathered, each client opens a real
+connection to the host using the host's SteamId as the address.
+
+That connection is FacepunchTransport's business. When NGO calls `StartServer()` on it, the transport calls
+`CreateRelaySocket()` with Facepunch's `SocketManager` as the type argument. When NGO calls `StartClient()`,
+it calls `ConnectRelay(targetSteamId)` with a `ConnectionManager`. From then on, NGO hands the transport
+`ArraySegment<byte>` payloads and a `NetworkDelivery`, and the transport turns them into Steam messages.
+
+NGO sits on top and doesn't know Steam exists. It sees a `NetworkTransport` that raises `Connect`, `Data` and
+`Disconnect` events with numeric ids. That ignorance is a feature: it is why you can swap in Unity Transport for
+local testing (lesson 8) without touching gameplay code.
+
+<Callout type="steam" title="Why route through Steam at all?">
+
+Steam Networking Sockets addresses peers by **SteamId**, not IP and port. Relayed connections go through Valve's network, so
+players never learn each other's IP addresses, and Valve states that the traffic is "authenticated, encrypted, and rate-limited".
+NAT traversal, which you studied in [NATs and relays](../../theory/nat-and-relays/), stops being your problem: the
+<Term id="relay">relay</Term> always works, and Steam may still find a faster route through its backbone.
+
+</Callout>
+
+## The topology you end up with
+
+NGO's topology here is a classic listen server: one player's game is both server and client, the <Term id="host">host</Term>.
+The physical path, however, is relayed. Every client's packets go to a Valve relay and on to the host.
+
+<Diagram name="topology" variant="relay" caption="Clients reach the host through Steam Datagram Relay. NGO still sees a plain client-server session with the host as server." />
+
+What you should notice:
+
+- **Logically**, it is client-server. The host has <Term id="authority">authority</Term>, and clients never talk to each other directly.
+- **Physically**, every hop goes through a relay, so the client-host RTT is usually a bit higher than a direct connection would be,
+  but the connection works behind almost any NAT.
+- The host is a player's PC on a home connection. Its upload bandwidth and its decision to quit both affect everyone.
+
+## The host is the lobby owner
+
+Every Steam lobby has exactly one <Term id="lobby-owner">lobby owner</Term>, and only the owner can set lobby data. In this
+architecture we make a simple rule: **the player who creates the lobby is the lobby owner and starts NGO as host.** The
+owner writes its own SteamId into the lobby data under a `host` key, and every joining client reads that value and
+uses it as the transport's <Term id="target-steam-id">target SteamId</Term>.
+
+Why not just read `lobby.Owner.Id`? Usually they're the same, but they can drift apart:
+
+1. **Steam migrates lobby ownership.** If the owner leaves the lobby, Steam hands ownership to another member.
+   The lobby lives on as long as anyone is in it, and Valve's docs note that the lobby is destroyed only after all users have left.
+2. **NGO has no host migration.** In NGO's client-server topology, the session *is* the host's `NetworkManager`. When the
+   host shuts down, it tells every client "Disconnected due to host shutting down", and each client's NetworkManager
+   shuts itself down.
+
+So after the host leaves, the lobby still has an owner, but that owner is not running a server. A late joiner that
+blindly connects to `lobby.Owner.Id` would dial a player who isn't listening. Writing an explicit `host` key and
+checking that `lobby.Owner.Id` still equals it lets your code notice that the session has ended.
+
+<Sequence
+  title="What each system does when the host quits"
+  actors={[
+    { id: 'h', label: 'Host (lobby owner)', kind: 'host' },
+    { id: 'st', label: 'Steam backend', kind: 'steam' },
+    { id: 'c1', label: 'Client A', kind: 'client' },
+    { id: 'c2', label: 'Client B', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'h', to: 'c1', label: 'NGO: host shutting down', note: 'NetworkManager.Shutdown() sends a disconnect to every client', kind: 'reliable' },
+    { from: 'h', to: 'c2', label: 'NGO: host shutting down', kind: 'reliable' },
+    { from: 'h', to: 'st', label: 'Lobby.Leave()', kind: 'event' },
+    { from: 'st', to: 'c1', label: 'Member left (lobby.Owner is now Client A)', note: 'Steam picks a new owner automatically', kind: 'event' },
+    { from: 'st', to: 'c2', label: 'Member left', kind: 'event' },
+    { from: 'c1', to: 'c1', label: 'NGO session is gone: no server to fall back to', note: 'Lobby ownership migrated; NGO host did not', kind: 'local' },
+  ]}
+/>
+
+<Term id="host-migration">Host migration</Term> means moving the authoritative simulation to another machine without
+ending the game. NGO's client-server mode does not do this for you. (NGO's distributed authority topology does have
+session-owner promotion, but it runs through Unity's hosted service, not a Steam relay socket, so it's outside this module.)
+You have two honest strategies:
+
+| Strategy | What happens | Cost |
+|---|---|---|
+| **End the session** | Every client returns to the menu with "The host left". The lobby is left and cleaned up. | Trivial to build, and right for short matches. |
+| **Rehost with saved state** | A designated survivor (for example the new lobby owner) calls `StartHost()`, writes itself into the `host` lobby key, and the others reconnect. The game restores from state that was saved periodically. | You must snapshot state, choose who rehosts, and handle a 5 to 15 second gap. Good for long co-op sessions. |
+
+We build "end the session" fully in [Disconnects](../disconnects/) and sketch the <Term id="rehost">rehost</Term> path there too.
+
+## The sample project
+
+Across this module you'll build one small co-op project. Every lesson adds or finishes one script, and every script
+belongs to exactly one seam:
+
+| Script | Layer(s) it glues | Lesson |
+|---|---|---|
+| `SteamBootstrap` | Steam lifetime: `SteamClient.Init`, `RunCallbacks`, `Shutdown` | [FacepunchTransport](../facepunch-transport/) |
+| `SteamLobbyService` | Lobby: create, join, invites, lobby data, leave | [Host flow](../host-flow/), [Client flow](../client-flow/) |
+| `NetworkLauncher` | Lobby → transport → NGO: sets `targetSteamId`, calls `StartHost`/`StartClient` | [Host flow](../host-flow/), [Client flow](../client-flow/) |
+| `PlayerIdentity` | NGO ↔ Steam: SteamId and name as NetworkVariables, avatar fetched locally | [Player identity](../player-identity/) |
+| `SteamAuthApproval` | NGO approval ↔ Steam auth: ticket in `ConnectionData`, `BeginAuthSession` on the host | [Steam auth approval](../steam-auth-approval/) |
+| `SessionTeardown` (part of `NetworkLauncher`) | All three: who leaves what, in which order | [Disconnects](../disconnects/) |
+| `TransportSwitcher` | Dev workflow: Unity Transport in the editor, Facepunch in Steam builds | [Dev workflow](../dev-workflow/) |
+
+Every script reads the same lobby keys, so we define them once:
+
+```csharp title="SessionKeys.cs"
+namespace Campfire.Net
+{
+    /// <summary>Lobby data keys and session constants shared by every script in the module.</summary>
+    public static class SessionKeys
+    {
+        // Lobby data (only the lobby owner can write these).
+        public const string Version = "version";   // must match exactly, or clients refuse to join
+        public const string Mode = "mode";         // e.g. "coop", "versus"
+        public const string Host = "host";         // the NGO host's SteamId, as a decimal string
+        public const string Game = "game";         // marks lobbies as ours, see the App ID 480 pitfall
+
+        // Value for Game. Pick something unique to your project.
+        public const string GameTag = "campfire";
+
+        // Bump this whenever a build can no longer play with older builds.
+        public const string BuildVersion = "0.4.0";
+
+        // NGO's own handshake check. Keep it in step with BuildVersion.
+        public const ushort ProtocolVersion = 4;
+
+        public const int MaxPlayers = 4;
+    }
+}
+```
+
+`ProtocolVersion` deserves a note: NGO's `NetworkConfig.ProtocolVersion` is part of the handshake, so builds with different
+values refuse each other. The lobby `version` key catches the same mismatch **before** anyone opens a connection, which
+gives a much nicer error message. You want both.
+
+### The lifecycle in one picture
+
+A <Term id="session-lifecycle">session lifecycle</Term> is the ordered list of states a player passes through, and every bug
+in this module lives at a transition:
+
+<Steps>
+
+1. **Boot**: `SteamBootstrap` initializes Steam once and starts pumping <Term id="steam-callbacks">Steam callbacks</Term>.
+2. **Menu**: no lobby, no NGO. The player can host, browse or accept an invite.
+3. **In lobby**: the host has created a lobby and started NGO. Clients have joined the lobby but are not connected yet.
+4. **Connecting**: the client has set `targetSteamId` and called `StartClient()`. The host is running connection approval.
+5. **In session**: NGO is replicating, and `PlayerIdentity` is spawned for everyone.
+6. **Teardown**: NGO shuts down, the lobby is left, auth sessions are ended, rich presence is cleared, and the player returns to the menu.
+
+</Steps>
+
+Notice what isn't in the list: there is no state where NGO runs without a lobby in a Steam build, and none where you are
+in a lobby long after NGO has stopped. Keeping the two in step is the job of lesson 7.
+
+## Pitfalls at the architectural level
+
+<Callout type="pitfall" title="Using lobby chat or lobby data as a game channel">
+
+Lobby data is for **search and setup**: version, mode, the host's SteamId, maybe a map name. Valve's own guidance is to
+avoid updating lobby metadata at high frequency. Player positions, health and inventory belong in NGO. If you find yourself
+writing `SetData("hp_" + id, ...)`, you have put replication in the wrong layer.
+
+</Callout>
+
+<Callout type="pitfall" title="Treating the lobby owner as the host without checking">
+
+`lobby.Owner` changes automatically when the owner leaves. If clients derive the connection target from `lobby.Owner.Id`
+alone, a player who joins after the host quit will try to connect to someone who isn't running a server, and will wait
+for a connection timeout. Store the host's SteamId in lobby data and compare it with the current owner.
+
+</Callout>
+
+<Callout type="unity" title="NGO doesn't know it's on Steam, and that's good">
+
+Nothing in your `NetworkBehaviour`s should reference `Steamworks`. Only `SteamBootstrap`, `SteamLobbyService`,
+`SteamAuthApproval`, `PlayerIdentity`'s avatar code and the launcher touch Steam. That separation is what lets
+[Multiplayer Play Mode](../dev-workflow/) test your gameplay with Unity Transport and no Steam at all.
+
+</Callout>
+
+<KeyTakeaways>
+
+- The **Steam lobby** handles matchmaking, presence and invites. **FacepunchTransport** carries NGO's packets over Steam Networking Sockets and SDR. **NGO** handles replication.
+- The lobby creator is both **lobby owner** and **NGO host**, and publishes its SteamId in a `host` lobby key that clients use as `targetSteamId`.
+- When the host leaves, **Steam migrates lobby ownership but NGO does not migrate the host**: the NGO session ends for everyone.
+- Pick a strategy up front: **end the session** (simple) or **rehost with saved state** (more work, better for long sessions).
+- Version-check twice: a lobby `version` key before connecting, and NGO's `ProtocolVersion` during the handshake.
+
+</KeyTakeaways>

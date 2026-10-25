@@ -1,0 +1,362 @@
+---
+title: 'The Host Flow: From Lobby to Listening'
+order: 3
+summary: Create the Steam lobby, start NGO as host on FacepunchTransport, publish version, mode and host keys, open the lobby to friends, and set rich presence, in an order that never lets anyone join too early.
+durationMin: 25
+objectives:
+  - Order the host steps so that no one can find or join the lobby before the host is listening
+  - Write lobby data (game tag, version, mode, host SteamId) and choose a lobby type
+  - Start NGO as host on FacepunchTransport and load the gameplay scene through NetworkSceneManager
+  - Set rich presence so friends can join from the Steam friends list and open the invite overlay
+  - Avoid NetworkManager duplication when the menu scene is reloaded
+prerequisites: [ngo-steam/facepunch-transport, steam/lobbies, steam/invites-and-presence, ngo/network-manager, ngo/connection-and-scenes]
+tags: [ngo, steam, lobby, host, rich-presence]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, patched as in lesson 2)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks: SteamMatchmaking.cs (CreateLobbyAsync creates an invisible lobby)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamMatchmaking.cs
+  - title: 'Facepunch.Steamworks: Lobby.cs (SetData, SetPublic, SetFriendsOnly, SetJoinable, Owner)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Structs/Lobby.cs
+  - title: 'Facepunch.Steamworks: SteamFriends.cs (SetRichPresence, OpenGameInviteOverlay)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamFriends.cs
+  - title: 'Steamworks API: ISteamMatchmaking (SetLobbyData, GetLobbyOwner)'
+    url: https://partner.steamgames.com/doc/api/ISteamMatchmaking
+  - title: 'Steamworks API: ISteamFriends (SetRichPresence keys: connect, steam_player_group)'
+    url: https://partner.steamgames.com/doc/api/ISteamFriends
+  - title: 'Steamworks docs: Matchmaking & Lobbies'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'NGO 2.13 manual: NetworkManager (StartHost, Shutdown)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkmanager.html
+  - title: 'NGO 2.13 manual: Using NetworkSceneManager'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/scenemanagement/using-networkscenemanager.html
+  - title: 'NGO source: NetworkManager.cs (OnEnable, SetSingleton, DontDestroyOnLoad)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/develop-2.0.0/com.unity.netcode.gameobjects/Runtime/Core/NetworkManager.cs
+---
+
+Hosting in a LAN prototype is one line: `NetworkManager.Singleton.StartHost()`. Hosting on Steam is a small
+choreography, and the order matters for the same reason it matters when you open a shop. You don't unlock the
+front door before the lights are on and the till works. If a friend clicks "Join" on your lobby before your server is
+listening, their client dials your SteamId, finds nothing, and sits there until the connection times out.
+
+This lesson builds the host half of two scripts, `SteamLobbyService` and `NetworkLauncher`, and gets the order right.
+
+## The order of operations
+
+<Diagram name="ngo-steam-host-join" variant="host" caption="Host flow: create the lobby while it's still invisible, start NGO, publish lobby data, and only then make the lobby visible." />
+
+What you should notice:
+
+- **The lobby starts invisible.** Facepunch's `CreateLobbyAsync(maxMembers)` creates a lobby of type
+  *Invisible*, which no search returns and no friend can see. That gives you a safe window to do everything else.
+- **NGO starts before the lobby becomes visible.** By the time anyone can join, `StartHost()` has opened the relay socket.
+- **The `host` key is written by the host about itself.** Clients never guess the host. They read it.
+- **Visibility comes last**: `SetFriendsOnly()` or `SetPublic()`, then `SetJoinable(true)` and rich presence.
+
+| Step | Call | Why here |
+|---|---|---|
+| 1 | `SteamMatchmaking.CreateLobbyAsync(MaxPlayers)` | Gets a lobby id. It's invisible, so nobody can join yet. |
+| 2 | `NetworkConfig.ProtocolVersion`, `NetworkTransport`, approval setup | Must be set **before** starting. NGO reads them during `StartHost()`. |
+| 3 | `NetworkManager.StartHost()` | FacepunchTransport calls `CreateRelaySocket`, and the host's own player spawns. |
+| 4 | `lobby.SetData(...)` for `game`, `version`, `mode`, `host` | Only the owner can write lobby data. Steam batches these writes. |
+| 5 | `SetFriendsOnly()` or `SetPublic()`, then `SetJoinable(true)` | The lobby is now discoverable. |
+| 6 | `SteamFriends.SetRichPresence("connect", …)` | Enables "Join Game" in friends' Steam client. |
+| 7 | `NetworkManager.SceneManager.LoadScene(...)` | NGO synchronizes the scene to everyone who joins later. |
+
+If any step fails after step 3, you **undo in reverse**: shut NGO down and leave the lobby. A lobby whose host isn't
+listening is worse than no lobby at all.
+
+## SteamLobbyService, part 1: creating and owning a lobby
+
+The service is a `partial` class. This file holds creation, lobby data, presence, invites and leaving, and lesson 4
+adds the join side in a second file.
+
+```csharp title="SteamLobbyService.cs"
+using System;
+using System.Threading.Tasks;
+using Steamworks;
+using Steamworks.Data;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    /// <summary>Everything about the Steam lobby. Knows nothing about NGO.</summary>
+    public sealed partial class SteamLobbyService : MonoBehaviour
+    {
+        public static SteamLobbyService Instance { get; private set; }
+
+        public Lobby? Current { get; private set; }
+        public bool IsInLobby => Current.HasValue;
+        public bool IsOwner => Current.HasValue && Current.Value.IsOwnedBy(SteamClient.SteamId);
+
+        /// <summary>The SteamId the host published under SessionKeys.Host (0 if none).</summary>
+        public SteamId HostSteamId =>
+            Current.HasValue && ulong.TryParse(Current.Value.GetData(SessionKeys.Host), out var id) ? id : 0;
+
+        public event Action<Lobby> Entered;   // created, or joined and validated
+        public event Action Left;
+        public event Action HostLeftLobby;    // raised on clients only
+
+        private void Awake()
+        {
+            if (Instance != null) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+
+        private void OnEnable()
+        {
+            SteamMatchmaking.OnLobbyMemberJoined += HandleMemberJoined;
+            SteamMatchmaking.OnLobbyMemberLeave += HandleMemberGone;
+            SteamMatchmaking.OnLobbyMemberDisconnected += HandleMemberGone;
+            SteamFriends.OnGameLobbyJoinRequested += HandleJoinRequested;   // lesson 4
+        }
+
+        private void OnDisable()
+        {
+            SteamMatchmaking.OnLobbyMemberJoined -= HandleMemberJoined;
+            SteamMatchmaking.OnLobbyMemberLeave -= HandleMemberGone;
+            SteamMatchmaking.OnLobbyMemberDisconnected -= HandleMemberGone;
+            SteamFriends.OnGameLobbyJoinRequested -= HandleJoinRequested;
+        }
+
+        /// <summary>Step 1: create an invisible lobby. Nobody can find or join it yet.</summary>
+        public async Task<Lobby?> CreateHiddenAsync()
+        {
+            if (!SteamBootstrap.IsReady) return null;
+            if (IsInLobby) Leave();
+
+            Lobby? created = await SteamMatchmaking.CreateLobbyAsync(SessionKeys.MaxPlayers);
+            if (!created.HasValue)
+            {
+                Debug.LogWarning("[Lobby] CreateLobbyAsync failed (offline, or rate limited?)");
+                return null;
+            }
+
+            Current = created.Value;
+            return Current;
+        }
+
+        /// <summary>Steps 4 to 6: publish lobby data, open the lobby, set rich presence.</summary>
+        public void Publish(string mode, bool publicLobby)
+        {
+            if (!IsOwner) throw new InvalidOperationException("Only the lobby owner can publish lobby data.");
+            Lobby lobby = Current.Value;
+
+            lobby.SetData(SessionKeys.Game, SessionKeys.GameTag);
+            lobby.SetData(SessionKeys.Version, SessionKeys.BuildVersion);
+            lobby.SetData(SessionKeys.Mode, mode);
+            lobby.SetData(SessionKeys.Host, SteamClient.SteamId.ToString());
+
+            if (publicLobby) lobby.SetPublic(); else lobby.SetFriendsOnly();
+            lobby.SetJoinable(true);
+
+            UpdatePresence();
+            Entered?.Invoke(lobby);
+        }
+
+        /// <summary>Opens Steam's overlay dialog for inviting friends to the current lobby.</summary>
+        public void OpenInviteOverlay()
+        {
+            if (Current.HasValue) SteamFriends.OpenGameInviteOverlay(Current.Value.Id);
+        }
+
+        /// <summary>Stop accepting new members (for example when the match starts or the host is quitting).</summary>
+        public void Lock()
+        {
+            if (IsOwner) Current.Value.SetJoinable(false);
+        }
+
+        public void Leave()
+        {
+            if (!Current.HasValue) return;
+            Lobby lobby = Current.Value;
+            Current = null;
+
+            if (SteamClient.IsValid)
+            {
+                lobby.Leave();                    // takes effect immediately on our side
+                SteamFriends.ClearRichPresence();
+            }
+            Left?.Invoke();
+        }
+
+        private bool IsCurrent(Lobby lobby) => Current.HasValue && Current.Value.Id == lobby.Id;
+
+        private void UpdatePresence()
+        {
+            if (!Current.HasValue) return;
+            Lobby lobby = Current.Value;
+            // "connect" enables Join Game in the friends list. We reuse Steam's own +connect_lobby syntax,
+            // so a cold start and a hot join take the same code path (lesson 4).
+            SteamFriends.SetRichPresence("connect", $"+connect_lobby {lobby.Id}");
+            SteamFriends.SetRichPresence("steam_player_group", lobby.Id.ToString());
+            SteamFriends.SetRichPresence("steam_player_group_size", lobby.MemberCount.ToString());
+        }
+
+        private void HandleMemberJoined(Lobby lobby, Friend member)
+        {
+            if (IsCurrent(lobby)) UpdatePresence();
+        }
+
+        private void HandleMemberGone(Lobby lobby, Friend member)
+        {
+            if (!IsCurrent(lobby)) return;
+            UpdatePresence();
+
+            // Clients: did the NGO host just leave the lobby? (Steam has already migrated lobby ownership.)
+            bool hostLeft = member.Id == HostSteamId && member.Id != SteamClient.SteamId;
+            if (hostLeft) HostLeftLobby?.Invoke();
+        }
+    }
+}
+```
+
+A few details are worth a second look:
+
+- `Lobby` is a **struct** wrapping a SteamId. `Current` is a nullable `Lobby?`, so "not in a lobby" is `null`, not a default struct.
+- `SetData` throws an `ArgumentException` for keys longer than 255 characters or values longer than 8192, and only works for the owner.
+  Steam batches consecutive `SetData` calls and sends them together, so writing four keys in a row is fine.
+- The `host` value is a decimal string. Lobby data is string to string, and `SteamId.ToString()` prints the 64-bit value.
+
+<Callout type="steam" title="Rich presence: connect and groups">
+
+Steam's `connect` rich presence key "contains the command-line for how a friend can connect to a game" and enables the
+**Join Game** button in the friends list. `steam_player_group` and `steam_player_group_size` let the Steam UI group
+party members together. A visible status string needs `steam_display` and a localization token uploaded in the Steamworks
+partner site, which [Invites and presence](../../steam/invites-and-presence/) covers.
+
+</Callout>
+
+## NetworkLauncher, part 1: starting the host
+
+`NetworkLauncher` is the only script that talks to both the lobby service and NGO. It reads the NetworkManager through
+`NetworkManager.Singleton` instead of a serialized reference, for a reason explained in the pitfalls below.
+
+```csharp title="NetworkLauncher.cs"
+using System.Threading.Tasks;
+using Netcode.Transports.Facepunch;
+using Steamworks;
+using Unity.Netcode;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace Campfire.Net
+{
+    /// <summary>Glue between the Steam lobby and NGO. Lessons 4, 6, 7 and 8 extend it.</summary>
+    public sealed partial class NetworkLauncher : MonoBehaviour
+    {
+        [SerializeField] private string gameplayScene = "Gameplay";
+        [SerializeField] private string menuScene = "Menu";
+
+        public static NetworkLauncher Instance { get; private set; }
+
+        private static NetworkManager Net => NetworkManager.Singleton;
+        private SteamLobbyService Lobbies => SteamLobbyService.Instance;
+
+        private void Awake()
+        {
+            if (Instance != null) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+
+        /// <summary>Hooked to the "Host" button.</summary>
+        public async void HostGame(string mode, bool publicLobby)
+        {
+            if (Net == null || Net.IsListening) return;
+
+            // 1. Invisible lobby: we own it, nobody can join yet.
+            Lobby? lobby = await Lobbies.CreateHiddenAsync();
+            if (lobby == null) { ShowError("Couldn't create a Steam lobby."); return; }
+
+            // 2. Configure NGO before starting it.
+            Net.NetworkConfig.ProtocolVersion = SessionKeys.ProtocolVersion;
+            Net.NetworkConfig.NetworkTransport = GetFacepunch();   // lesson 8 replaces this with TransportSwitcher
+            SteamAuthApproval.Instance.ConfigureHost();             // lesson 6: approval callback
+
+            // 3. Start listening on a Steam relay socket.
+            if (!Net.StartHost())
+            {
+                Lobbies.Leave();
+                ShowError("Couldn't start the host.");
+                return;
+            }
+
+            // 4 to 6. Publish data, open the lobby, set presence.
+            Lobbies.Publish(mode, publicLobby);
+
+            // 7. Load gameplay through NGO so late joiners are synchronized into it.
+            Net.SceneManager.LoadScene(gameplayScene, LoadSceneMode.Single);
+        }
+
+        private static FacepunchTransport GetFacepunch() => Net.GetComponent<FacepunchTransport>();
+
+        private void ShowError(string message) => Debug.LogWarning($"[Launcher] {message}"); // replace with your UI
+    }
+}
+```
+
+What you should notice:
+
+- `HostGame` is `async void` because it's a UI entry point. Everything inside `await`s Steam call results, which complete
+  through the callbacks that `SteamBootstrap` pumps.
+- **`ProtocolVersion` is set before `StartHost()`.** NGO compares it during each client's handshake.
+- **The host never sets `targetSteamId`.** That field is only read by `StartClient()`. The host listens on its own SteamId automatically.
+- `Net.SceneManager` only exists after the NetworkManager has started, as the NGO manual warns about all its sub-systems. Calling it before `StartHost()` would throw.
+
+## The host's own player
+
+When `StartHost()` succeeds, NGO runs the host's local client through the same approval path as everyone else, but with
+`ClientNetworkId = 0` and the host's own `NetworkConfig.ConnectionData`. If you decline it, NGO logs a warning and approves
+it anyway, because a host can't decline itself. The player prefab is spawned for client 0 right away, before any remote client exists.
+Lesson 5 hooks `PlayerIdentity` into that spawn.
+
+<Callout type="pitfall" title="NetworkManager duplication when the menu reloads">
+
+NGO's `NetworkManager` moves itself to `DontDestroyOnLoad` in `OnEnable` and becomes `Singleton` only if no singleton exists yet.
+It does **not** destroy duplicates. If your NetworkManager lives in the `Menu` scene and you return to the menu after a match,
+the scene creates a second NetworkManager. `Singleton` still points to the first one, but your serialized references point to
+the new one, and the new one has no running session.
+
+**Fix:** put the NetworkManager, `SteamBootstrap`, `SteamLobbyService` and `NetworkLauncher` in a `Boot` scene that is loaded once
+and never again, and always go through `NetworkManager.Singleton`.
+
+</Callout>
+
+<Callout type="pitfall" title="Publishing before you're listening">
+
+If you `SetPublic()` and set the `host` key *before* `StartHost()` succeeds, a fast friend can join the lobby, read your SteamId and
+call `StartClient()` against a socket that doesn't exist yet. Their client accepts the connection attempt and then waits for Steam's
+initial connection timeout. Keep the lobby invisible until NGO is listening.
+
+</Callout>
+
+<Callout type="pitfall" title="Forgetting the lobby is invisible">
+
+The opposite mistake: you create the lobby, start the host, invite a friend... and nothing works, because Facepunch's
+`CreateLobbyAsync` creates an **invisible** lobby and you never called `SetFriendsOnly()` or `SetPublic()`. If your lobby browser shows nothing,
+check the lobby type first.
+
+</Callout>
+
+<Callout type="unity" title="Why not start the host from a NetworkBehaviour?">
+
+The NGO manual warns against starting a NetworkManager from a `NetworkBehaviour`'s `Awake`. `NetworkLauncher` is a plain
+`MonoBehaviour` in the boot scene, and it starts NGO only from explicit player actions.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Host order: **invisible lobby → configure NGO → `StartHost()` → lobby data → visibility → rich presence → network scene load**.
+- Facepunch's `CreateLobbyAsync` returns an **invisible** lobby. Use that window, then call `SetFriendsOnly()` or `SetPublic()` plus `SetJoinable(true)`.
+- The host writes `game`, `version`, `mode` and its own SteamId under `host`. Only the owner can write lobby data.
+- Set rich presence `connect` to `+connect_lobby <id>` so friends can join from the Steam client.
+- Keep NetworkManager and the session services in a boot scene loaded once, and undo in reverse order if any step fails.
+
+</KeyTakeaways>

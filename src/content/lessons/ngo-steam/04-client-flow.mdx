@@ -1,0 +1,302 @@
+---
+title: 'The Client Flow: Browse, Invite, Connect'
+order: 4
+summary: Join a lobby from the browser, a friend invite or a cold launch with +connect_lobby, validate the lobby data, set targetSteamId from the host key, and only then call StartClient.
+durationMin: 25
+objectives:
+  - Query lobbies with filters that keep out other games and incompatible builds
+  - Handle all three ways a client arrives (browser, hot invite, cold-start invite) with one code path
+  - Validate the game tag, version and host key after joining, because invites bypass search filters
+  - Set targetSteamId and ConnectionData before StartClient, and explain what happens if you don't
+prerequisites: [ngo-steam/host-flow, steam/lobbies, steam/invites-and-presence, ngo/connection-and-scenes]
+tags: [ngo, steam, lobby, client, invites]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, patched as in lesson 2)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Steamworks docs: Matchmaking & Lobbies (invites, +connect_lobby, lobby data)'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'Steamworks API: ISteamFriends (GameLobbyJoinRequested_t, GameRichPresenceJoinRequested_t)'
+    url: https://partner.steamgames.com/doc/api/ISteamFriends
+  - title: 'Steamworks API: ISteamMatchmaking (JoinLobby, GetLobbyOwner)'
+    url: https://partner.steamgames.com/doc/api/ISteamMatchmaking
+  - title: 'Facepunch.Steamworks: LobbyQuery.cs (filters, RequestAsync returns null when empty)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Structs/LobbyQuery.cs
+  - title: 'Facepunch.Steamworks: Lobby.cs (Join returns RoomEnter)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Structs/Lobby.cs
+  - title: 'Facepunch.Steamworks: SteamFriends.cs (OnGameLobbyJoinRequested)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamFriends.cs
+  - title: 'Facepunch.Steamworks: SteamApps.cs (CommandLine)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamApps.cs
+  - title: 'FacepunchTransport.cs: StartClient uses targetSteamId'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/blob/main/Transports/com.community.netcode.transport.facepunch/Runtime/FacepunchTransport.cs
+  - title: 'NGO 2.13 manual: Connection approval (ConnectionData must be set before StartClient)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/connection-approval.html
+  - title: 'NGO 2.13 manual: Connection events'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/connection-events.html
+---
+
+The host's job was to open a door in the right order. The client's job is to walk through it, and there are three
+different doors. A player might pick your lobby from an in-game browser. They might click **Join Game** on a friend in
+the Steam friends list while your game is already running. Or they might accept an invite while the game is
+closed, in which case Steam launches it for them with a lobby id on the command line.
+
+It's like a scene that can be loaded from the main menu, from a save file or from a deep link: three entry points, and
+you want them to converge on **one** function as early as possible. In our sample project that function is
+`NetworkLauncher.JoinGame(lobbyId)`.
+
+## Door 1: the lobby browser
+
+A lobby search runs on Steam's backend and returns lobby ids plus their lobby data. Every filter you add is applied
+on Valve's side, so filter aggressively.
+
+```csharp title="SteamLobbyService.Join.cs (search)"
+public async Task<Lobby[]> FindAsync(string mode)
+{
+    Lobby[] found = await SteamMatchmaking.LobbyList
+        .WithKeyValue(SessionKeys.Game, SessionKeys.GameTag)        // our game only
+        .WithKeyValue(SessionKeys.Version, SessionKeys.BuildVersion) // compatible builds only
+        .WithKeyValue(SessionKeys.Mode, mode)
+        .WithSlotsAvailable(1)
+        .FilterDistanceWorldwide()
+        .WithMaxResults(50)
+        .RequestAsync();
+
+    return found ?? Array.Empty<Lobby>();   // RequestAsync returns null, not an empty array, when nothing matches
+}
+```
+
+For each result you can show `lobby.GetData(SessionKeys.Mode)`, `lobby.MemberCount` and `lobby.MaxMembers` without
+joining. Valve's guidance is explicit: don't join lobbies just to read their metadata, because search results already include it.
+
+<Callout type="pitfall" title="App ID 480 lobby pollution">
+
+While you prototype on <Term id="spacewar">Spacewar</Term> (App ID 480), you share the lobby list with thousands of other developers doing the same thing.
+An unfiltered `RequestAsync()` returns *their* lobbies, often with keys like `version` or `mode` that collide with yours.
+Always filter on a key that is unique to your project (`game = campfire` here), and switch to your own App ID as early as you can.
+
+</Callout>
+
+## Doors 2 and 3: invites
+
+<Diagram name="ngo-steam-host-join" variant="invite" caption="An invite or Join Game click reaches the game either as a callback (game running) or as +connect_lobby on the command line (game launched by Steam)." />
+
+What you should notice:
+
+- **Game already running:** Steam posts `GameLobbyJoinRequested_t`, which Facepunch exposes as
+  `OnGameLobbyJoinRequested(Lobby, SteamId)`. Valve's docs add that "it's up to your game to decide to obey it or not".
+- **Game not running:** Steam launches it with `+connect_lobby <64-bit lobby id>` on the command line. No callback fires.
+- **Rich presence joins** use whatever you put in the `connect` key. Because the host set it to `+connect_lobby <id>` in lesson 3,
+  a cold start through the friends list produces the same command line as a cold start from an invite.
+
+Both paths end in the same place:
+
+```csharp title="SteamLobbyService.Join.cs (invites)"
+/// <summary>Raised when Steam asks us to join a lobby while the game is running.</summary>
+public event Action<SteamId> JoinRequested;
+
+private void HandleJoinRequested(Lobby lobby, SteamId viaFriend) => JoinRequested?.Invoke(lobby.Id);
+
+/// <summary>Cold start: did Steam launch us with +connect_lobby &lt;id&gt;?</summary>
+public static bool TryGetLaunchLobby(out SteamId lobbyId)
+{
+    // Steam may deliver the parameters either on the OS command line or through ISteamApps.
+    string steamLine = SteamClient.IsValid ? SteamApps.CommandLine : string.Empty;
+    string[] args = (string.Join(" ", Environment.GetCommandLineArgs()) + " " + steamLine)
+        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+    for (int i = 0; i < args.Length - 1; i++)
+    {
+        if (args[i] == "+connect_lobby" && ulong.TryParse(args[i + 1], out ulong id))
+        {
+            lobbyId = id;
+            return true;
+        }
+    }
+    lobbyId = 0;
+    return false;
+}
+```
+
+`HandleJoinRequested` is the handler that part 1 of the service already subscribed to `OnGameLobbyJoinRequested` in `OnEnable`.
+
+<Callout type="steam" title="The command-line warning popup">
+
+When a game is launched with extra command-line parameters, the Steam client can show a warning. Valve's docs say to implement
+`ISteamApps::GetLaunchCommandLine` (Facepunch: `SteamApps.CommandLine`) so you can disable that popup, and that routing rich presence
+joins through it instead of the OS command line requires a setting in your app's Steamworks configuration. That's one more reason to read both sources, as above.
+
+</Callout>
+
+## Joining and validating
+
+Joining is a Steam call result: `Lobby.Join()` returns a `RoomEnter` enum, where `RoomEnter.Success` is the only good
+outcome (`Full`, `DoesntExist`, `NotAllowed`, `Banned` and others are failures). Prefer it over
+`SteamMatchmaking.JoinLobbyAsync`, which in Facepunch 2.5.2 returns a lobby even when the enter response isn't a success.
+
+After joining, you **always** have the lobby's current data. Valve guarantees that members receive the latest lobby data automatically.
+Now validate it, because an invite skips every filter your browser applied:
+
+```csharp title="SteamLobbyService.Join.cs (join)"
+public async Task<(bool ok, string error)> JoinAsync(SteamId lobbyId)
+{
+    if (!SteamBootstrap.IsReady) return (false, "Steam isn't running.");
+    if (IsInLobby) Leave();
+
+    var lobby = new Lobby(lobbyId);
+    RoomEnter result = await lobby.Join();
+    if (result != RoomEnter.Success) return (false, $"Couldn't join the lobby ({result}).");
+    Current = lobby;
+
+    // Invites bypass search filters, so check everything again.
+    if (lobby.GetData(SessionKeys.Game) != SessionKeys.GameTag)
+        return Reject("That lobby belongs to a different game.");
+
+    string hostVersion = lobby.GetData(SessionKeys.Version);
+    if (hostVersion != SessionKeys.BuildVersion)
+        return Reject($"Version mismatch: host {hostVersion}, you {SessionKeys.BuildVersion}. Update your game.");
+
+    SteamId host = HostSteamId;
+    if (!host.IsValid || !lobby.IsOwnedBy(host))
+        return Reject("This session has ended.");   // owner migrated: the NGO host is gone (lesson 1)
+
+    if (host == SteamClient.SteamId)
+        return Reject("That's your own lobby. Test with a second Steam account (lesson 8).");
+
+    UpdatePresence();
+    Entered?.Invoke(lobby);
+    return (true, null);
+
+    (bool, string) Reject(string why) { Leave(); return (false, why); }
+}
+```
+
+## NetworkLauncher, part 2: connecting
+
+Now the launcher turns a validated lobby into an NGO connection. This is where the most common integration bug lives.
+
+<Diagram name="ngo-steam-host-join" variant="client" caption="Client flow: join and validate the lobby, read the host key, prepare ConnectionData, set targetSteamId, then StartClient." />
+
+```csharp title="NetworkLauncher.Join.cs"
+using Steamworks;
+using Unity.Netcode;
+
+namespace Campfire.Net
+{
+    public sealed partial class NetworkLauncher
+    {
+        private void Start()
+        {
+            // Door 2: hot join while the game runs.
+            Lobbies.JoinRequested += HandleJoinRequested;
+
+            // Door 3: cold start from an invite or the friends list.
+            if (SteamLobbyService.TryGetLaunchLobby(out SteamId launchLobby))
+                JoinGame(launchLobby);
+        }
+
+        private void HandleJoinRequested(SteamId lobbyId)
+        {
+            if (Net.IsListening)
+            {
+                // Already in a session: ask the player first in a real game. Lesson 7 shows EndSession.
+                ShowError("Leave your current game before joining a friend.");
+                return;
+            }
+            JoinGame(lobbyId);
+        }
+
+        /// <summary>Door 1 (browser button) calls this directly. All doors end here.</summary>
+        public async void JoinGame(SteamId lobbyId)
+        {
+            if (Net == null || Net.IsListening) return;
+
+            var (ok, error) = await Lobbies.JoinAsync(lobbyId);
+            if (!ok) { ShowError(error); return; }
+
+            SteamId host = Lobbies.HostSteamId;
+
+            // ConnectionData is sent with the connection request, so it must be ready BEFORE StartClient (lesson 6).
+            if (!await SteamAuthApproval.Instance.PrepareClientPayloadAsync(host))
+            {
+                Lobbies.Leave();
+                ShowError("Couldn't get a Steam auth ticket.");
+                return;
+            }
+
+            var transport = GetFacepunch();
+            transport.targetSteamId = host;                  // BEFORE StartClient: the transport reads it inside StartClient
+            Net.NetworkConfig.NetworkTransport = transport;
+            Net.NetworkConfig.ProtocolVersion = SessionKeys.ProtocolVersion;
+
+            if (!Net.StartClient())
+            {
+                Lobbies.Leave();
+                ShowError("Couldn't start the client.");
+            }
+            // StartClient returning true only means "dialing". Lesson 7 handles the outcome:
+            // ConnectionEvent.ClientConnected = we're in, OnClientDisconnectCallback = rejected or timed out.
+        }
+    }
+}
+```
+
+What you should notice:
+
+- **Three entry points, one function.** Browser, hot invite and cold start all call `JoinGame(lobbyId)`.
+- **The client never calls `lobby.Owner` directly.** It uses the host key, which `JoinAsync` already checked against the owner.
+- **Everything the transport and NGO read during startup is set first**: `targetSteamId`, `NetworkTransport`,
+  `ProtocolVersion` and `ConnectionData`.
+- **The scene arrives on its own.** Because the host loaded gameplay through `NetworkSceneManager`, NGO synchronizes the client
+  into the active scene during the connection. The client doesn't call `SceneManager.LoadScene` itself.
+
+### What success and failure look like
+
+`StartClient()` returning `true` only means the transport started dialing. FacepunchTransport's `StartClient()` always returns
+`true` after calling `ConnectRelay`. The real result arrives later through NGO's events:
+
+| Outcome | What NGO raises on the client |
+|---|---|
+| Connected and approved | `OnConnectionEvent` with `ConnectionEvent.ClientConnected` (and `OnClientConnectedCallback(LocalClientId)`) |
+| Rejected by approval | `OnClientDisconnectCallback`, with `NetworkManager.DisconnectReason` set to the host's `response.Reason` |
+| Host unreachable or wrong SteamId | `OnClientDisconnectCallback` after Steam's connection timeout |
+
+<Callout type="pitfall" title="Calling StartClient before targetSteamId is set">
+
+FacepunchTransport reads `targetSteamId` **inside** `StartClient()`, when it calls `ConnectRelay(targetSteamId)`.
+If the field is still 0, or still holds the host from your *previous* session, the transport happily dials the wrong peer,
+`StartClient()` still returns `true`, and the player stares at "Connecting…" until Steam's initial connection timeout expires. Set
+the field on every join, right before starting. A typical way to get this wrong is an `async` gap: kicking off `StartClient()` and
+then `await`ing the lobby join that would have provided the host.
+
+</Callout>
+
+<Callout type="pitfall" title="Lobby data version mismatch">
+
+Filtering the browser on `version` isn't enough, because invites and the friends list skip your filters entirely. A friend on last week's
+build accepts your invite, connects, and NGO's handshake fails on `ProtocolVersion` with an unhelpful disconnect. Worse, if you forgot to
+bump `ProtocolVersion`, the handshake succeeds and the game desyncs. Compare `version` after every join, show a clear message,
+and bump **both** constants in the same commit.
+
+</Callout>
+
+<Callout type="unity" title="Joining from inside a session">
+
+If `OnGameLobbyJoinRequested` fires while the player is already in a session, the sample refuses. A real game should show
+a dialog ("Leave this game and join Alex?") and, on confirmation, run the full teardown from [Disconnects](../disconnects/)
+before calling `JoinGame`. Starting a client on a NetworkManager that's still shutting down fails: `NetworkManager.ShutdownInProgress` tells you when that's the case.
+
+</Callout>
+
+<KeyTakeaways>
+
+- A client arrives through the **browser**, a **hot invite** (`OnGameLobbyJoinRequested`) or a **cold start** (`+connect_lobby <id>`). Route all three into one `JoinGame`.
+- Filter searches on a project-unique `game` key plus `version`, and remember that `RequestAsync()` returns `null` when nothing matches.
+- Use `Lobby.Join()` and check for `RoomEnter.Success`, then **re-validate game, version and host** because invites bypass filters.
+- Set `targetSteamId`, `NetworkTransport`, `ProtocolVersion` and `ConnectionData` **before** `StartClient()`.
+- `StartClient()` returning `true` means only "dialing". Success and failure arrive later through NGO's connection events.
+
+</KeyTakeaways>

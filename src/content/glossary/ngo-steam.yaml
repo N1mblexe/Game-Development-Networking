@@ -1,0 +1,147 @@
+terms:
+  - id: facepunch-transport
+    term: FacepunchTransport
+    aliases: [Facepunch transport, com.community.netcode.transport.facepunch]
+    short: A community NetworkTransport for NGO that carries NGO's packets over Steam Networking Sockets relay connections, using Facepunch.Steamworks.
+    long: >-
+      Lives in Unity's multiplayer-community-contributions repository. `StartServer` calls `CreateRelaySocket`, `StartClient` calls
+      `ConnectRelay(targetSteamId)`, and NGO's delivery types map to Steam's `SendType.Reliable` or `SendType.Unreliable`. The code on
+      `main` overrides `OnEarlyUpdate`, so it needs NGO 2.2.0 or later, even though its CHANGELOG still mentions NGO 1.0.0. Out of the box,
+      `GetCurrentRtt` returns 0 and `Shutdown` also shuts Steam down, which is why this course embeds and patches it.
+    lesson: ngo-steam/facepunch-transport
+    seeAlso: [target-steam-id, vendored-transport, transport-client-id]
+  - id: target-steam-id
+    term: targetSteamId
+    aliases: [target SteamId]
+    short: The public FacepunchTransport field holding the SteamId a client connects to. It's read inside StartClient(), so it must be set before every join.
+    long: >-
+      The host never sets it, because it listens on its own SteamId. Clients read the host's SteamId from the lobby's `host` key and assign
+      it right before `StartClient()`. A stale or zero value makes the transport dial the wrong peer, and the player waits for Steam's
+      connection timeout.
+    lesson: ngo-steam/facepunch-transport
+    seeAlso: [host-key, facepunch-transport]
+  - id: transport-client-id
+    term: Transport client id
+    aliases: [transport id]
+    short: The id a transport uses for a peer. In FacepunchTransport it's the Steam connection handle; NGO maps it to its own client id.
+    long: >-
+      Convert with `NetworkManager.GetClientIdFromTransportId` and `GetTransportIdFromClientId`. It's distinct from both the NGO client id
+      (0 for the host, then 1, 2, 3) and the player's SteamId, which the transport stores privately and never exposes.
+    lesson: ngo-steam/facepunch-transport
+    seeAlso: [steam-id-mapping, facepunch-transport]
+  - id: vendored-transport
+    term: Vendored transport
+    aliases: [embedded transport package]
+    short: A transport package copied into your project's Packages folder so you can patch it and version it with your game, instead of pulling it from a git URL.
+    long: >-
+      Unity treats a package inside `Packages/` as embedded and editable. This course vendors FacepunchTransport to swap its bundled
+      Facepunch.Steamworks 2.3.2 DLLs for 2.5.2, stop it from calling `SteamClient.Shutdown()`, make `GetCurrentRtt` report real values,
+      and log Steam's end reason on disconnects.
+    lesson: ngo-steam/facepunch-transport
+    seeAlso: [facepunch-transport]
+  - id: lobby-owner
+    term: Lobby owner
+    short: The one Steam lobby member allowed to write lobby data. Steam hands ownership to another member automatically when the owner leaves.
+    long: >-
+      In this module the lobby owner is also the NGO host and publishes its SteamId under the `host` key. Because ownership migrates but
+      the NGO host does not, clients check that the current owner still equals the `host` key before connecting.
+    lesson: ngo-steam/architecture
+    seeAlso: [host-key, host-migration]
+  - id: host-key
+    term: Host key
+    aliases: [host lobby key]
+    short: The lobby data entry where the NGO host publishes its own SteamId. Clients use it as targetSteamId instead of trusting lobby.Owner.
+    lesson: ngo-steam/host-flow
+    seeAlso: [lobby-owner, target-steam-id]
+  - id: lobby-version-key
+    term: Lobby version key
+    aliases: [version key]
+    short: A lobby data entry holding the host's build version, so browsers can filter on it and clients refuse an incompatible host before connecting.
+    long: >-
+      Invites and the friends list skip search filters, so the client compares it again after joining. Bump it together with NGO's
+      `NetworkConfig.ProtocolVersion`, which catches the same mismatch later, during the handshake.
+    lesson: ngo-steam/client-flow
+    seeAlso: [host-key]
+  - id: session-lifecycle
+    term: Session lifecycle
+    short: 'The ordered states a player passes through in an NGO + Steam game: boot, menu, in lobby, connecting, in session, teardown.'
+    long: >-
+      Most integration bugs live at a transition, for example publishing the lobby before NGO listens, or leaving the lobby before NGO has
+      finished shutting down.
+    lesson: ngo-steam/architecture
+    seeAlso: [session-teardown]
+  - id: connection-payload
+    term: Connection payload
+    aliases: [ConnectionData payload]
+    short: The bytes a client puts in NetworkConfig.ConnectionData before StartClient. Here it holds a version byte, the claimed SteamId and a Steam auth ticket.
+    long: >-
+      The host receives it as `ConnectionApprovalRequest.Payload`. Treat it as hostile: check its size and version before parsing, and
+      believe the SteamId only after Steam has validated the ticket.
+    lesson: ngo-steam/steam-auth-approval
+    seeAlso: [steam-auth-approval]
+  - id: steam-auth-approval
+    term: Steam auth approval
+    short: Gating NGO connection approval on Steam ticket validation. The host calls BeginAuthSession, keeps the response Pending, and decides on ValidateAuthTicketResponse.
+    long: >-
+      Needed because FacepunchTransport accepts every incoming connection. Every `BeginAuthSession` is paired with an `EndAuthSession` on
+      denial, timeout, disconnect or host teardown, and the auth timeout stays below NGO's `ClientConnectionBufferTimeout`.
+    lesson: ngo-steam/steam-auth-approval
+    seeAlso: [connection-payload, steam-id-mapping]
+  - id: steam-id-mapping
+    term: SteamId mapping
+    aliases: [SteamId to clientId map]
+    short: The two-way lookup between permanent SteamIds and short-lived NGO client ids. The host keeps a verified copy; every peer builds one from PlayerIdentity objects.
+    long: >-
+      Clients can't use `GetPlayerNetworkObject` for other players, so each peer registers spawned `PlayerIdentity` components. The host's
+      private map, written during approval, still works after a disconnecting player's objects have been despawned.
+    lesson: ngo-steam/player-identity
+    seeAlso: [transport-client-id, steam-auth-approval]
+  - id: avatar-cache
+    term: Avatar cache
+    short: A per-session store of Steam avatar textures keyed by SteamId, filled locally with SteamFriends.GetLargeAvatarAsync so images never cross the network.
+    lesson: ngo-steam/player-identity
+    seeAlso: [steam-id-mapping]
+  - id: session-teardown
+    term: Session teardown
+    short: The single, idempotent path that ends a session in the right order. NGO shuts down, auth sessions end or tickets are cancelled, the lobby is left and the menu returns.
+    long: >-
+      Every trigger (Leave, kick, denial, crash, quit) funnels into it. On a host, NGO's shutdown is soft and takes up to 5 seconds, so the
+      remaining steps run from `OnClientStopped`, not on the line after `Shutdown()`.
+    lesson: ngo-steam/disconnects
+    seeAlso: [session-lifecycle]
+  - id: host-migration
+    term: Host migration
+    short: Moving the authoritative simulation to another player without ending the game. NGO's client-server mode doesn't provide it.
+    long: >-
+      In a listen-server session, the authoritative state and every connection live on the host, and NGO has no protocol to elect a new
+      server or hand state over. Steam migrates lobby ownership, but that doesn't move the NGO host. Your options are ending the session,
+      offering reconnects, rehosting from a snapshot, or using a dedicated server.
+    lesson: ngo-steam/disconnects
+    seeAlso: [rehost, lobby-owner, session-snapshot]
+  - id: rehost
+    term: Rehost
+    short: A manual stand-in for host migration. A surviving player, usually the new lobby owner, starts a new NGO host from saved state and the others reconnect.
+    lesson: ngo-steam/disconnects
+    seeAlso: [host-migration, session-snapshot]
+  - id: session-snapshot
+    term: Session snapshot
+    short: A compact copy of the game's important state (progress, inventory, objectives), sent to clients periodically so a rehost can restore the session.
+    lesson: ngo-steam/disconnects
+    seeAlso: [rehost]
+  - id: transport-switcher
+    term: Transport switcher
+    aliases: [TransportSwitcher]
+    short: A small script that assigns Unity Transport in the editor and FacepunchTransport in Steam builds before NGO starts, so gameplay can be tested without Steam.
+    long: >-
+      It works because no NetworkBehaviour references Steam. Release builds always resolve to Steam, and a `-transport` command-line
+      override exists only in the editor and development builds.
+    lesson: ngo-steam/dev-workflow
+    seeAlso: [two-account-testing]
+  - id: two-account-testing
+    term: Two-account testing
+    short: Testing a Steam session with two Steam accounts on two machines, because one account can't meaningfully connect to its own SteamId.
+    long: >-
+      On your own App ID, the second account needs a license. Install the build through Steam (a beta branch) on both machines for the
+      final pass, so the restart check and the cold-start invite path run exactly as they will for players.
+    lesson: ngo-steam/dev-workflow
+    seeAlso: [transport-switcher]

@@ -1,0 +1,461 @@
+---
+title: 'Steam Auth in Connection Approval'
+order: 6
+summary: Put a Steam auth session ticket in NGO's ConnectionData, verify it on the host with SteamUser.BeginAuthSession while the approval is pending, approve or deny on Steam's answer, and end every auth session when the player leaves.
+durationMin: 30
+objectives:
+  - Explain why FacepunchTransport's accept-everyone behaviour makes approval mandatory
+  - Build a connection payload with a SteamId and a ticket bound to the host's identity
+  - Use ConnectionApprovalResponse.Pending to wait for ValidateAuthTicketResponse without blocking NGO
+  - Deny bad, duplicate, non-member and timed-out connections with a reason the client can show
+  - End auth sessions and cancel tickets at the right moments
+prerequisites: [ngo-steam/player-identity, ngo/connection-and-scenes, steam/auth-tickets, theory/security]
+tags: [ngo, steam, auth, connection-approval, security]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, patched as in lesson 2)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2 (GetAuthSessionTicketAsync takes a NetIdentity)' }
+sources:
+  - title: 'Steamworks docs: User Authentication and Ownership'
+    url: https://partner.steamgames.com/doc/features/auth
+  - title: 'Steamworks API: ISteamUser (GetAuthSessionTicket, BeginAuthSession, EndAuthSession, ValidateAuthTicketResponse_t)'
+    url: https://partner.steamgames.com/doc/api/ISteamUser
+  - title: 'Steamworks API: steam_api (EBeginAuthSessionResult, EAuthSessionResponse)'
+    url: https://partner.steamgames.com/doc/api/steam_api
+  - title: 'Facepunch.Steamworks 2.5.2: SteamUser.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/SteamUser.cs
+  - title: 'Facepunch.Steamworks 2.5.2: AuthTicket.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Classes/AuthTicket.cs
+  - title: 'NGO 2.13 manual: Connection approval'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/connection-approval.html
+  - title: 'NGO source v2.13.3: NetworkManager.cs (ConnectionApprovalResponse, host approval)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Core/NetworkManager.cs
+  - title: 'NGO source v2.13.3: NetworkConfig.cs (config hash includes ConnectionApproval)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Configuration/NetworkConfig.cs
+  - title: 'NGO source v2.13.3: NetworkConnectionManager.cs (ProcessPendingApprovals)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Connection/NetworkConnectionManager.cs
+  - title: 'FacepunchTransport.cs: ISocketManager.OnConnecting accepts every connection'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/blob/main/Transports/com.community.netcode.transport.facepunch/Runtime/FacepunchTransport.cs
+---
+
+A Unity scene door with a trigger collider lets in anything that walks into it. FacepunchTransport is that door. Its
+`ISocketManager.OnConnecting` calls `connection.Accept()` for **every** incoming connection. Anyone who knows the host's
+SteamId, including someone who never joined your lobby, can open a Steam connection to it and send NGO a connection
+request. In [lesson 4](../client-flow/) the client also put "who I am" in its payload, and nothing has checked that claim yet.
+
+<Term id="connection-approval">Connection approval</Term> is where you check. In this lesson the client proves its identity
+with a Steam <Term id="auth-session-ticket">auth session ticket</Term>, and the host asks Steam whether the ticket is genuine
+before NGO lets the player in. The pattern has a name in this course: <Term id="steam-auth-approval">Steam auth approval</Term>.
+
+## What a ticket proves
+
+Valve's authentication docs describe the peer-to-peer flow in four steps:
+
+<Steps>
+
+1. Client A calls `GetAuthSessionTicket` and sends the ticket to B.
+2. B passes the ticket to `BeginAuthSession`. This runs a quick local check and then forwards the ticket to Steam.
+3. Steam answers B with a `ValidateAuthTicketResponse_t` callback. Valve's wording: the backend confirms that "the ticket has not
+   been reused and was issued by the account owner of client A". It also checks that A owns a license for the current App ID.
+4. When the session ends, A calls `CancelAuthTicket` and B calls `EndAuthSession`.
+
+</Steps>
+
+So a valid ticket proves three things the payload can't prove by itself: **the SteamId is real, it belongs to the sender,
+and the account owns the game.** Current Steamworks SDKs also bind a ticket to the identity of whoever will verify it:
+`GetAuthSessionTicket` takes a `pIdentityRemote` parameter, which for peer-to-peer is "the user steam ID" of the other side. Facepunch 2.5.2 exposes that as `GetAuthSessionTicketAsync(NetIdentity)`. The client passes the
+host's SteamId, and if someone forwards the ticket to a different host, Steam answers `AuthTicketNetworkIdentityFailure`.
+
+<Callout type="note" title="Older Facepunch builds">
+
+Facepunch 2.3.2, the version bundled with FacepunchTransport, has `GetAuthSessionTicketAsync(double)` with **no**
+identity parameter. If code from an old tutorial doesn't compile, that's why. Lesson 2 replaced the bundled DLLs with 2.5.2.
+
+</Callout>
+
+## The handshake
+
+<Sequence
+  title="Steam auth inside NGO connection approval"
+  actors={[
+    { id: 'c', label: 'Client', kind: 'client' },
+    { id: 'st', label: 'Steam backend', kind: 'steam' },
+    { id: 'h', label: 'Host (NGO server)', kind: 'host' },
+  ]}
+  steps={[
+    { from: 'c', to: 'st', label: 'GetAuthSessionTicketAsync(host SteamId)', note: 'ticket bound to the host identity', kind: 'event' },
+    { from: 'st', to: 'c', label: 'GetAuthSessionTicketResponse_t: OK', kind: 'event' },
+    { from: 'c', to: 'c', label: 'ConnectionData = [version, SteamId, ticket]', note: 'set before StartClient', kind: 'local' },
+    { from: 'c', to: 'h', label: 'StartClient: relay connection, then ConnectionRequest + ConnectionData', kind: 'reliable' },
+    { from: 'h', to: 'h', label: 'Approval callback: parse, lobby member?, BeginAuthSession = OK', note: 'response.Pending = true', kind: 'local' },
+    { from: 'h', to: 'st', label: 'Steam validates the ticket', kind: 'event' },
+    { from: 'st', to: 'h', label: 'ValidateAuthTicketResponse_t: OK', note: 'a callback, pumped by SteamBootstrap', kind: 'event' },
+    { from: 'h', to: 'h', label: 'Record clientId and SteamId, Approved = true, then Pending = false', kind: 'local' },
+    { from: 'h', to: 'c', label: 'ConnectionApproved, scene sync, player object spawns', kind: 'reliable' },
+  ]}
+/>
+
+What you should notice:
+
+- **The ticket is ready before `StartClient`.** NGO sends `ConnectionData` inside the connection request, so lesson 4's `JoinGame` awaits
+  `PrepareClientPayloadAsync` first.
+- **The host doesn't block.** NGO's `ConnectionApprovalResponse` has a `Pending` flag. The manual says you can "keep a reference to the
+  ConnectionApprovalResponse object and write to it later", and NGO polls every pending response each frame until `Pending` is `false`.
+- **Steam is asked exactly once per connection.** The answer arrives as a callback, which `SteamBootstrap` pumps.
+- **The identity is recorded before the player spawns**, which is what lesson 5's `PlayerIdentity.AssignIdentity` relies on.
+
+## The connection payload
+
+`ConnectionData` is just a `byte[]`. Give your <Term id="connection-payload">connection payload</Term> a version byte so you can
+change the format later, and treat everything inside it as hostile until proven otherwise:
+
+| Bytes | Field | Notes |
+|---|---|---|
+| 1 | Payload version | `1`. Reject anything else with "update your game". |
+| 8 | Claimed SteamId | A claim. The ticket proves it. |
+| 2 | Ticket length | Valve says 1024 bytes is "typically" enough; Facepunch allocates 2560. |
+| n | Ticket bytes | Single-use. Never cache or resend. |
+
+<Callout type="steam" title="Why not just read the SteamId from the socket?">
+
+Steam does authenticate the relay connection, and FacepunchTransport even stores `info.Identity.SteamId` for each peer. But it
+keeps that value private, and the ticket check is what verifies **ownership** of your App ID. You need the ticket anyway, so it
+also becomes your single source of identity.
+
+</Callout>
+
+## SteamAuthApproval
+
+One component, both sides. The client half prepares the payload, and the host half runs approval and owns the verified map that
+`PlayerIdentity` reads.
+
+```csharp title="SteamAuthApproval.cs"
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
+using Steamworks;
+using Unity.Netcode;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    /// <summary>Steam auth tickets in NGO connection approval. Lives in the Boot scene.</summary>
+    public sealed class SteamAuthApproval : MonoBehaviour
+    {
+        private const byte PayloadVersion = 1;
+        private const int MaxPayloadBytes = 4096;
+
+        [Tooltip("Keep this below NetworkConfig.ClientConnectionBufferTimeout (10 s by default).")]
+        [SerializeField] private float authTimeoutSeconds = 8f;
+
+        public static SteamAuthApproval Instance { get; private set; }
+        private static NetworkManager Net => NetworkManager.Singleton;
+
+        private sealed class PendingAuth
+        {
+            public ulong ClientId;
+            public NetworkManager.ConnectionApprovalResponse Response;
+            public float Deadline;
+        }
+
+        // Host side.
+        private readonly Dictionary<ulong, SteamId> clientToSteam = new();
+        private readonly Dictionary<ulong, ulong> steamToClient = new();
+        private readonly Dictionary<ulong, PendingAuth> pending = new();   // keyed by SteamId
+
+        // Client side.
+        private AuthTicket clientTicket;
+
+        private void Awake()
+        {
+            if (Instance != null) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+
+        private void OnEnable() => SteamUser.OnValidateAuthTicketResponse += HandleValidateResponse;
+        private void OnDisable() => SteamUser.OnValidateAuthTicketResponse -= HandleValidateResponse;
+
+        public bool TryGetSteamId(ulong clientId, out SteamId steamId) => clientToSteam.TryGetValue(clientId, out steamId);
+        public bool TryGetClientId(SteamId steamId, out ulong clientId) => steamToClient.TryGetValue(steamId, out clientId);
+
+        // ------------------------------------------------------------------ client
+        /// <summary>Gets a fresh ticket for this host and writes NetworkConfig.ConnectionData.</summary>
+        public async Task<bool> PrepareClientPayloadAsync(SteamId host)
+        {
+            CancelClientTicket();                               // tickets are single-use
+            Net.NetworkConfig.ConnectionApproval = true;        // part of NGO's config hash: must match the host
+
+            clientTicket = await SteamUser.GetAuthSessionTicketAsync(host);   // SteamId converts to NetIdentity
+            if (clientTicket == null) return false;             // timed out or Steam said no
+
+            Net.NetworkConfig.ConnectionData = WritePayload(SteamClient.SteamId, clientTicket.Data);
+            return true;
+        }
+
+        /// <summary>Call when leaving a session (lesson 7). Steam then tells the host the ticket is gone.</summary>
+        public void CancelClientTicket()
+        {
+            clientTicket?.Cancel();
+            clientTicket = null;
+        }
+
+        // ------------------------------------------------------------------ host
+        public void ConfigureHost()
+        {
+            EndAllSessions();
+            Net.NetworkConfig.ConnectionApproval = true;
+            Net.ConnectionApprovalCallback = Approve;           // NGO allows exactly one callback
+            Net.OnConnectionEvent -= HandleConnectionEvent;
+            Net.OnConnectionEvent += HandleConnectionEvent;
+        }
+
+        private void Approve(NetworkManager.ConnectionApprovalRequest request,
+                             NetworkManager.ConnectionApprovalResponse response)
+        {
+            response.CreatePlayerObject = true;
+
+            // The host's own client: NGO approves it no matter what we say, and it has nothing to prove.
+            if (request.ClientNetworkId == NetworkManager.ServerClientId)
+            {
+                if (SteamClient.IsValid) Record(NetworkManager.ServerClientId, SteamClient.SteamId);
+                response.Approved = true;
+                return;
+            }
+
+            // Unity Transport dev sessions (lesson 8) have no Steam to ask.
+            if (!TransportSwitcher.UsesSteam) { response.Approved = true; return; }
+
+            if (!TryReadPayload(request.Payload, out SteamId claimed, out byte[] ticket))
+            { Deny(response, "Bad connection data. Please update your game."); return; }
+
+            if (!SteamLobbyService.Instance.IsMember(claimed))
+            { Deny(response, "Join the Steam lobby before connecting."); return; }
+
+            if (steamToClient.ContainsKey(claimed) || pending.ContainsKey(claimed))
+            { Deny(response, "That Steam account is already in this session."); return; }
+
+            if (Net.ConnectedClientsIds.Count + pending.Count >= SessionKeys.MaxPlayers)
+            { Deny(response, "The session is full."); return; }
+
+            // A quick local check only. Identity is NOT confirmed until the callback arrives.
+            BeginAuthResult begin = SteamUser.BeginAuthSession(ticket, claimed);
+            if (begin != BeginAuthResult.OK)
+            { Deny(response, $"Steam rejected the ticket ({begin})."); return; }
+
+            response.Pending = true;                            // NGO keeps polling this object
+            pending[claimed] = new PendingAuth
+            {
+                ClientId = request.ClientNetworkId,
+                Response = response,
+                Deadline = Time.realtimeSinceStartup + authTimeoutSeconds,
+            };
+        }
+
+        private void HandleValidateResponse(SteamId steamId, SteamId ownerId, AuthResponse result)
+        {
+            if (pending.Remove(steamId, out PendingAuth wait))
+            {
+                if (result == AuthResponse.OK)
+                {
+                    Record(wait.ClientId, steamId);
+                    wait.Response.Approved = true;
+                    if (ownerId != steamId) Debug.Log($"[Auth] {steamId} plays a copy owned by {ownerId} (Family Sharing).");
+                }
+                else
+                {
+                    SteamUser.EndAuthSession(steamId);
+                    Deny(wait.Response, $"Steam authentication failed ({result}).");
+                }
+                wait.Response.Pending = false;                  // last: NGO acts as soon as this flips
+                return;
+            }
+
+            // Steam can also revoke a session later: ticket cancelled, license lost, VAC ban.
+            if (result != AuthResponse.OK && steamToClient.TryGetValue(steamId, out ulong clientId))
+            {
+                Debug.LogWarning($"[Auth] {steamId} is no longer valid ({result}). Disconnecting client {clientId}.");
+                Net.DisconnectClient(clientId, "Your Steam session is no longer valid.");
+            }
+        }
+
+        private void Update()
+        {
+            if (pending.Count == 0) return;
+
+            List<ulong> expired = null;
+            foreach (KeyValuePair<ulong, PendingAuth> pair in pending)
+                if (Time.realtimeSinceStartup > pair.Value.Deadline) (expired ??= new List<ulong>()).Add(pair.Key);
+            if (expired == null) return;
+
+            foreach (ulong steamId in expired)
+            {
+                PendingAuth wait = pending[steamId];
+                pending.Remove(steamId);
+                SteamUser.EndAuthSession(steamId);
+                Deny(wait.Response, "Steam didn't confirm your ticket in time. Try again.");
+                wait.Response.Pending = false;
+            }
+        }
+
+        private void HandleConnectionEvent(NetworkManager manager, ConnectionEventData data)
+        {
+            if (!manager.IsServer || data.EventType != ConnectionEvent.ClientDisconnected) return;
+            if (!clientToSteam.Remove(data.ClientId, out SteamId steamId)) return;
+
+            steamToClient.Remove(steamId);
+            if (data.ClientId != NetworkManager.ServerClientId)
+                SteamUser.EndAuthSession(steamId);              // "no longer playing with" this user
+        }
+
+        /// <summary>Host teardown (lesson 7): end every session we began.</summary>
+        public void EndAllSessions()
+        {
+            if (SteamClient.IsValid)
+            {
+                foreach (ulong steamId in steamToClient.Keys)
+                    if (steamId != SteamClient.SteamId) SteamUser.EndAuthSession(steamId);
+                foreach (ulong steamId in pending.Keys)
+                    SteamUser.EndAuthSession(steamId);
+            }
+            clientToSteam.Clear();
+            steamToClient.Clear();
+            pending.Clear();
+        }
+
+        // ------------------------------------------------------------------ helpers
+        private void Record(ulong clientId, SteamId steamId)
+        {
+            clientToSteam[clientId] = steamId;
+            steamToClient[steamId] = clientId;
+        }
+
+        private static void Deny(NetworkManager.ConnectionApprovalResponse response, string reason)
+        {
+            response.Approved = false;
+            response.CreatePlayerObject = false;
+            response.Reason = reason;                           // the client reads it from NetworkManager.DisconnectReason
+        }
+
+        private static byte[] WritePayload(SteamId steamId, byte[] ticket)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream);
+            writer.Write(PayloadVersion);
+            writer.Write(steamId.Value);
+            writer.Write((ushort)ticket.Length);
+            writer.Write(ticket);
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        private static bool TryReadPayload(byte[] payload, out SteamId steamId, out byte[] ticket)
+        {
+            steamId = 0;
+            ticket = null;
+            if (payload == null || payload.Length < 11 || payload.Length > MaxPayloadBytes) return false;
+
+            using var reader = new BinaryReader(new MemoryStream(payload));
+            if (reader.ReadByte() != PayloadVersion) return false;
+            steamId = reader.ReadUInt64();
+            int length = reader.ReadUInt16();
+            ticket = reader.ReadBytes(length);                  // returns fewer bytes if the payload lies
+            return length > 0 && ticket.Length == length && steamId.IsValid;
+        }
+    }
+}
+```
+
+Add the lobby membership check to the service from lessons 3 and 4 as a third part of the partial class:
+
+```csharp title="SteamLobbyService.Members.cs"
+using System.Linq;
+using Steamworks;
+
+namespace Campfire.Net
+{
+    public sealed partial class SteamLobbyService
+    {
+        /// <summary>True if this SteamId is currently a member of our lobby.</summary>
+        public bool IsMember(SteamId id) => Current.HasValue && Current.Value.Members.Any(m => m.Id == id);
+    }
+}
+```
+
+What you should notice:
+
+- **Cheap checks first.** Parsing, lobby membership, duplicates and capacity cost nothing. Only a plausible request reaches Steam.
+- **`Pending = false` is written last.** NGO's doc comment on `Pending` warns you to set every other member before clearing it,
+  because NGO reads the response on the next frame it sees `Pending == false`.
+- **Every `BeginAuthSession` has a matching `EndAuthSession`**: on failure, on timeout, on disconnect and on host teardown.
+- **The host approves itself without a ticket.** In NGO 2.13, `StartHost` calls your callback for client 0 synchronously and ignores
+  `Pending`. If you deny the host, NGO logs "You cannot decline the host connection" and approves it anyway.
+
+## What the client sees
+
+On a denial, NGO sends the `Reason` string to the client before disconnecting it, and the client can read it in
+`NetworkManager.DisconnectReason` from its disconnect callback. That gives you real error messages instead of "Connection lost":
+
+| Situation | `BeginAuthSession` or callback result | Reason the client sees |
+|---|---|---|
+| Ticket bytes corrupted | `BeginAuthResult.InvalidTicket` | "Steam rejected the ticket (InvalidTicket)." |
+| Same account connects twice | caught before Steam, or `DuplicateRequest` | "That Steam account is already in this session." |
+| Ticket made for a different host | `AuthResponse.AuthTicketNetworkIdentityFailure` | "Steam authentication failed (...)." |
+| Account doesn't own the game | `AuthResponse.NoLicenseOrExpired` | "Steam authentication failed (...)." |
+| Steam slow or offline | no callback within 8 s | "Steam didn't confirm your ticket in time." |
+
+Lesson 7 shows the client side of this: reading `DisconnectReason` and returning to the menu with the message.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Turning approval on only on the host">
+
+`NetworkConfig.ConnectionApproval` is one of the fields NGO hashes into its config check, together with `ProtocolVersion`, the tick
+rate and a few others. If the host has approval on and the client doesn't, the hashes differ and the host drops the client
+before your callback ever runs. That's why `PrepareClientPayloadAsync` sets it on the client too.
+
+</Callout>
+
+<Callout type="pitfall" title="Reusing a ticket">
+
+Tickets are single-use. Valve's docs: "Session Tickets must only be used once." If your client caches the ticket from its first
+attempt and resends it on a retry, the host gets `AuthTicketInvalidAlreadyUsed`. Cancel the old ticket and request a fresh one
+for every connection attempt, which is what `PrepareClientPayloadAsync` does.
+
+</Callout>
+
+<Callout type="pitfall" title="An auth timeout longer than NGO's">
+
+NGO drops a pending connection after `ClientConnectionBufferTimeout` seconds (10 by default), counted from the
+transport connection. If your own timeout is longer, NGO silently drops the client first and your `Reason` never reaches it.
+Keep your timeout a couple of seconds shorter.
+
+</Callout>
+
+<Callout type="pitfall" title="Forgetting EndAuthSession">
+
+Every auth session you begin stays registered with Steam until you end it. Skip `EndAuthSession` on disconnect and the same
+friend's next attempt in this session can fail with `DuplicateRequest`. Valve's guidance is to call it "when no longer playing with
+the specified entity".
+
+</Callout>
+
+<Callout type="unity" title="ConnectionData isn't encrypted by NGO">
+
+The NGO manual warns that connection data isn't encrypted or authenticated by NGO itself. On FacepunchTransport, the bytes travel over
+Steam's relay, which Valve describes as authenticated and encrypted, and the ticket is bound to the host's identity anyway. On Unity
+Transport in the editor, treat the payload as plain text, which is fine because it carries no ticket there.
+
+</Callout>
+
+<KeyTakeaways>
+
+- FacepunchTransport accepts **every** connection, so connection approval is your only gate. Turn it on for host **and** clients, because it's part of NGO's config hash.
+- The client sends a versioned payload with its SteamId and a **fresh, single-use** ticket from `GetAuthSessionTicketAsync(host)`, set before `StartClient`.
+- The host runs cheap checks, calls `BeginAuthSession`, sets `response.Pending = true`, and finishes in `OnValidateAuthTicketResponse`. Set `Approved` and `Reason` before clearing `Pending`.
+- Keep the auth timeout below `ClientConnectionBufferTimeout`, and give every denial a `Reason` the client can show.
+- Pair every `BeginAuthSession` with `EndAuthSession`, and have clients `Cancel()` their ticket when they leave.
+
+</KeyTakeaways>

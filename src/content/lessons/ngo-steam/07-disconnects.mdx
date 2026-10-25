@@ -1,0 +1,387 @@
+---
+title: 'Disconnects, Teardown and the Missing Host Migration'
+order: 7
+summary: Handle every way a session ends with one teardown path. Clients return to the menu when the host leaves, a leaving client's objects are despawned, lobbies and auth sessions are cleaned up, and you choose a strategy for NGO's lack of host migration.
+durationMin: 30
+objectives:
+  - Trace what NGO, FacepunchTransport and the Steam lobby each do when a host or client leaves, quits or crashes
+  - Write one idempotent teardown that shuts down NGO, ends auth, leaves the lobby and returns to the menu
+  - Show the player a meaningful reason by reading NetworkManager.DisconnectReason at the right moment
+  - Explain why OnTransportFailure never fires with FacepunchTransport, and what to listen to instead
+  - Explain why NGO's client-server mode has no host migration and pick a coping strategy
+prerequisites: [ngo-steam/steam-auth-approval, ngo/connection-and-scenes, ngo/network-objects, steam/lobbies]
+tags: [ngo, steam, disconnect, teardown, host-migration]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, patched as in lesson 2)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'NGO source v2.13.3: NetworkManager.cs (soft host shutdown, OnTransportFailure, OnClientStopped)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Core/NetworkManager.cs
+  - title: 'NGO source v2.13.3: NetworkConnectionManager.cs (disconnect handling, despawning owned objects)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Connection/NetworkConnectionManager.cs
+  - title: 'NGO 2.13 manual: Connection events'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/connection-events.html
+  - title: 'NGO 2.13 manual: Reconnecting mid-game'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/reconnecting-mid-game.html
+  - title: 'NGO 2.13 manual: Session management'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/session-management.html
+  - title: 'NGO 2.13 manual: NetworkObject (DontDestroyWithOwner)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkobject.html
+  - title: 'NGO 2.13 manual: Network topologies (client-server vs distributed authority)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/terms-concepts/network-topologies.html
+  - title: 'FacepunchTransport.cs: OnDisconnected raises NetworkEvent.Disconnect, never TransportFailure'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/blob/main/Transports/com.community.netcode.transport.facepunch/Runtime/FacepunchTransport.cs
+  - title: 'Facepunch.Steamworks 2.5.2: ConnectionManager.cs (ClosedByPeer, ProblemDetectedLocally)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Networking/ConnectionManager.cs
+  - title: 'Facepunch.Steamworks 2.5.2: SteamMatchmaking.cs (OnLobbyMemberLeave, OnLobbyMemberDisconnected, OnLobbyDataChanged)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/SteamMatchmaking.cs
+  - title: 'Steamworks docs: Matchmaking & Lobbies (ownership passes to another member)'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+  - title: 'Steamworks docs: User Authentication and Ownership (CancelAuthTicket, EndAuthSession)'
+    url: https://partner.steamgames.com/doc/features/auth
+---
+
+Unity developers learn the hard way that `OnDestroy` order isn't guaranteed, and that half the bugs in a scene
+transition are about who cleans up what. Multiplayer sessions have the same problem with three systems instead of one.
+When a session ends, NGO has to shut down, Steam's auth sessions have to end, the player has to leave the lobby, rich
+presence has to be cleared and the menu has to come back, and all of that has to happen whether the player clicked
+**Leave**, got kicked, lost Wi-Fi or watched the host's PC crash.
+
+The rule for this lesson: **many triggers, one teardown.** Every way a session can end funnels into the same method.
+This lesson calls that method the <Term id="session-teardown">session teardown</Term>.
+
+## Four ways a session ends
+
+| Event | Who notices first | Through what | How fast |
+|---|---|---|---|
+| Host clicks Leave | Clients | NGO disconnect with the reason "Disconnected due to host shutting down." | Immediately |
+| Host crashes or loses its connection | Clients | Steam connection timeout, then NGO `Disconnect`. Often the lobby notices first. | Seconds (Steam's timeout) |
+| Client clicks Leave | Host | Steam `ClosedByPeer`, then NGO `ClientDisconnected` | Immediately |
+| Client crashes or drops | Host | Steam timeout (`ProblemDetectedLocally`), then NGO `ClientDisconnected` | Seconds (Steam's timeout) |
+
+Facepunch's `ConnectionManager` and `SocketManager` treat `ClosedByPeer`, `ProblemDetectedLocally` and `None` the same way: they
+call `OnDisconnected`, and FacepunchTransport turns that into `NetworkEvent.Disconnect`. The Steam end reason (for example
+`Remote_Timeout` or `Misc_Timeout`) is available in `info.EndReason`, but the transport doesn't pass it on. Lesson 8 patches the
+transport to at least log it.
+
+## When the host leaves
+
+<Sequence
+  title="Host clicks Leave: NGO's soft shutdown, then the lobby"
+  actors={[
+    { id: 'h', label: 'Host', kind: 'host' },
+    { id: 'c', label: 'Client', kind: 'client' },
+    { id: 'st', label: 'Steam backend', kind: 'steam' },
+  ]}
+  steps={[
+    { from: 'h', to: 'st', label: 'Lobby.SetJoinable(false)', note: 'nobody new joins a dying session', kind: 'event' },
+    { from: 'h', to: 'h', label: 'NetworkManager.Shutdown()', note: 'NGO starts a soft shutdown', kind: 'local' },
+    { from: 'h', to: 'c', label: 'DisconnectReason: "Disconnected due to host shutting down."', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'ClientDisconnected: read DisconnectReason, NGO shuts the client down', kind: 'local' },
+    { from: 'c', to: 'h', label: 'Relay connection closed', note: 'host waits up to 5 s for clients to go', kind: 'reliable' },
+    { from: 'h', to: 'h', label: 'OnClientStopped(true): EndAllSessions, Lobby.Leave, menu', kind: 'local' },
+    { from: 'c', to: 'c', label: 'OnClientStopped(false): cancel ticket, Lobby.Leave, menu with the reason', kind: 'local' },
+    { from: 'st', to: 'c', label: 'Lobby member left (ownership has moved)', note: 'harmless: the client is already tearing down', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- **`Shutdown()` doesn't finish immediately on a host.** In NGO 2.13, a host with connected clients first calls
+  `DisconnectClient(id, reason)` for each of them, then waits until they're gone or 5 seconds
+  have passed, and only then runs its internal shutdown. So your teardown must continue in `OnClientStopped` or `OnServerStopped`,
+  not on the line after `Shutdown()`.
+- **The client doesn't call `Shutdown()` itself.** When a client's NGO receives a disconnect for the server, it shuts down on its own
+  (unless a shutdown is already in progress). Your job on the client is to react to the stop, not to cause it.
+- **The lobby goes last on the host**, so clients receive NGO's reason before Steam tells them the host left.
+
+If the host **crashes**, the first three steps never happen. Each client's Steam connection eventually times out, and in the meantime
+Steam usually reports the host's departure through `OnLobbyMemberDisconnected` or `OnLobbyMemberLeave`. Lesson 3's
+`SteamLobbyService` already turns that into a `HostLeftLobby` event. Treat it as a reason to end the session **now** instead of waiting
+for the timeout.
+
+## When a client leaves
+
+<Sequence
+  title="A client leaves or crashes"
+  actors={[
+    { id: 'c', label: 'Leaving client', kind: 'client' },
+    { id: 'h', label: 'Host', kind: 'host' },
+    { id: 'o', label: 'Other clients', kind: 'client' },
+    { id: 'st', label: 'Steam backend', kind: 'steam' },
+  ]}
+  steps={[
+    { from: 'c', to: 'h', label: 'Connection closed (or times out after a crash)', kind: 'reliable' },
+    { from: 'h', to: 'h', label: 'Despawn the player object and every object it owns', note: 'unless DontDestroyWithOwner', kind: 'local' },
+    { from: 'h', to: 'o', label: 'Despawn messages', kind: 'reliable' },
+    { from: 'h', to: 'h', label: 'ClientDisconnected: EndAuthSession(steamId)', note: 'SteamAuthApproval, lesson 6', kind: 'local' },
+    { from: 'h', to: 'o', label: 'PeerDisconnected event', kind: 'event' },
+    { from: 'c', to: 'st', label: 'CancelAuthTicket, Lobby.Leave', note: 'skipped on a crash; Steam cleans up the member', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- **Despawning comes first.** NGO's `OnClientDisconnectFromServer` despawns the player object and all objects the client owned, and only
+  then raises `OnClientDisconnectCallback` and the `ClientDisconnected` connection event. By the time your handler runs, the player's
+  `PlayerIdentity` is gone, which is why the host keeps the verified <Term id="steam-id-mapping">SteamId mapping</Term> separately.
+- **`DontDestroyWithOwner` keeps an object alive.** Set it on a `NetworkObject` and NGO removes the ownership instead, giving the object
+  back to the server. Use it for things that should outlive their owner, such as a car the player was driving or a placed turret.
+- **Other clients learn about it twice:** from the despawn messages and from `ConnectionEvent.PeerDisconnected`.
+
+To keep a dropped friend's progress for a reconnect, save it on the host while the object still exists, keyed by SteamId, as the NGO
+session management page recommends with a persistent id:
+
+```csharp title="PlayerProgress.cs"
+using System.Collections.Generic;
+using Unity.Netcode;
+
+namespace Campfire.Net
+{
+    /// <summary>Example: remembers a player's score across reconnects within one host session.</summary>
+    public sealed class PlayerProgress : NetworkBehaviour
+    {
+        private static readonly Dictionary<ulong, int> s_SavedScores = new();   // SteamId to score, host only
+
+        public NetworkVariable<int> Score = new();
+
+        public override void OnNetworkSpawn()
+        {
+            if (IsServer && SteamAuthApproval.Instance.TryGetSteamId(OwnerClientId, out var id)
+                         && s_SavedScores.TryGetValue(id, out int saved))
+                Score.Value = saved;                    // welcome back
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            // Runs on the host before ClientDisconnected, so the SteamId is still mapped.
+            if (IsServer && SteamAuthApproval.Instance.TryGetSteamId(OwnerClientId, out var id))
+                s_SavedScores[id] = Score.Value;
+        }
+
+        public static void ClearSaved() => s_SavedScores.Clear();   // call from teardown
+    }
+}
+```
+
+## OnTransportFailure, and why you won't see it
+
+NGO has a dedicated event for a broken transport: `NetworkManager.OnTransportFailure`. Its documentation says that a transport failure
+"is always followed by the NetworkManager shutting down". NGO raises it in two situations: the transport reports
+`NetworkEvent.TransportFailure`, or `StartClient()`/`StartServer()` on the transport returns `false`.
+
+FacepunchTransport does neither. Its `StartClient()` and `StartServer()` always return `true`, and every lost connection, including a
+connection that never got established, is reported as a plain `NetworkEvent.Disconnect`. With Steam, a failure looks exactly like a
+disconnect. Unity Transport does raise it, for example when a Unity Relay allocation becomes invalid, so subscribe anyway for the
+editor path from lesson 8, but build your Steam error handling on the disconnect and stop events.
+
+## The teardown
+
+This is the `SessionTeardown` part of `NetworkLauncher` that lesson 1 promised. Add a call to `HookSessionEvents()` as the first line of
+the `Start()` method from lesson 4.
+
+```csharp title="NetworkLauncher.Teardown.cs"
+using System;
+using Unity.Netcode;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    public sealed partial class NetworkLauncher
+    {
+        /// <summary>Raised once per session end, with a message for the player (null for a normal host exit).</summary>
+        public static event Action<string> SessionEnded;
+
+        private string pendingReason;
+        private bool quitAfterTeardown;
+        private bool tornDown = true;
+
+        private void HookSessionEvents()
+        {
+            Net.OnClientStarted += () => tornDown = false;
+            Net.OnConnectionEvent += HandleConnectionEvent;
+            Net.OnClientStopped += HandleClientStopped;
+            Net.OnTransportFailure += () => pendingReason ??= "Network failure.";
+            Lobbies.HostLeftLobby += () => EndSession("The host left the game.");
+        }
+
+        /// <summary>Leave button, kicks, errors: every path ends here. Safe to call more than once.</summary>
+        public void EndSession(string reason = null)
+        {
+            pendingReason ??= reason;                    // keep the first, most specific reason
+
+            if (Net != null && Net.IsListening)
+            {
+                if (Net.IsHost) Lobbies.Lock();          // no new joiners while we shut down
+                if (!Net.ShutdownInProgress) Net.Shutdown();
+                return;                                  // FinishTeardown runs from OnClientStopped
+            }
+            FinishTeardown(wasHost: false);
+        }
+
+        /// <summary>Quit button: tear down properly first, then quit.</summary>
+        public void QuitGame()
+        {
+            quitAfterTeardown = true;
+            EndSession();                                // quits from FinishTeardown
+        }
+
+        private void HandleConnectionEvent(NetworkManager manager, ConnectionEventData data)
+        {
+            // On a client, this is the moment DisconnectReason is meaningful.
+            if (!manager.IsServer && data.EventType == ConnectionEvent.ClientDisconnected)
+                pendingReason ??= Friendly(manager.DisconnectReason);
+        }
+
+        private void HandleClientStopped(bool wasHost) => FinishTeardown(wasHost);
+
+        private void FinishTeardown(bool wasHost)
+        {
+            if (tornDown && !quitAfterTeardown) return;  // already done for this session
+            tornDown = true;
+
+            if (wasHost)
+            {
+                SteamAuthApproval.Instance.EndAllSessions();
+                PlayerProgress.ClearSaved();
+            }
+            else
+            {
+                SteamAuthApproval.Instance.CancelClientTicket();
+            }
+
+            Lobbies.Leave();                             // also clears rich presence (lesson 3)
+            AvatarCache.Clear();
+
+            string reason = pendingReason;
+            pendingReason = null;
+
+            if (quitAfterTeardown) { Application.Quit(); return; }
+
+            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != menuScene)
+                UnityEngine.SceneManagement.SceneManager.LoadScene(menuScene);   // NGO is stopped: plain scene load
+            SessionEnded?.Invoke(reason);
+        }
+
+        private static string Friendly(string raw)
+        {
+            // NGO's own text starts with "[Disconnect Event]" and is meant for logs, not players.
+            if (string.IsNullOrEmpty(raw) || raw.StartsWith("[Disconnect Event]"))
+                return "Lost connection to the host.";
+            return raw;                                  // a host-sent reason: approval denial, kick, host shutdown
+        }
+    }
+}
+```
+
+What you should notice:
+
+- **One exit.** The Leave button, a kick, an approval denial, a host crash, a lobby event and the Quit button all end in `FinishTeardown`.
+  It runs once per session thanks to `tornDown`, which `OnClientStarted` resets.
+- **The reason is captured early.** `DisconnectReason` returns the host's message (an approval `Reason`, a kick reason or the shutdown
+  message) when there is one, and NGO's technical text otherwise. Read it in the disconnect event, not after the scene has changed.
+- **Order on the host:** lock the lobby, soft-shutdown NGO, then end auth sessions and leave the lobby once NGO has stopped.
+- **The menu load is a plain `SceneManager.LoadScene`.** NGO is no longer running, so `NetworkSceneManager` isn't available.
+
+## Why NGO has no host migration
+
+<Term id="host-migration">Host migration</Term> sounds like a feature NGO forgot. It's really a consequence of the
+<Term id="listen-server">listen server</Term> design:
+
+- **The truth lives on the host.** The authoritative values of every NetworkVariable, every server-only field, AI state and
+  physics live in one process. Clients have replicas, and only of what they can see: hidden objects and server-only data were never sent.
+- **Every connection points at the host.** Client ids, transport ids and Steam connections all describe a star with the host at the
+  center. There's no client-to-client link to fall back on.
+- **NGO's client-server protocol has no election or hand-over step.** The NGO manual's reconnecting and session management pages describe
+  clients reconnecting to the **same** server. Neither describes moving the server.
+
+NGO's **distributed authority** topology does have a session owner that can be promoted (`OnSessionOwnerPromoted`), but it runs on Unity's
+hosted service rather than a Steam relay socket. For a Steam listen server, you choose a strategy:
+
+| Strategy | Player experience | Work |
+|---|---|---|
+| **End the session** (this lesson) | "The host left the game." Back to the menu. | Done |
+| **Reconnect window for clients** | A dropped client rejoins and gets its progress back | `PlayerProgress`-style state keyed by SteamId, plus a "Rejoin" button that calls `JoinGame(lobbyId)` |
+| **<Term id="rehost">Rehost</Term> with a snapshot** | A 5 to 15 second "Host migrating..." screen, then play continues | Snapshots, a successor rule, a rejoin flow. Sketched below. |
+| **Dedicated server** | The host can't leave because nobody is the host | A Steam game server build and hosting costs. A different architecture. |
+
+### Sketch: rehosting with the new lobby owner
+
+Steam has already solved the hardest part, which is choosing a successor: when the owner leaves, Steam makes another member the
+<Term id="lobby-owner">lobby owner</Term>. A rehost uses that choice.
+
+<Steps>
+
+1. While playing, the host sends a compact <Term id="session-snapshot">session snapshot</Term> (progress, inventory, objectives, not
+   positions) to every client every few seconds with a reliable RPC.
+2. When the host disappears, every client ends its NGO session **but stays in the lobby**: call `Net.Shutdown()` without the lobby
+   leave in `FinishTeardown`.
+3. The new lobby owner calls `StartHost()`, restores the latest snapshot and writes its own SteamId into the
+   <Term id="host-key">host key</Term>. Because it's now the owner, it's allowed to write lobby data.
+4. The others watch `OnLobbyDataChanged`. When the `host` key changes to the current owner, they get a fresh ticket and
+   call `StartClient()`, which is lesson 4's `JoinGame` without the lobby join.
+5. Give up after a timeout (say 20 seconds) and fall back to "end the session".
+
+</Steps>
+
+```csharp title="RehostWatcher.cs (sketch)"
+// Client side of step 4: wait for a new host key, then reconnect.
+private void HandleLobbyDataChanged(Steamworks.Data.Lobby lobby)
+{
+    if (!Lobbies.IsInLobby || lobby.Id != Lobbies.Current.Value.Id || !awaitingRehost) return;
+
+    var host = Lobbies.HostSteamId;
+    if (host.IsValid && lobby.IsOwnedBy(host) && host != Steamworks.SteamClient.SteamId)
+    {
+        awaitingRehost = false;
+        ReconnectToHost(host);   // PrepareClientPayloadAsync(host), set targetSteamId, StartClient()
+    }
+}
+```
+
+Anything that isn't in the snapshot is lost in a rehost, and every client gets a new client id. Build it only if your sessions are
+long enough that losing them hurts.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Leaving the lobby on the line after Shutdown()">
+
+`NetworkManager.Shutdown()` on a host with clients is a soft shutdown that can take up to 5 seconds. If you `Lobby.Leave()` and load the
+menu on the next line, the menu loads while NGO is still disconnecting clients, and objects from the gameplay scene can be destroyed under it.
+Continue from `OnClientStopped`.
+
+</Callout>
+
+<Callout type="pitfall" title="Waiting for OnTransportFailure on Steam">
+
+A handler that shows "Connection lost" only from `OnTransportFailure` never runs with FacepunchTransport. Every Steam failure, including
+"couldn't reach the host at all", arrives as a disconnect followed by `OnClientStopped`.
+
+</Callout>
+
+<Callout type="pitfall" title="Looking up the player object in the disconnect callback">
+
+On the host, the disconnecting client's objects are already despawned when `OnClientDisconnectCallback` and `ClientDisconnected` run.
+Save per-player state in `OnNetworkDespawn`, and look up the SteamId in the host's own map.
+
+</Callout>
+
+<Callout type="steam" title="Ghost lobbies">
+
+A host that quits without `Lobby.Leave()` leaves a lobby with a member who isn't there until Steam notices. Others may still find it in the
+browser. Leave explicitly on every path, including the Quit button, and lock the lobby as the first teardown step.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Route every ending, whether Leave, kick, denial, crash or quit, into **one idempotent teardown** that runs from `OnClientStopped`.
+- A host `Shutdown()` is a **soft shutdown**: NGO sends "Disconnected due to host shutting down." and waits up to 5 s. Clients shut themselves down when the host goes.
+- On the host, a leaving client's player and owned objects are **despawned before** `ClientDisconnected` fires, unless `DontDestroyWithOwner` is set.
+- FacepunchTransport never raises `OnTransportFailure`. Every Steam failure is a disconnect, so read `DisconnectReason` in the disconnect event.
+- NGO's client-server mode has **no host migration**, because the authoritative state and every connection live on the host. End the session, offer reconnects, or rehost from a snapshot.
+
+</KeyTakeaways>

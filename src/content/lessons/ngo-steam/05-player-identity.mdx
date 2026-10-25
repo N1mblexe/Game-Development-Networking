@@ -1,0 +1,396 @@
+---
+title: 'Player Identity: SteamId, Name and Avatar'
+order: 5
+summary: Give every player object a server-assigned SteamId and display name as NetworkVariables, load avatars locally with SteamFriends.GetLargeAvatarAsync, and keep a two-way map between SteamIds and NGO client ids.
+durationMin: 25
+objectives:
+  - Explain why the host, not the client, writes a player's SteamId and display name
+  - Write a PlayerIdentity NetworkBehaviour whose NetworkVariables are set on spawn and read correctly by late joiners
+  - Fetch and convert Steam avatars locally, without sending images over the network
+  - Maintain a SteamId-to-clientId map on every peer and know which questions each side can answer
+prerequisites: [ngo-steam/client-flow, ngo/network-objects, ngo/network-variables, steam/users-and-friends]
+tags: [ngo, steam, identity, networkvariable, avatar]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, patched as in lesson 2)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+    - { name: com.unity.collections, version: '2.x (FixedString128Bytes)' }
+sources:
+  - title: 'NGO 2.13 manual: NetworkVariables (permissions, late-join sync, fixed strings)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/networkvariable.html
+  - title: 'NGO 2.13 manual: Player objects'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/playerobjects.html
+  - title: 'NGO 2.13 manual: Session management (do not use clientId as a persistent id)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/session-management.html
+  - title: 'NGO source v2.13.3: NetworkSpawnManager.GetPlayerNetworkObject (server only for other players)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Spawning/NetworkSpawnManager.cs
+  - title: 'Facepunch.Steamworks 2.5.2: SteamFriends.cs (GetLargeAvatarAsync)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/SteamFriends.cs
+  - title: 'Facepunch.Steamworks 2.5.2: Image.cs (Width, Height, RGBA Data)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Structs/Image.cs
+  - title: 'Facepunch.Steamworks 2.5.2: Friend.cs (Name, constructor)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Structs/Friend.cs
+  - title: 'Steamworks API: ISteamFriends (GetLargeFriendAvatar, k_cchPersonaNameMax)'
+    url: https://partner.steamgames.com/doc/api/ISteamFriends
+  - title: 'Unity Collections: FixedString128Bytes'
+    url: https://docs.unity3d.com/Packages/com.unity.collections@2.5/api/Unity.Collections.FixedString128Bytes.html
+---
+
+In a single-player game, "who is this?" is a field on a ScriptableObject. In an NGO session, the player prefab that
+spawns for each connection knows only its <Term id="owner">owner</Term>'s <Term id="client-id">client id</Term>: 0 for
+the host, then 1, 2, 3 and so on. That number is fine for routing messages and useless for everything players care about.
+It doesn't say who the player is, it isn't a name you can show, it has no avatar, and if the same friend reconnects
+they get a **new** number.
+
+Steam knows exactly who each player is. This lesson connects the two: every player object carries its
+<Term id="steam-id">SteamId</Term> and display name as <Term id="network-variable">NetworkVariables</Term>, every peer
+loads avatars from Steam on its own, and every peer can translate between SteamIds and client ids.
+
+## Three ids, one player
+
+Lesson 2 introduced the three ids in play. Here they are again, with the question each one answers:
+
+| Id | Example | Scope | Answers |
+|---|---|---|---|
+| NGO client id | `2` | This session only. Reused after disconnects. | "Which connection sent this RPC? Who owns this object?" |
+| Transport id | `3180236801` | The host's transport only | "Which Steam connection handle?" (NGO maps it for you) |
+| SteamId | `76561197960287930` | Permanent, global | "Who is this person? What's their name and avatar? Are they my friend?" |
+
+The NGO manual's session management page is blunt about client ids: they're generated when a player connects and
+disposed of when they disconnect, so a later player could receive the same value. Anything that must survive a
+reconnect, such as a saved loadout or a "kick this person" list, should be keyed by SteamId. This lesson builds the
+<Term id="steam-id-mapping">SteamId mapping</Term> that makes that easy.
+
+## Who writes the identity?
+
+The tempting design is for each client to write its own name: "I'm Alex, here's my SteamId." Don't. A modified client
+could claim any SteamId, including a friend's, and impersonate them in chat, in your ban list or in your save files.
+It's the same rule as for any other <Term id="authority">authority</Term> question: **the host decides.**
+
+The host already knows each client's SteamId by the time the player object spawns. In lesson 6, connection approval
+verifies an <Term id="auth-session-ticket">auth ticket</Term> with Steam and records the result. Approval always runs
+**before** NGO spawns the player prefab, because spawning is part of approving. So the host can fill in the identity
+the moment the object exists, from data that Steam has vouched for.
+
+<Diagram name="ngo-spawn-flow" caption="NGO's spawn flow: the server instantiates and spawns the player prefab, OnNetworkSpawn runs on the server, the spawn message carries the NetworkVariable values, and each client instantiates its copy and runs its own OnNetworkSpawn." />
+
+What you should notice:
+
+- **The server runs `OnNetworkSpawn` first.** That's where the host writes the SteamId and name.
+- **NetworkVariables travel with the object.** The NGO manual states that a NetworkVariable's current value is automatically
+  synchronized to clients, including clients that join later. Nobody needs to "ask" for an identity.
+- **Each client runs its own `OnNetworkSpawn`.** That's where it reads the identity, subscribes to changes and starts the avatar download.
+
+The display name comes from the host too. The host and the client are members of the same lobby, and Valve's docs say that
+the local user automatically knows about people in the same lobby, so `new Friend(steamId).Name` works on the host
+without an extra request.
+
+## PlayerIdentity
+
+Add this component to your player prefab, next to its `NetworkObject`.
+
+```csharp title="PlayerIdentity.cs"
+using System;
+using System.Collections.Generic;
+using Steamworks;
+using Unity.Collections;
+using Unity.Netcode;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    /// <summary>Who this player is on Steam. The host writes it; everyone reads it.</summary>
+    public sealed class PlayerIdentity : NetworkBehaviour
+    {
+        // Everyone can read, only the server can write. These are NGO's defaults, spelled out on purpose.
+        private readonly NetworkVariable<ulong> steamId = new(
+            0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+        // Steam names are at most 128 UTF-8 bytes. FixedString128Bytes holds 125, so we truncate safely.
+        private readonly NetworkVariable<FixedString128Bytes> displayName = new(
+            default, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+        // Local registries, rebuilt independently on every peer from the spawned objects.
+        private static readonly Dictionary<ulong, PlayerIdentity> s_ByClientId = new();
+        private static readonly Dictionary<ulong, PlayerIdentity> s_BySteamId = new();
+
+        /// <summary>Raised when a player's SteamId, name or avatar becomes available or changes.</summary>
+        public static event Action<PlayerIdentity> Changed;
+
+        public SteamId SteamId => steamId.Value;
+        public string DisplayName => displayName.Value.ToString();
+        public Texture2D Avatar { get; private set; }
+
+        public static IReadOnlyCollection<PlayerIdentity> All => s_ByClientId.Values;
+        public static bool TryGetByClientId(ulong clientId, out PlayerIdentity player) =>
+            s_ByClientId.TryGetValue(clientId, out player);
+        public static bool TryGetBySteamId(SteamId id, out PlayerIdentity player) =>
+            s_BySteamId.TryGetValue(id, out player);
+
+        public override void OnNetworkSpawn()
+        {
+            if (IsServer)
+                AssignIdentity();   // runs before the spawn message is built for clients
+
+            steamId.OnValueChanged += HandleSteamIdChanged;
+            displayName.OnValueChanged += HandleNameChanged;
+
+            s_ByClientId[OwnerClientId] = this;
+
+            // The values may already be here (they usually arrive with the spawn). Handle that case too.
+            if (steamId.Value != 0)
+                HandleSteamIdChanged(0, steamId.Value);
+            Changed?.Invoke(this);
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            steamId.OnValueChanged -= HandleSteamIdChanged;
+            displayName.OnValueChanged -= HandleNameChanged;
+
+            s_ByClientId.Remove(OwnerClientId);
+            if (s_BySteamId.TryGetValue(steamId.Value, out PlayerIdentity mapped) && mapped == this)
+                s_BySteamId.Remove(steamId.Value);
+        }
+
+        /// <summary>Server only: copy the identity that connection approval verified (lesson 6).</summary>
+        private void AssignIdentity()
+        {
+            if (SteamAuthApproval.Instance.TryGetSteamId(OwnerClientId, out SteamId id))
+            {
+                steamId.Value = id;
+                string name = new Friend(id).Name;
+                if (string.IsNullOrEmpty(name) || name == "[unknown]")
+                    name = $"Player {OwnerClientId}";
+                displayName.Value = Truncated(name);
+            }
+            else
+            {
+                // Unity Transport in the editor (lesson 8): there's no Steam, so make up a readable name.
+                displayName.Value = Truncated($"Player {OwnerClientId}");
+            }
+        }
+
+        private static FixedString128Bytes Truncated(string text)
+        {
+            FixedString128Bytes value = default;
+            value.CopyFromTruncated(text);   // the constructor throws if the text doesn't fit
+            return value;
+        }
+
+        private void HandleSteamIdChanged(ulong previous, ulong current)
+        {
+            if (previous != 0 && s_BySteamId.TryGetValue(previous, out PlayerIdentity old) && old == this)
+                s_BySteamId.Remove(previous);
+            if (current == 0) return;
+
+            s_BySteamId[current] = this;
+            LoadAvatar(current);
+            Changed?.Invoke(this);
+        }
+
+        private void HandleNameChanged(FixedString128Bytes previous, FixedString128Bytes current) =>
+            Changed?.Invoke(this);
+
+        private async void LoadAvatar(SteamId id)
+        {
+            if (!SteamClient.IsValid) return;          // Unity Transport session without Steam
+
+            Texture2D texture = await AvatarCache.GetAsync(id);
+
+            // We awaited: the object may have been despawned or destroyed in the meantime.
+            if (this == null || !IsSpawned || steamId.Value != id) return;
+            Avatar = texture;
+            Changed?.Invoke(this);
+        }
+    }
+}
+```
+
+What you should notice:
+
+- **`WritePermission.Server`** makes the host the only writer. If a client sets `steamId.Value`, NGO logs a
+  write-permission error and ignores the write.
+- **Fixed strings, not `string`.** The NGO manual recommends the `Unity.Collections` fixed string types because a managed
+  `string` would allocate on every update. Steam's `k_cchPersonaNameMax` is 128 UTF-8 bytes, `FixedString128Bytes` stores
+  125, and `CopyFromTruncated` trims instead of throwing.
+- **Both paths into the handler.** `OnNetworkSpawn` handles a value that's already present, and `OnValueChanged` handles one that
+  arrives or changes later. The NGO manual tells clients to subscribe in `OnNetworkSpawn` for exactly this reason.
+- **The `this == null` check after `await`.** A Unity object can be destroyed while an `async` method is suspended. The C# reference
+  survives, but the object doesn't, and touching it would throw.
+
+## Avatars: fetched locally, never sent
+
+A large avatar is a 128×128 RGBA bitmap according to Valve's docs, which is 64 KB of raw pixels. Sending one per player over NGO would
+cost more than everything else in the join, and every peer can download the same picture from Steam itself. So the only thing that crosses the network is
+the 8-byte SteamId. Each peer turns it into a texture on its own and keeps it in an <Term id="avatar-cache">avatar cache</Term>:
+
+```csharp title="AvatarCache.cs"
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Steamworks;
+using UnityEngine;
+using Object = UnityEngine.Object;
+
+namespace Campfire.Net
+{
+    /// <summary>Downloads each Steam avatar once per session and converts it to a Texture2D.</summary>
+    public static class AvatarCache
+    {
+        private static readonly Dictionary<ulong, Task<Texture2D>> s_Cache = new();
+
+        public static Task<Texture2D> GetAsync(SteamId id)
+        {
+            // Cache the Task, not the texture, so two requests for the same player share one download.
+            if (!s_Cache.TryGetValue(id, out Task<Texture2D> task))
+            {
+                task = LoadAsync(id);
+                s_Cache[id] = task;
+            }
+            return task;
+        }
+
+        private static async Task<Texture2D> LoadAsync(SteamId id)
+        {
+            // Steamworks.Data.Image, not UnityEngine.UI.Image.
+            Steamworks.Data.Image? image = await SteamFriends.GetLargeAvatarAsync(id);
+            return image.HasValue ? ToTexture(image.Value) : null;   // null: no avatar set, or lookup failed
+        }
+
+        private static Texture2D ToTexture(Steamworks.Data.Image image)
+        {
+            int width = (int)image.Width, height = (int)image.Height, stride = width * 4;
+
+            // Steam's rows run top to bottom; Unity's texture data starts at the bottom row.
+            var flipped = new byte[image.Data.Length];
+            for (int y = 0; y < height; y++)
+                Buffer.BlockCopy(image.Data, y * stride, flipped, (height - 1 - y) * stride, stride);
+
+            var texture = new Texture2D(width, height, TextureFormat.RGBA32, mipChain: false);
+            texture.LoadRawTextureData(flipped);
+            texture.Apply();
+            return texture;
+        }
+
+        /// <summary>Called on session teardown (lesson 7) so textures don't pile up between sessions.</summary>
+        public static void Clear()
+        {
+            foreach (Task<Texture2D> task in s_Cache.Values)
+                if (task.IsCompletedSuccessfully && task.Result != null)
+                    Object.Destroy(task.Result);
+            s_Cache.Clear();
+        }
+    }
+}
+```
+
+`SteamFriends.GetLargeAvatarAsync` first makes sure Steam has the user's information cached, then polls until the image
+handle stops being -1 ("still downloading"), and finally copies the pixels out as RGBA bytes. It returns `null` when the
+user has no avatar or the image can't be read, so always handle `null` with a placeholder. Because the method waits on
+Steam, it only completes while <Term id="steam-callbacks">Steam callbacks</Term> are pumped, which is why `SteamBootstrap`
+pumps them every frame.
+
+<Callout type="steam" title="Small, medium or large?">
+
+Facepunch also has `GetSmallAvatarAsync` and `GetMediumAvatarAsync`. Valve's `GetLargeFriendAvatar` documentation describes
+the large one as 128×128. Size the texture from `image.Width` and `image.Height` anyway, as above, rather than from a
+constant, so a change on Steam's side can't break your conversion. For a scoreboard row, the medium avatar is plenty and downloads faster.
+
+</Callout>
+
+## The SteamId to clientId map
+
+Every peer now has `PlayerIdentity.TryGetBySteamId` and `TryGetByClientId`, built from the spawned objects. That is the
+**public** map. The host also keeps a **private** one inside `SteamAuthApproval`, which approval writes before any
+object exists. Each answers different questions:
+
+| Question | Who can answer | Use |
+|---|---|---|
+| "Which SteamId sent this RPC?" | Host | `rpcParams.Receive.SenderClientId`, then `SteamAuthApproval.TryGetSteamId` |
+| "Which SteamId just disconnected?" | Host | `SteamAuthApproval`. The player object is already despawned (lesson 7). |
+| "Show the name above this player's head" | Everyone | The `PlayerIdentity` component on that player object |
+| "My friend Alex is in this session: where?" | Everyone | `PlayerIdentity.TryGetBySteamId(alexId, ...)` |
+| "Kick SteamId X" | Host | `TryGetBySteamId`, then `NetworkManager.DisconnectClient(player.OwnerClientId, reason)` |
+
+Why not just call `GetPlayerNetworkObject(clientId)`? Because in client-server mode only the
+server may look up **other** players' objects that way. On a client it logs "Only the server can find player objects
+from other clients" and returns `null`. The registry above works on every peer because each peer builds it from the
+objects it has spawned.
+
+Here's the map in use: a host-side RPC that trusts the connection, not the payload.
+
+```csharp title="ChatRelay.cs"
+using Steamworks;
+using Unity.Collections;
+using Unity.Netcode;
+
+namespace Campfire.Net
+{
+    /// <summary>Lives on an in-scene NetworkObject. Clients send text; the host stamps the sender.</summary>
+    public sealed class ChatRelay : NetworkBehaviour
+    {
+        [Rpc(SendTo.Server)]
+        public void SendChatRpc(FixedString128Bytes text, RpcParams rpcParams = default)
+        {
+            ulong sender = rpcParams.Receive.SenderClientId;   // set by NGO from the connection: unforgeable
+            if (!PlayerIdentity.TryGetByClientId(sender, out PlayerIdentity player)) return;
+
+            ShowChatRpc(player.SteamId, text);
+        }
+
+        [Rpc(SendTo.Everyone)]
+        private void ShowChatRpc(ulong senderSteamId, FixedString128Bytes text)
+        {
+            string name = PlayerIdentity.TryGetBySteamId(senderSteamId, out PlayerIdentity p) ? p.DisplayName : "?";
+            UnityEngine.Debug.Log($"{name}: {text}");   // replace with your chat UI
+        }
+    }
+}
+```
+
+The client never says who it is. The host derives that from `SenderClientId`, which NGO fills in from the connection the
+message arrived on, and broadcasts the SteamId so every peer can show the name and avatar it already has.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Letting the owner write its own identity">
+
+`WritePermission.Owner` plus "set my SteamId in `OnNetworkSpawn` if `IsOwner`" looks neat and works in testing.
+It also lets any modified client claim to be anyone. Identity is written by the host from verified data, or it isn't identity.
+
+</Callout>
+
+<Callout type="pitfall" title="Reading the NetworkVariable only in OnValueChanged">
+
+If your UI only listens to `OnValueChanged`, a player who joins late never sees the host's name, because that value arrived
+with the spawn and nothing changed afterwards. Always read the current `Value` in `OnNetworkSpawn` **and** subscribe for later changes.
+
+</Callout>
+
+<Callout type="pitfall" title="Storing progress by clientId">
+
+"Player 2's inventory" is wrong the moment player 2 disconnects and someone else joins as client 2, or the same friend
+reconnects as client 4. Key anything persistent by SteamId, and treat the client id as a short-lived connection handle.
+
+</Callout>
+
+<Callout type="unity" title="Avatars and the Unity Transport dev path">
+
+In editor sessions on Unity Transport (lesson 8), `SteamClient.IsValid` may be `false` and the SteamId is 0, so
+`LoadAvatar` returns early and the name falls back to "Player N". Your UI should already handle a `null` avatar, because
+real Steam users without an avatar produce one too.
+
+</Callout>
+
+<KeyTakeaways>
+
+- NGO's client id is a short-lived connection handle. The **SteamId** is the permanent identity, so key anything persistent by it.
+- The **host writes** SteamId and display name into server-write NetworkVariables in `OnNetworkSpawn`, from data approval verified. Clients never claim an identity.
+- Late joiners get NetworkVariable values with the spawn, so read `Value` in `OnNetworkSpawn` and also subscribe to `OnValueChanged`.
+- Only the 8-byte SteamId crosses the network. Each peer loads avatars itself with `SteamFriends.GetLargeAvatarAsync`, flips the rows and caches the texture.
+- Every peer keeps a SteamId and clientId registry built from spawned `PlayerIdentity` objects. The host also keeps the verified map in `SteamAuthApproval`.
+
+</KeyTakeaways>
