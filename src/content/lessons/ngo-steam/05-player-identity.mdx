@@ -30,9 +30,9 @@ sources:
     url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/SteamFriends.cs
   - title: 'Facepunch.Steamworks 2.5.2: Image.cs (Width, Height, RGBA Data)'
     url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Structs/Image.cs
-  - title: 'Facepunch.Steamworks 2.5.2: Friend.cs (Name, constructor)'
+  - title: 'Facepunch.Steamworks 2.5.2: Friend.cs (Name, constructor, RequestInfoAsync)'
     url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Structs/Friend.cs
-  - title: 'Steamworks API: ISteamFriends (GetLargeFriendAvatar, k_cchPersonaNameMax)'
+  - title: 'Steamworks API: ISteamFriends (GetLargeFriendAvatar, GetFriendPersonaName lobby note, k_cchPersonaNameMax)'
     url: https://partner.steamgames.com/doc/api/ISteamFriends
   - title: 'Unity Collections: FixedString128Bytes'
     url: https://docs.unity3d.com/Packages/com.unity.collections@2.5/api/Unity.Collections.FixedString128Bytes.html
@@ -83,9 +83,11 @@ What you should notice:
   synchronized to clients, including clients that join later. Nobody needs to "ask" for an identity.
 - **Each client runs its own `OnNetworkSpawn`.** That's where it reads the identity, subscribes to changes and starts the avatar download.
 
-The display name comes from the host too. The host and the client are members of the same lobby, and Valve's docs say that
-the local user automatically knows about people in the same lobby, so `new Friend(steamId).Name` works on the host
-without an extra request.
+The display name comes from the host too. The host and the client are members of the same lobby, and Valve's docs say
+that a user automatically learns about people "in the same source as them (Steam group, chat room, lobby, or game server)".
+That knowledge isn't instant, though: right after someone joins a lobby, their name "will arrive asynchronously via
+PersonaStateChange_t callbacks". By the time a client has connected and been approved, `new Friend(steamId).Name` usually
+works on the host, but the code below falls back to a placeholder and asks Steam again if it doesn't.
 
 ## PlayerIdentity
 
@@ -162,15 +164,27 @@ namespace Campfire.Net
             {
                 steamId.Value = id;
                 string name = new Friend(id).Name;
-                if (string.IsNullOrEmpty(name) || name == "[unknown]")
-                    name = $"Player {OwnerClientId}";
-                displayName.Value = Truncated(name);
+                bool known = !string.IsNullOrEmpty(name) && name != "[unknown]";
+                displayName.Value = Truncated(known ? name : $"Player {OwnerClientId}");
+                if (!known) RefreshName(id);   // persona data can still be on its way
             }
             else
             {
                 // Unity Transport in the editor (lesson 8): there's no Steam, so make up a readable name.
                 displayName.Value = Truncated($"Player {OwnerClientId}");
             }
+        }
+
+        /// <summary>Server only: wait for Steam's persona data, then replace the placeholder name.</summary>
+        private async void RefreshName(SteamId id)
+        {
+            var friend = new Friend(id);
+            await friend.RequestInfoAsync();   // returns at once if Steam already has the name
+            if (this == null || !IsSpawned || steamId.Value != id) return;
+
+            string name = friend.Name;
+            if (!string.IsNullOrEmpty(name) && name != "[unknown]")
+                displayName.Value = Truncated(name);   // replicates like any other change
         }
 
         private static FixedString128Bytes Truncated(string text)
