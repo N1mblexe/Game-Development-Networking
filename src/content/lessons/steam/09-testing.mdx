@@ -1,0 +1,280 @@
+---
+title: Testing Steam Multiplayer
+order: 9
+summary: The practical realities of testing Steam features - why you need two accounts, what ParrelSync and Multiplayer Play Mode can't do, Spacewar's quirks, the overlay, and how to log and simulate bad connections.
+durationMin: 22
+objectives:
+  - Choose a test setup (two machines, a VM, local UDP) that actually exercises lobbies, invites and the relay
+  - Explain why editor clones with ParrelSync or Multiplayer Play Mode all share one Steam user
+  - Work around App ID 480's shared lobbies, stats and presence limitations
+  - Log connection status and Steam's networking debug output, and simulate latency and loss
+prerequisites: [steam/auth-tickets, theory/latency-jitter-loss]
+tags: [steam, testing, debugging, workflow]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: SteamNetworkingUtils.cs (DebugLevel, OnDebugOutput, fake lag/loss)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamNetworkingUtils.cs
+  - title: 'Facepunch.Steamworks wiki: Debugging'
+    url: https://wiki.facepunch.com/steamworks/Debugging
+  - title: 'Facepunch.Steamworks wiki: Frequently Asked Questions'
+    url: https://wiki.facepunch.com/steamworks/Frequently_Asked_Questions
+  - title: 'Facepunch.Steamworks source: Networking/Connection.cs (DetailedStatus, QuickStatus)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Networking/Connection.cs
+  - title: 'Steamworks API Overview: initialization requirements'
+    url: https://partner.steamgames.com/doc/sdk/api
+  - title: 'Steamworks API Example Application (SpaceWar)'
+    url: https://partner.steamgames.com/doc/sdk/api/example
+  - title: 'Steam Families (Steam Support)'
+    url: https://help.steampowered.com/en/faqs/view/054C-3167-DF7F-1A5F
+  - title: 'Unity Multiplayer Play Mode documentation'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@1.6/manual/index.html
+---
+
+With Netcode for GameObjects you're used to pressing Play in two editor windows (or using Multiplayer Play Mode) and
+watching a host and a client talk over localhost. Try that with Steam and the second window joins the lobby as...
+you. Steam features are tied to a **logged-in account on a running Steam client**, and that changes how you test
+almost everything in this module. This lesson is the checklist the previous eight lessons have been hinting at.
+
+## Why one machine isn't enough
+
+Every `SteamClient.Init` connects to **the** Steam client running for your OS user, and every API answers for **its**
+logged-in account. Two game processes on one machine therefore have the same `SteamClient.SteamId`.
+
+<Sequence
+  title="Two editor clones on one machine"
+  actors={[
+    { id: 'a', label: 'Editor (main)', kind: 'client' },
+    { id: 'steam', label: 'Your Steam client (account X)', kind: 'steam' },
+    { id: 'b', label: 'Clone / virtual player', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'a', to: 'steam', label: 'Init(480) → SteamId = X', kind: 'reliable' },
+    { from: 'b', to: 'steam', label: 'Init(480) → SteamId = X as well', note: 'same Steam client, same account', kind: 'reliable' },
+    { from: 'a', to: 'steam', label: 'CreateLobbyAsync → owner X', kind: 'reliable' },
+    { from: 'b', to: 'steam', label: 'Join the lobby → “joins” as X, already a member', note: 'no OnLobbyMemberJoined for a new person', kind: 'reliable' },
+    { from: 'b', to: 'a', label: 'ConnectRelay(owner X) → connecting to your own Steam ID', note: 'Facepunch’s FAQ: you can’t connect to yourself through the relay', kind: 'unreliable' },
+    { from: 'b', to: 'b', label: 'auth ticket for X, validated by X: proves nothing', kind: 'local' },
+  ]}
+/>
+
+What you should notice:
+
+- Lobby membership is **per account**. A second process can't be a second member.
+- The host-connects-to-owner pattern turns into "connect to myself", which is exactly the case Facepunch warns against.
+- Even when something appears to work, you haven't tested a second account's view: invites, friends lists,
+  presence and auth all need two **different** accounts.
+
+<Callout type="pitfall" title="ParrelSync and Multiplayer Play Mode share one Steam user">
+
+ParrelSync clones and Multiplayer Play Mode's virtual players are separate Unity processes on **your** machine, under
+**your** OS user, talking to **your** Steam client. They're excellent for NGO gameplay testing (module 2) and for the
+local-UDP mode below, but they can't test lobbies, invites, presence, relayed connections or auth between two
+players. Treat any Steam feature as untested until it has worked between two accounts.
+
+</Callout>
+
+## Test setups that work
+
+| Setup | Tests | Notes |
+|---|---|---|
+| **Two PCs, two Steam accounts** | Everything: lobbies, invites (warm and cold), presence, relay, auth | The real test. Make the accounts friends. |
+| One PC + a **virtual machine** with a second account | Almost everything | The VM needs its own Steam install and login. A VM on NAT networking also exercises the relay path. |
+| Two PCs on **different networks** (one on a phone hotspot) | NAT traversal and the relay under realistic conditions | On one LAN, Steam may find a direct route, which hides relay-only problems. |
+| One PC, **local UDP** (below) | Your message protocol and socket code | No lobbies, no auth between different accounts |
+| Same account on two PCs | Very little | Steam lets an account play on one machine at a time, and lobby/auth tests are meaningless with one identity |
+
+<Callout type="steam" title="Second accounts, Spacewar and Family Sharing">
+
+A second account is a free Steam account. On **App ID 480**, any account can initialize Spacewar, which is why it's
+the standard test app. If `Init` reports a license problem for the second account, run Spacewar once from that
+account's library or store page so the license is added. With **your own App ID**, the second account needs a license
+too: use keys from your Steamworks partner page rather than Steam Families. A copy shared through
+[Steam Families](https://help.steampowered.com/en/faqs/view/054C-3167-DF7F-1A5F) can only be played by one family member
+at a time, and the auth response's owner ID then differs from the player's ID.
+
+</Callout>
+
+## Local UDP mode for single-machine iteration
+
+The `SocketManager` and `ConnectionManager` classes from lessons 06–07 don't care whether the transport is relayed or
+plain UDP. A small switch lets you run the protocol between two processes on one machine without lobbies:
+
+```csharp title="ChatTransportMode.cs"
+using Steamworks;
+using Steamworks.Data;
+
+public static class ChatTransport
+{
+    public const ushort LocalPort = 27777;
+
+    /// Development only: listen on plain UDP instead of the relay.
+    public static ChatHost HostLocal() =>
+        SteamNetworkingSockets.CreateNormalSocket<ChatHost>(NetAddress.AnyIp(LocalPort));
+
+    /// Development only: connect to a host on this machine.
+    public static ChatClient JoinLocal() =>
+        SteamNetworkingSockets.ConnectNormal<ChatClient>(NetAddress.LocalHost(LocalPort));
+}
+```
+
+Both ends still need Steam initialized, and both will report the same Steam ID, so the lobby-membership check in
+`ChatHost.OnConnecting` and the auth gate need a development bypass. Guard it with `#if UNITY_EDITOR || DEVELOPMENT_BUILD`
+and never let it reach a release build.
+
+## Spacewar (480) caveats
+
+| Area | What happens on 480 | What to do |
+|---|---|---|
+| Lobby search | You share the lobby list with everyone else testing on 480 | Filter on your own key and version (lesson 04); never join unfiltered results |
+| Friends list | Your friends see you "playing Spacewar" | Expected. Your real name appears once you have your own App ID |
+| Rich presence | You can't upload a localization file, so `steam_display` shows nothing | Test with `status` and `connect`; test `steam_display` on your own App ID |
+| Stats and achievements | You get Spacewar's stats and achievements (lesson 10) | Use their API names while prototyping; reset with `ResetAll(true)` |
+| Cold-start invites | Steam launches the installed Spacewar, not your build | Test the `+connect_lobby` path with your own App ID, or by starting your build with the argument yourself |
+
+## The overlay
+
+Invites (`OpenGameInviteOverlay`) and profile pages need the <Term id="steam-overlay">Steam overlay</Term>. The
+overlay is injected into the game's rendering, which in practice means:
+
+- It generally **doesn't work in the Unity editor**. Test overlay features in a **build**.
+- It must be enabled in Steam's settings (*In Game → Enable the Steam Overlay while in-game*) and, per game, in its properties.
+- Check `SteamUtils.IsOverlayEnabled` at runtime and fall back to your own invite UI (`lobby.InviteFriend`) when it's false.
+- Press **Shift+Tab** in the build to confirm it's alive before you debug "the invite button does nothing".
+
+## Logging what Steam is doing
+
+Turn these on in development builds. Each answers a different question.
+
+```csharp title="SteamDiagnostics.cs"
+using Steamworks;
+using Steamworks.Data;
+using UnityEngine;
+
+public sealed class SteamDiagnostics : MonoBehaviour
+{
+    [SerializeField] NetDebugOutput networkingLogLevel = NetDebugOutput.Warning;
+    [SerializeField] bool logCallbacks = false;
+
+    void Start()
+    {
+        if (!SteamBootstrap.IsReady) return;
+
+        // 1. Every connection state change, on every socket and connection.
+        SteamNetworkingSockets.OnConnectionStatusChanged += LogStatus;
+
+        // 2. The networking library's own log. Choose a level; don't set Everything and filter,
+        //    Facepunch warns that formatting all those strings costs real frame time.
+        SteamNetworkingUtils.DebugLevel = networkingLogLevel;
+        SteamNetworkingUtils.OnDebugOutput += LogNetworking;
+
+        // 3. Optionally, every callback Steam dispatches (very noisy).
+        if (logCallbacks)
+            Dispatch.OnDebugCallback = (type, text, server) => Debug.Log($"[Steam cb] {type}\n{text}");
+    }
+
+    void OnDestroy()
+    {
+        SteamNetworkingSockets.OnConnectionStatusChanged -= LogStatus;
+        SteamNetworkingUtils.OnDebugOutput -= LogNetworking;
+        Dispatch.OnDebugCallback = null;
+    }
+
+    static void LogStatus(Connection connection, ConnectionInfo info) =>
+        Debug.Log($"[Net] {connection} {info.Identity} → {info.State} (end: {info.EndReason})");
+
+    static void LogNetworking(NetDebugOutput level, string message) =>
+        Debug.Log($"[SteamNet {level}] {message}");
+
+    /// Call from a debug key or overlay: a multi-line report of route, ping, quality and queues.
+    public static void Dump(Connection connection)
+    {
+        Debug.Log(connection.DetailedStatus());
+        ConnectionStatus s = connection.QuickStatus();
+        Debug.Log($"ping {s.Ping} ms, quality {s.ConnectionQualityLocal:P0}, " +
+                  $"out {s.OutBytesPerSec:0} B/s, pending reliable {s.PendingReliable} B");
+    }
+}
+```
+
+`DetailedStatus()` is the most useful single string in Steam networking: it shows the route (relayed or direct),
+which relays are in use, ping, packet loss and queue sizes. Paste it into every networking bug report.
+
+## Simulating bad networks
+
+Your LAN is too good. Steam's networking library can add lag and loss to everything it sends and receives, which pairs
+nicely with what you saw in [latency, jitter and loss](/modules/theory/latency-jitter-loss/):
+
+```csharp title="SteamNetworkConditioner.cs"
+using Steamworks;
+using UnityEngine;
+
+public sealed class SteamNetworkConditioner : MonoBehaviour
+{
+    [Range(0, 500)] public float lagMs = 100;     // added to every packet in each direction
+    [Range(0, 100)] public float lossPct = 2;     // percentage of packets dropped
+
+    void OnEnable()
+    {
+        SteamNetworkingUtils.FakeSendPacketLag = lagMs;
+        SteamNetworkingUtils.FakeRecvPacketLag = lagMs;
+        SteamNetworkingUtils.FakeSendPacketLoss = lossPct;
+        SteamNetworkingUtils.FakeRecvPacketLoss = lossPct;
+    }
+
+    void OnDisable()
+    {
+        SteamNetworkingUtils.FakeSendPacketLag = 0;
+        SteamNetworkingUtils.FakeRecvPacketLag = 0;
+        SteamNetworkingUtils.FakeSendPacketLoss = 0;
+        SteamNetworkingUtils.FakeRecvPacketLoss = 0;
+    }
+}
+```
+
+These are global settings for every Steam networking connection in the process. With 2% loss on, chat (reliable)
+still arrives in order, while some pings (unreliable) never come back. That's the behaviour lesson 07 designed for.
+
+## A pre-release checklist
+
+<Steps>
+
+1. Both accounts can `Init`, see each other as friends, and see each other's `status` rich presence.
+2. Host, find through search, join, chat, leave. Repeat with the lobby **friends-only** and joined through the friends list.
+3. Invite while the friend's game runs (`OnGameLobbyJoinRequested`), then with it closed (`+connect_lobby`).
+4. Kill the host's process mid-session: clients see `ClosedByPeer` or a timeout, log the end reason, and return to the menu.
+5. Pull the client's network cable: the host logs `ProblemDetectedLocally` or a timeout, and calls `EndAuthSession`.
+6. Run with 150 ms lag and 5% loss and confirm nothing that matters depends on unreliable messages.
+7. Start a build with Steam closed and confirm the game shows a clear error rather than hanging.
+
+</Steps>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Same account on two machines">
+
+Logging into one account on two PCs looks like the easy way to get "two players". Steam treats it as one user: the
+second machine to start a game gets a "playing on another computer" prompt, lobbies see one member, and auth tickets
+can fail with `LoggedInElseWhere`. Use two accounts.
+
+</Callout>
+
+<Callout type="pitfall" title="Only testing on one LAN">
+
+On a LAN, Steam can find a direct route, so relay-specific problems (slower relay pings, `FindingRoute` taking longer,
+dropped unreliable messages while the route is negotiated) never show up. Test at least once with the two machines on
+different networks.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Every process on a machine shares **one Steam client and one account**: editor clones, ParrelSync and Multiplayer Play Mode can't test lobbies, invites, presence, relay or auth between players.
+- Real tests need **two accounts on two machines** (or a VM), ideally on **different networks**.
+- On **480**, filter lobbies with your own key, expect Spacewar's stats and name, and test `steam_display` and cold-start launches on your own App ID.
+- The **overlay** needs a build with the overlay enabled; check `SteamUtils.IsOverlayEnabled`.
+- Log `OnConnectionStatusChanged`, `SteamNetworkingUtils.OnDebugOutput` and `connection.DetailedStatus()`, and use **FakeSend/RecvPacketLag and Loss** to simulate bad networks.
+
+</KeyTakeaways>

@@ -1,0 +1,351 @@
+---
+title: Setup, Initialization and Callbacks
+order: 2
+summary: Install Facepunch.Steamworks in Unity 6, initialize Steam safely, pump callbacks every frame and shut down cleanly, including the editor's domain-reload traps.
+durationMin: 22
+objectives:
+  - Install the Facepunch.Steamworks release into a Unity 6 project with correct plugin import settings
+  - Initialize Steam with SteamClient.Init and handle every common failure reason
+  - Choose between asyncCallbacks and calling SteamClient.RunCallbacks yourself, and explain why the pump matters
+  - Shut Steam down correctly in builds and in the editor, including with domain reload disabled
+prerequisites: [steam/steamworks-overview]
+tags: [steam, setup, callbacks, unity]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks wiki: Installing For Unity'
+    url: https://wiki.facepunch.com/steamworks/Installing_For_Unity
+  - title: 'Facepunch.Steamworks wiki: Setting Up'
+    url: https://wiki.facepunch.com/steamworks/Setting_Up
+  - title: 'Facepunch.Steamworks wiki: Frequently Asked Questions'
+    url: https://wiki.facepunch.com/steamworks/Frequently_Asked_Questions
+  - title: 'Facepunch.Steamworks wiki: Debugging (Dispatch.OnDebugCallback, OnException)'
+    url: https://wiki.facepunch.com/steamworks/Debugging
+  - title: 'Facepunch.Steamworks source: SteamClient.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamClient.cs
+  - title: 'Facepunch.Steamworks source: Classes/Dispatch.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Classes/Dispatch.cs
+  - title: 'Steamworks API Overview: Initialization and Shutdown, Callbacks'
+    url: https://partner.steamgames.com/doc/sdk/api#initialization_and_shutdown
+  - title: 'Unity Manual: Configurable Enter Play Mode'
+    url: https://docs.unity3d.com/6000.0/Documentation/Manual/configurable-enter-play-mode.html
+---
+
+Every Unity developer has written a manager singleton: an object in the first scene, marked `DontDestroyOnLoad`,
+that sets something up in `Awake` and tears it down at the end. Steam needs exactly that, with two twists. Setup can
+fail for reasons outside your code (Steam isn't running, the App ID is unknown), and Steam only talks back to you when
+you **pump its callback queue**. Get those two right and the rest of the module is straightforward. Get them wrong and
+you'll see `await` calls that never finish and events that never fire.
+
+## Installing the release
+
+Facepunch.Steamworks ships as compiled DLLs, not as a Unity package.
+
+<Steps>
+
+1. Download `Facepunch.Steamworks.2.5.2.zip` from the GitHub **Releases** page (the release asset, not the source code).
+2. Copy the `Unity` folder from the zip into your project, for example as `Assets/Plugins/Facepunch.Steamworks/`.
+3. Let Unity import it. The folder contains three managed builds of the library and Valve's native `steam_api` binaries:
+
+   | File | Used on |
+   |---|---|
+   | `Facepunch.Steamworks.Win64.dll` | Windows 64-bit player and Windows editor |
+   | `Facepunch.Steamworks.Win32.dll` | Windows 32-bit player |
+   | `Facepunch.Steamworks.Posix.dll` | Linux and macOS players (and the macOS editor) |
+   | `redistributable_bin/win64/steam_api64.dll`, `linux64/libsteam_api.so`, `osx/libsteam_api.dylib` | The native SDK for each platform |
+
+4. Select each DLL and check the **Plugin Inspector**: exactly one managed Facepunch DLL must be enabled for the
+   editor you run, and exactly one for each player platform you build.
+
+</Steps>
+
+<Callout type="unity" title="Plugin import settings matter">
+
+The zip's `.meta` files set the platforms for you, so normally there is nothing to do. Two cases need attention.
+If you work in the **Linux editor**, note that the shipped `Posix` meta enables the editor on **OSX** only, so tick
+Linux for the editor (or "Any OS") yourself. And if two managed Facepunch DLLs are enabled for the same platform,
+you get "multiple assemblies with equivalent identity" errors: disable the extra one rather than deleting it. The
+library works with both Mono and IL2CPP.
+
+</Callout>
+
+## Initializing: `SteamClient.Init`
+
+The whole of Steam starts with one call:
+
+```csharp
+SteamClient.Init(uint appid, bool asyncCallbacks = true);
+```
+
+`Init` sets the `SteamAppId` environment variable for your process, calls Valve's `SteamAPI_Init`, and opens every
+interface (`SteamFriends`, `SteamMatchmaking`, `SteamNetworkingSockets`, …). It **throws** if anything goes wrong,
+with a message such as `SteamApi_Init failed with …`. Valve lists the usual causes:
+
+| Cause | What you see / what to do |
+|---|---|
+| The Steam client isn't running (or isn't logged in) | Start Steam, log in, try again. Show a friendly error in builds. |
+| Steam can't work out your App ID | Pass the right ID to `Init`. See the `steam_appid.txt` note below. |
+| Your game and Steam run as different OS users or privilege levels | Don't run Unity "as administrator" when Steam isn't. |
+| The logged-in account has no license for the App ID | Your own app must be in the account's library. 480 works for any account. |
+| The native `steam_api` library isn't found | Check the plugin import settings above. |
+
+<Callout type="steam" title="steam_appid.txt and RestartAppIfNecessary">
+
+Valve's rule for C++ games is: when the executable is started **outside** Steam, put a `steam_appid.txt` containing
+just the App ID in the working directory. Facepunch's FAQ says you don't need it, because `SteamClient.Init` sets the
+`SteamAppId` environment variable itself. Many teams still drop a `steam_appid.txt` containing `480` in the **project
+root** (the editor's working directory) and next to development builds. It costs nothing and it changes one behaviour:
+Valve documents that `SteamClient.RestartAppIfNecessary(appId)` always returns `false` when the file is present.
+Without it, that check can relaunch your dev build through Steam. **Never ship the file** in your Steam depot.
+
+</Callout>
+
+`RestartAppIfNecessary` is the optional "was I launched through Steam?" check. If it returns `true`, Steam is
+relaunching the game through the Steam client and you should quit immediately. Call it before `Init`, and only in
+player builds.
+
+## The callback pump
+
+Recall the sequence from lesson 01: Steam answers by putting a message in a queue. Nothing reaches your code until
+something drains that queue. In Facepunch.Steamworks the drain is `Dispatch.Frame`, and there are two ways to run it:
+
+- **`asyncCallbacks: true`** (the default). `Init` starts a background `async` loop that runs a frame, then
+  `await Task.Delay(16)`, forever. In Unity the continuation resumes on the main thread through Unity's
+  synchronization context, so your handlers still run on the main thread, at roughly 60 Hz but not in step with `Update`.
+- **`asyncCallbacks: false`**. Nothing pumps unless you call **`SteamClient.RunCallbacks()`** yourself, normally once
+  per `Update`. Valve recommends pumping every frame, and at least once a second.
+
+Both work. This course uses `asyncCallbacks: false` with `RunCallbacks()` in `Update`, because it makes timing
+explicit: callbacks run at a known point in the frame, they stop when the bootstrap object is disabled, and you can see
+in the code that the pump exists.
+
+<Sequence
+  title="Init, then one awaited Steam call completing through the pump"
+  actors={[
+    { id: 'boot', label: 'SteamBootstrap', kind: 'client' },
+    { id: 'lobby', label: 'Your lobby code', kind: 'client' },
+    { id: 'steam', label: 'Steam client', kind: 'steam' },
+  ]}
+  steps={[
+    { from: 'boot', to: 'steam', label: 'SteamClient.Init(480, asyncCallbacks: false)', note: 'opens interfaces; throws on failure', kind: 'reliable' },
+    { from: 'lobby', to: 'steam', label: 'await SteamMatchmaking.CreateLobbyAsync(4)', note: 'the Task is now pending', kind: 'reliable' },
+    { from: 'steam', to: 'steam', label: 'Valve answers; LobbyCreated_t waits in the queue', kind: 'local' },
+    { from: 'boot', to: 'steam', label: 'Update(): SteamClient.RunCallbacks()', note: 'Dispatch.Frame drains the queue', kind: 'reliable' },
+    { from: 'steam', to: 'lobby', label: 'call result completes the Task', note: 'code after the await runs now, on the main thread', kind: 'event' },
+    { from: 'steam', to: 'lobby', label: 'SteamMatchmaking.OnLobbyCreated / OnLobbyEntered fire', kind: 'event' },
+    { from: 'boot', to: 'steam', label: 'OnDestroy(): SteamClient.Shutdown()', kind: 'reliable' },
+  ]}
+/>
+
+What you should notice:
+
+- An `await` on a Facepunch `…Async` method completes **inside** the pump. With `asyncCallbacks: false` and no
+  `RunCallbacks()`, the `await` never returns and no event ever fires, and there is no error to tell you why.
+- Events such as `SteamMatchmaking.OnLobbyCreated` and `SteamFriends.OnGameLobbyJoinRequested` are **static C# events**.
+  They fire for every subscriber, so subscriptions must be balanced with unsubscriptions.
+- Shutdown is the last step. Any Steam call after it is a bug.
+
+## The `SteamBootstrap` component
+
+Here is the component every later lesson builds on. Put it on a GameObject in your first scene.
+
+```csharp title="SteamBootstrap.cs"
+using System;
+using Steamworks;
+using UnityEngine;
+
+/// Initializes Steam once, pumps callbacks every frame and shuts Steam down on exit.
+/// Runs before other scripts so their Awake/Start can use Steam.
+[DefaultExecutionOrder(-1000)]
+public sealed class SteamBootstrap : MonoBehaviour
+{
+    [Tooltip("480 = Spacewar, Valve's shared test app. Replace with your own App ID.")]
+    [SerializeField] uint appId = 480;
+
+    [Tooltip("In player builds, relaunch through Steam if the exe was started directly.")]
+    [SerializeField] bool restartThroughSteam = false;
+
+    public static SteamBootstrap Instance { get; private set; }
+
+    /// True once Init succeeded and until Shutdown. Check this before any Steam call.
+    public static bool IsReady => Instance != null && SteamClient.IsValid;
+
+    /// Raised once, right after a successful Init.
+    public static event Action Ready;
+
+    void Awake()
+    {
+        if (Instance != null) { Destroy(gameObject); return; }
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+
+#if !UNITY_EDITOR
+        if (restartThroughSteam && SteamClient.RestartAppIfNecessary(appId))
+        {
+            // Steam is relaunching us through the client. Quit as fast as possible.
+            Application.Quit();
+            return;
+        }
+#endif
+
+        // Exceptions thrown inside Steam callbacks are caught by the dispatcher.
+        // Without this hook they disappear silently.
+        Dispatch.OnException = e => Debug.LogException(e);
+
+        try
+        {
+            SteamClient.Init(appId, asyncCallbacks: false);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[Steam] Init failed: {e.Message}\n" +
+                           "Is the Steam client running and logged in? Is the App ID correct?");
+            enabled = false;   // no Update, so no RunCallbacks on a dead client
+            return;
+        }
+
+        Debug.Log($"[Steam] Ready: {SteamClient.Name} ({SteamClient.SteamId}) on app {SteamClient.AppId}");
+
+        // We know we'll use the relay network (lesson 06). Warm it up now so the
+        // first connection doesn't wait for ping measurements.
+        SteamNetworkingUtils.InitRelayNetworkAccess();
+
+        Ready?.Invoke();
+    }
+
+    void Update()
+    {
+        if (SteamClient.IsValid)
+            SteamClient.RunCallbacks();
+    }
+
+    void OnDestroy()
+    {
+        if (Instance != this) return;   // a duplicate being destroyed
+        Instance = null;
+
+        if (SteamClient.IsValid)
+            SteamClient.Shutdown();
+    }
+
+    // With "Enter Play Mode Options" (domain reload disabled), statics survive between
+    // play sessions. Reset ours so a stale Instance or old subscribers don't leak in.
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    static void ResetStatics()
+    {
+        Instance = null;
+        Ready = null;
+    }
+}
+```
+
+A few design decisions are worth calling out:
+
+- **`[DefaultExecutionOrder(-1000)]`** makes this `Awake` run before your other scripts, so a lobby manager can check
+  `SteamBootstrap.IsReady` in its own `Awake` or `Start`.
+- **`enabled = false` on failure** stops `Update`, and every other script checks `IsReady` before touching Steam.
+  Your game can then fall back to an offline menu instead of throwing `NullReferenceException`s.
+- **Shutdown in `OnDestroy`.** In the editor, leaving Play Mode destroys the object, so Steam shuts down every time
+  you stop. Facepunch's wiki suggests `OnDisable`, which works too. What matters is that it always runs.
+
+<Callout type="steam" title="Steam still says 'In game' in the editor">
+
+`SteamClient.Shutdown()` releases the API, but the Steam client only shows you as no longer playing when the
+**process** exits. In the editor your friends will see you "playing Spacewar" until you close Unity. That's cosmetic,
+and a fresh `SteamClient.Init` on the next Play works fine.
+
+</Callout>
+
+<Callout type="unity" title="Domain reload and Enter Play Mode Options">
+
+If you turn off **Reload Domain** to enter Play Mode faster, static fields and static event subscriptions survive from
+one session to the next. Facepunch's events are static. A handler you subscribed last session, on an object that no
+longer exists, will be called again this session, and `SteamClient.Init` will throw "already initialized" if the
+previous session never reached `Shutdown`. Always unsubscribe in `OnDisable` / `OnDestroy`, reset your own statics
+with `[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]`, and make sure `Shutdown` runs.
+
+</Callout>
+
+## Using Steam from other scripts
+
+Other components either check `IsReady` or wait for the `Ready` event:
+
+```csharp title="SteamStatusLabel.cs"
+using Steamworks;
+using UnityEngine;
+using TMPro;
+
+public sealed class SteamStatusLabel : MonoBehaviour
+{
+    [SerializeField] TMP_Text label;
+
+    void OnEnable()
+    {
+        if (SteamBootstrap.IsReady) Show();
+        else SteamBootstrap.Ready += Show;
+    }
+
+    void OnDisable() => SteamBootstrap.Ready -= Show;
+
+    void Show()
+    {
+        label.text = SteamClient.IsLoggedOn
+            ? $"Signed in as {SteamClient.Name}"
+            : $"{SteamClient.Name} (Steam is offline)";
+    }
+}
+```
+
+`SteamClient.IsLoggedOn` tells you whether the Steam client is connected to Valve's servers. Steam can be running in
+offline mode: Init succeeds, but lobbies and networking won't work. Valve advises against disabling features eagerly
+because of it, but it is a good thing to show in a status bar and to log.
+
+For debugging, Facepunch can print every callback it dispatches:
+
+```csharp title="SteamDebugHooks.cs"
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+Steamworks.Dispatch.OnDebugCallback = (type, text, isServer) =>
+    UnityEngine.Debug.Log($"[Steam callback] {type}\n{text}");
+#endif
+```
+
+It's noisy, but it answers "did Steam ever send me `LobbyEnter_t`?" in seconds.
+
+## Pitfalls
+
+<Callout type="pitfall" title="Forgetting the pump">
+
+You initialize with `asyncCallbacks: false`, then wonder why `await SteamMatchmaking.CreateLobbyAsync()` hangs
+forever. With manual callbacks, **no `RunCallbacks()` means no results**. Either call it every frame or leave
+`asyncCallbacks` at its default of `true`. Never do both on a whim: pick one model and document it in the bootstrap.
+
+</Callout>
+
+<Callout type="pitfall" title="Calling Steam before Init or after Shutdown">
+
+Facepunch's static classes hold their native interface only between `Init` and `Shutdown`. Calling
+`SteamMatchmaking.LobbyList` in a script whose `Awake` runs before the bootstrap, or `lobby.Leave()` in an `OnDestroy`
+that runs after the bootstrap's `OnDestroy`, throws `NullReferenceException` or "SteamClient isn't initialized".
+Destruction order on exiting Play Mode is not guaranteed, so guard teardown code with `if (SteamClient.IsValid)`.
+
+</Callout>
+
+<Callout type="pitfall" title="Init failing only on some machines">
+
+"Works on my machine" usually means your machine runs Steam, logged in as an account that owns the app, under the
+same OS user. Test a build on a machine where Steam is closed and check that your game shows a clear message instead
+of a blank screen. Also run the editor without administrator rights unless Steam has them too.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Install the **release zip's `Unity` folder** under `Assets/Plugins/` and check that exactly one Facepunch DLL is enabled per platform.
+- `SteamClient.Init(appId, asyncCallbacks)` **throws** on failure. Catch it, log why, and run the game without Steam features.
+- Steam results arrive through the **callback pump**: `asyncCallbacks: true` runs it in the background, otherwise call `SteamClient.RunCallbacks()` every frame or your `await`s never finish.
+- Call `SteamClient.Shutdown()` once on exit (`OnDestroy`/`OnDisable`), and never call Steam after it.
+- With domain reload disabled, **static events and statics persist**: unsubscribe, reset, and always shut down.
+
+</KeyTakeaways>

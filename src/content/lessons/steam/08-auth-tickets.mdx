@@ -1,0 +1,320 @@
+---
+title: Auth Session Tickets
+order: 8
+summary: Have every client prove its identity and game ownership to the host with a Steam auth session ticket, validate it with BeginAuthSession, react to the validation callback, and clean up both sides.
+durationMin: 25
+objectives:
+  - Explain what an auth session ticket proves, and what it doesn't, compared with the relay's verified identity
+  - Request a ticket for the host's identity with SteamUser.GetAuthSessionTicketAsync and send it over the connection
+  - Validate tickets on the host with SteamUser.BeginAuthSession and SteamUser.OnValidateAuthTicketResponse
+  - Close sessions correctly with EndAuthSession and AuthTicket.Cancel
+prerequisites: [steam/messages-and-channels, theory/security]
+tags: [steam, auth, security, ownership]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: SteamUser.cs (GetAuthSessionTicketAsync, BeginAuthSession, EndAuthSession, OnValidateAuthTicketResponse)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamUser.cs
+  - title: 'Facepunch.Steamworks source: Classes/AuthTicket.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Classes/AuthTicket.cs
+  - title: 'Facepunch.Steamworks wiki: AuthTicket'
+    url: https://wiki.facepunch.com/steamworks/AuthTicket
+  - title: 'Steamworks: User Authentication and Ownership'
+    url: https://partner.steamgames.com/doc/features/auth
+  - title: 'Steamworks API: ISteamUser (GetAuthSessionTicket, BeginAuthSession, ValidateAuthTicketResponse_t)'
+    url: https://partner.steamgames.com/doc/api/ISteamUser
+  - title: 'Steamworks: Steam Datagram Relay (authenticated, encrypted traffic)'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+---
+
+In a single-player game you never ask "is this really the player?". The save file is on their own disk, and if they
+edit it, that's their business. In multiplayer, the host is about to give a stranger's machine a seat in a shared
+world. The theory module's [security lesson](/modules/theory/security/) put it plainly: never trust what a client
+*says* about itself. Steam gives you a way to have a client **prove** two things to the host: which Steam account it
+is, and that this account owns your game. The proof is an <Term id="auth-session-ticket">auth session ticket</Term>.
+
+## What a ticket proves
+
+A ticket is a blob of bytes (usually under 1 KB) that the client's Steam client signs on request. The host hands it
+to its own Steam client, which checks the signature and asks Valve's backend whether the ticket is genuine, unused and
+issued to that account. Valve's documentation lists what you learn:
+
+- The ticket really was issued to the Steam ID that sent it.
+- The account **owns a license** for your App ID. If not, the response is `NoLicenseOrExpired`.
+- The account's **VAC and publisher ban** status, for apps that use them.
+- The **owner** Steam ID. It differs from the player's when the game is borrowed through Steam Family Sharing.
+
+<Callout type="steam" title="Doesn't the relay already know who I'm talking to?">
+
+Yes. Valve documents that Steam Datagram Relay traffic is authenticated and encrypted, and lesson 06's `ChatHost` already
+reads the remote Steam ID from `info.Identity`, which Steam verified. What the relay doesn't tell you is whether that
+account **owns your game**, or whether it's banned. Tickets also work over **any** transport (a plain UDP socket, a
+dedicated server), so the same auth code survives a transport change. Module 4's NGO connection approval uses exactly
+this flow.
+
+</Callout>
+
+A ticket does **not** prove the client is running an unmodified game, or that its messages are honest. It is
+identity, not anti-cheat. The host still validates every message it receives (lesson 07).
+
+## The flow
+
+<Sequence
+  title="Auth session ticket between a client and the host"
+  actors={[
+    { id: 'c', label: 'Client', kind: 'client' },
+    { id: 'cs', label: 'Client’s Steam', kind: 'steam' },
+    { id: 'h', label: 'Host', kind: 'host' },
+    { id: 'hs', label: 'Host’s Steam + Valve', kind: 'steam' },
+  ]}
+  steps={[
+    { from: 'c', to: 'cs', label: 'GetAuthSessionTicketAsync(hostSteamId)', note: 'the ticket is bound to the identity that will check it', kind: 'reliable' },
+    { from: 'cs', to: 'c', label: 'AuthTicket { Data, Handle }', note: 'Async version waits until Steam confirms the ticket is ready', kind: 'event' },
+    { from: 'c', to: 'h', label: 'Hello(ticket.Data) — Reliable', kind: 'reliable' },
+    { from: 'h', to: 'hs', label: 'BeginAuthSession(ticket, connection’s SteamId)', note: 'quick local check: OK, InvalidTicket, DuplicateRequest…', kind: 'reliable' },
+    { from: 'hs', to: 'h', label: 'OnValidateAuthTicketResponse(steamId, ownerId, OK)', note: 'may take a while; may never come on a bad network', kind: 'event' },
+    { from: 'h', to: 'c', label: 'Welcome — peer is now trusted', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'leaving: ticket.Cancel()', kind: 'local' },
+    { from: 'h', to: 'hs', label: 'peer disconnected: EndAuthSession(steamId)', kind: 'reliable' },
+  ]}
+/>
+
+What you should notice:
+
+- There are **two** answers on the host. `BeginAuthSession` returns a `BeginAuthResult` immediately (a malformed or
+  reused ticket fails here), and the real verdict arrives later in `SteamUser.OnValidateAuthTicketResponse`.
+- The host passes the Steam ID from the **verified connection identity**, not one written inside the client's message.
+- Both sides clean up: the client cancels its ticket, and the host ends the session. Valve requires both.
+
+## The API
+
+| Side | Facepunch member | Notes |
+|---|---|---|
+| Client | `SteamUser.GetAuthSessionTicketAsync(NetIdentity identity, double timeoutSeconds = 10)` | Returns `AuthTicket` or `null` on failure or timeout. A `SteamId` converts implicitly to `NetIdentity`. |
+| Client | `SteamUser.GetAuthSessionTicket(NetIdentity identity)` | Synchronous version: returns at once, before Steam has confirmed the ticket |
+| Client | `AuthTicket.Data`, `AuthTicket.Cancel()` / `Dispose()` | Send `Data`. Cancel when the session ends. |
+| Host | `SteamUser.BeginAuthSession(byte[] ticketData, SteamId steamid)` | Returns `BeginAuthResult` (`OK`, `InvalidTicket`, `DuplicateRequest`, `InvalidVersion`, `GameMismatch`, `ExpiredTicket`) |
+| Host | `SteamUser.OnValidateAuthTicketResponse` | `Action<SteamId, SteamId, AuthResponse>`: player, owner, verdict |
+| Host | `SteamUser.EndAuthSession(SteamId)` | Call when that player leaves |
+
+The `identity` argument is the system that will **validate** the ticket. Valve's docs: for peer-to-peer, pass the
+other user's Steam ID. Here that's the host, `lobby.Owner.Id`. A ticket presented to anyone else fails with
+`AuthTicketNetworkIdentityFailure`. Older code calls `GetAuthSessionTicket()` with no arguments; current Facepunch
+versions require the identity, matching Valve's current API.
+
+## Client: sending the ticket
+
+First, two helpers for the lesson 07 protocol, and a new message type:
+
+```csharp title="ChatProtocol.cs (additions)"
+public enum MsgType : byte
+{
+    Chat = 1, Ping = 2, Pong = 3, Typing = 4,
+    Hello = 5,     // client → host: auth ticket, reliable, first message
+    Welcome = 6,   // host → client: you're verified
+}
+
+// In NetWriter:
+public NetWriter WriteBytes(byte[] data)
+{
+    BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(Length, 2), (ushort)data.Length);
+    Buffer.BlockCopy(data, 0, buffer, Length + 2, data.Length);
+    Length += 2 + data.Length;
+    return this;
+}
+
+// In NetReader:
+public byte[] ReadBytes(int maxBytes)
+{
+    Need(2);
+    int n = BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan(pos, 2));
+    pos += 2;
+    if (n > maxBytes) throw new FormatException($"blob of {n} bytes exceeds {maxBytes}");
+    Need(n);
+    var bytes = new byte[n];
+    Buffer.BlockCopy(buf, pos, bytes, 0, n);
+    pos += n;
+    return bytes;
+}
+```
+
+Then the client requests a ticket as soon as it's connected:
+
+```csharp title="ChatClient.cs (auth additions)"
+AuthTicket ticket;
+readonly NetWriter helloWriter = new NetWriter(4096);   // tickets can exceed one packet; Hello is reliable
+public SteamId HostId;                                   // set by SteamChatSession: lobby.Owner.Id
+
+public override async void OnConnected(ConnectionInfo info)
+{
+    base.OnConnected(info);
+    Session.Post("Connected. Authenticating…");
+
+    ticket = await SteamUser.GetAuthSessionTicketAsync(HostId);   // SteamId → NetIdentity
+    if (ticket == null)
+    {
+        Close(false, 1003, "Could not get an auth ticket");
+        return;
+    }
+    if (!Connected) { ticket.Cancel(); return; }   // disconnected while we waited
+
+    helloWriter.Begin(MsgType.Hello).WriteBytes(ticket.Data).SendTo(Connection, SendType.Reliable);
+}
+
+public override void OnDisconnected(ConnectionInfo info)
+{
+    ticket?.Cancel();   // tells the host's Steam this ticket is no longer valid
+    ticket = null;
+    base.OnDisconnected(info);
+    Close();
+    Session.HandleClientLost();
+}
+```
+
+Handle `MsgType.Welcome` in the client's `OnMessage` by enabling the chat input, and only then let the player type.
+
+## Host: the auth gate
+
+The host keeps one record per peer and refuses to let unverified peers affect anything.
+
+```csharp title="HostAuthGate.cs"
+using System;
+using System.Collections.Generic;
+using Steamworks;
+using Steamworks.Data;
+
+/// Tracks auth sessions for every connected peer on the host.
+public sealed class HostAuthGate : IDisposable
+{
+    public const int MaxTicketBytes = 4000;
+
+    readonly Dictionary<SteamId, Connection> pending = new Dictionary<SteamId, Connection>();
+    readonly Dictionary<SteamId, Connection> verified = new Dictionary<SteamId, Connection>();
+
+    public event Action<SteamId, Connection> PeerVerified;
+
+    public HostAuthGate() => SteamUser.OnValidateAuthTicketResponse += HandleValidateResponse;
+
+    public bool IsVerified(SteamId id) => verified.ContainsKey(id);
+
+    /// Called when a Hello arrives. 'who' is the connection's verified identity.
+    public void Begin(Connection connection, SteamId who, byte[] ticket)
+    {
+        if (pending.ContainsKey(who) || verified.ContainsKey(who))
+        {
+            connection.Close(false, 1004, "Already authenticated");
+            return;
+        }
+
+        BeginAuthResult result = SteamUser.BeginAuthSession(ticket, who);
+        if (result != BeginAuthResult.OK)
+        {
+            connection.Close(false, 1003, $"Auth rejected: {result}");
+            return;
+        }
+        pending[who] = connection;   // now wait for OnValidateAuthTicketResponse
+    }
+
+    void HandleValidateResponse(SteamId player, SteamId owner, AuthResponse response)
+    {
+        bool wasPending = pending.TryGetValue(player, out Connection connection);
+        if (!wasPending && !verified.TryGetValue(player, out connection))
+            return;   // not one of ours (or already gone)
+
+        if (response == AuthResponse.OK && wasPending)
+        {
+            pending.Remove(player);
+            verified[player] = connection;
+            if (owner != player)
+                UnityEngine.Debug.Log($"[Auth] {player} plays a copy borrowed from {owner}");
+            PeerVerified?.Invoke(player, connection);
+            return;
+        }
+
+        if (response == AuthResponse.OK) return;
+
+        // Valve can send further responses later in the session, e.g. when the ticket is cancelled
+        // (the player is leaving) or the user goes offline. Anything but OK ends their seat.
+        End(player);
+        connection.Close(false, 1003, $"Auth failed: {response}");
+    }
+
+    /// Call from the socket's OnDisconnected.
+    public void End(SteamId player)
+    {
+        bool known = pending.Remove(player) | verified.Remove(player);
+        if (known) SteamUser.EndAuthSession(player);
+    }
+
+    public void Dispose()
+    {
+        SteamUser.OnValidateAuthTicketResponse -= HandleValidateResponse;
+        foreach (SteamId id in pending.Keys) SteamUser.EndAuthSession(id);
+        foreach (SteamId id in verified.Keys) SteamUser.EndAuthSession(id);
+        pending.Clear();
+        verified.Clear();
+    }
+}
+```
+
+Wire it into `ChatHost`: create a `HostAuthGate` together with the socket and dispose it from `SteamChatSession.Stop`
+just before `host.Close()` (`SocketManager.Close` isn't virtual); in `OnMessage`, handle `Hello` by calling
+`gate.Begin(connection, identity.SteamId, r.ReadBytes(HostAuthGate.MaxTicketBytes))`; ignore `Chat` and `Typing` from
+peers for which `gate.IsVerified(identity.SteamId)` is false; on `PeerVerified`, send `Welcome`; and in
+`OnDisconnected`, call `gate.End(info.Identity.SteamId)`.
+
+<Callout type="steam" title="When the verdict is slow">
+
+Valve notes that network conditions can delay the `ValidateAuthTicketResponse` callback "for an indefinite period of
+time". Their guidance is that the caller should not treat the identity as confirmed until the callback arrives, but
+should allow the session to continue. In practice: keep pending peers connected, show them as "verifying", don't let
+them affect shared state, and choose a policy (for example, a generous timeout) for peers that are never confirmed.
+
+</Callout>
+
+<Callout type="note" title="Mutual authentication">
+
+This module's host verifies clients, which fits a host-authoritative session. Valve's P2P guidance goes further:
+every client should verify every other client. If clients exchange data directly, or if they need to trust the host,
+have the host send its own ticket (made for each client's identity) as well.
+
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Trusting the Steam ID inside the message">
+
+If the Hello carried "I am 7656…" and the host passed that to `BeginAuthSession`, a client could present its own
+valid ticket while claiming a different ID in game logic elsewhere. Always use the ID Steam attached to the connection
+(`identity.SteamId` / `info.Identity.SteamId`), and key every per-player structure by it.
+
+</Callout>
+
+<Callout type="pitfall" title="Forgetting EndAuthSession and Cancel">
+
+Every `BeginAuthSession` needs a matching `EndAuthSession`, and every ticket a matching `Cancel`. Valve requires
+both. If you skip `EndAuthSession`, a player who reconnects gets `DuplicateRequest`. If you skip `Cancel`, the
+ticket stays valid after the player left. Tickets are **single use**: request a fresh one for every session, never cache
+one across matches.
+
+</Callout>
+
+<Callout type="pitfall" title="Using a session ticket for your web backend">
+
+Session tickets are meant to be checked by another Steam client or game server through `BeginAuthSession`. To
+authenticate with your own HTTPS backend, which calls the `ISteamUserAuth/AuthenticateUserTicket` Web API, Valve requires
+a different ticket: `SteamUser.GetAuthTicketForWebApiAsync(identity)` in Facepunch.
+
+</Callout>
+
+<KeyTakeaways>
+
+- An **auth session ticket** proves the sender's Steam ID, its **license** for your App ID, its ban status and the copy's **owner**. It is not anti-cheat.
+- Client: `await SteamUser.GetAuthSessionTicketAsync(hostSteamId)`, send `ticket.Data` reliably, `ticket.Cancel()` when leaving.
+- Host: `SteamUser.BeginAuthSession(ticket, connectionSteamId)` gives a quick `BeginAuthResult`; the verdict comes in **`SteamUser.OnValidateAuthTicketResponse(steamId, ownerId, response)`**.
+- Use the **connection's verified identity**, never a claimed ID, and don't trust a peer until the response is `OK`.
+- Call **`EndAuthSession`** when a peer leaves, and request a **fresh ticket** for every session.
+
+</KeyTakeaways>

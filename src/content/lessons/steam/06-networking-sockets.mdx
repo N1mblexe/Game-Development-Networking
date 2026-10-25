@@ -1,0 +1,400 @@
+---
+title: Steam Networking Sockets and the Relay
+order: 6
+summary: Open a relayed listen socket on the lobby owner, connect to it by Steam ID from every other member, pump messages each frame, and follow a connection through its states.
+durationMin: 30
+objectives:
+  - Explain how Steam Datagram Relay gets traffic through any NAT while hiding players' IP addresses
+  - Create a host socket with SteamNetworkingSockets.CreateRelaySocket and connect with ConnectRelay by Steam ID
+  - Subclass SocketManager and ConnectionManager, pump Receive() every frame and close everything on exit
+  - Interpret connection state changes and end reasons, and know why the old SteamNetworking P2P API is deprecated
+prerequisites: [steam/lobbies, theory/nat-and-relays, theory/topologies]
+tags: [steam, networking, sockets, relay, sdr]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: Facepunch.Steamworks, version: '2.5.2' }
+sources:
+  - title: 'Facepunch.Steamworks source: SteamNetworkingSockets.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamNetworkingSockets.cs
+  - title: 'Facepunch.Steamworks source: Networking/SocketManager.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Networking/SocketManager.cs
+  - title: 'Facepunch.Steamworks source: Networking/ConnectionManager.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/Networking/ConnectionManager.cs
+  - title: 'Facepunch.Steamworks source: Networking/ISocketManager.cs and IConnectionManager.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/tree/master/Facepunch.Steamworks/Networking
+  - title: 'Facepunch.Steamworks wiki: Creating A Socket Server'
+    url: https://wiki.facepunch.com/steamworks/Creating_A_Socket_Server
+  - title: 'Facepunch.Steamworks wiki: P2P Networking (deprecated)'
+    url: https://wiki.facepunch.com/steamworks/Sending_P2P_Messages
+  - title: 'Steamworks: Steam Networking (ISteamNetworking deprecated)'
+    url: https://partner.steamgames.com/doc/features/multiplayer/networking
+  - title: 'Steamworks: Steam Datagram Relay'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+  - title: 'Steamworks API: ISteamNetworkingSockets'
+    url: https://partner.steamgames.com/doc/api/ISteamNetworkingSockets
+  - title: 'GameNetworkingSockets: steamnetworkingtypes.h (connection states, end reasons)'
+    url: https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/include/steam/steamnetworkingtypes.h
+---
+
+The lobby told every member *who* the host is. Now they need a pipe to the host that works from any home network,
+on any NAT, without anyone port-forwarding. In plain UDP terms that is the hardest part of peer-to-peer networking. You
+saw why in [NAT and relays](/modules/theory/nat-and-relays/): two machines behind NAT can't simply address each other,
+hole punching fails on symmetric NATs, and the fallback is a <Term id="relay">relay</Term> server. On Steam, that relay
+already exists, it's free for Steam games, and you address it with a Steam ID.
+
+## Steam Datagram Relay
+
+<Term id="steam-datagram-relay">Steam Datagram Relay</Term> (SDR) is Valve's relay network: servers in Valve's data
+centres, connected over Valve's backbone. When you connect to a peer by identity, Steam picks a route for you. Valve
+documents three properties that matter to you:
+
+- **It gets through NAT.** Both peers make *outgoing* connections to nearby relays, which every home router allows.
+  Neither side needs an open port. See the symmetric-NAT case below.
+- **IP addresses stay hidden.** Peers see the relay, not each other. A player can't learn the host's home IP from
+  the connection and then flood it.
+- **Traffic is authenticated, encrypted and rate-limited.** The remote identity on a relayed connection is the Steam ID
+  that Steam verified, not a value the peer claims. For some players the backbone route is even faster than the public
+  internet.
+
+<Sim name="nat-traversal" preset="symmetric" caption="Symmetric NAT: hole punching fails because the mapped port changes per destination, so only a relay can carry the traffic." />
+
+What you should notice:
+
+- The punch attempt fails because each new destination gets a **different** public port on a symmetric NAT, so the
+  peer's guess is always wrong.
+- Through the relay, each side only ever sends **outbound** packets to the relay, which every NAT permits.
+- The cost is an extra hop. SDR keeps it small by choosing relays near both players and routing over Valve's backbone.
+
+Depending on each player's Steam networking settings, Steam may also try a direct NAT-punched route and use it when
+it's better. Your code doesn't change either way: you connect to a Steam ID and Steam decides how the packets travel.
+
+<Diagram name="topology" variant="relay" caption="Relayed host topology: every client connects to the host through relays; nobody needs an open port or learns another player's IP." />
+
+## Which Steam networking API?
+
+| API | Facepunch class | Status |
+|---|---|---|
+| `ISteamNetworking` (`SendP2PPacket`, `AcceptP2PSessionWithUser`) | `SteamNetworking` | **Deprecated.** Valve says it may be removed from the SDK. Facepunch's wiki marks it deprecated and notes Rust dropped it because it revealed IPs |
+| `ISteamNetworkingMessages` | `SteamNetworkingMessages` | Connectionless, UDP-like messages to a Steam ID. Good for porting UDP-style code |
+| `ISteamNetworkingSockets` | `SteamNetworkingSockets` + `SocketManager` / `ConnectionManager` | **Connection-oriented. Use this.** It's what the NGO Facepunch transport uses in module 4 |
+
+<Term id="steam-networking-sockets">Steam Networking Sockets</Term> look like ordinary sockets: a host *listens*, clients
+*connect*, and you get a `Connection` handle per peer. Unlike TCP, they carry **messages** (each send arrives as one
+whole message) and let every message choose reliable or unreliable delivery, which is lesson 07's topic.
+
+## The API in four calls
+
+```csharp
+// Host: listen for relayed connections on virtual port 0.
+ChatHost host = SteamNetworkingSockets.CreateRelaySocket<ChatHost>(virtualport: 0);
+
+// Client: connect to the host's Steam ID on the same virtual port.
+ChatClient client = SteamNetworkingSockets.ConnectRelay<ChatClient>(hostSteamId, virtualport: 0);
+
+// Both, every frame: deliver queued messages to OnMessage.
+host.Receive();
+client.Receive();
+```
+
+The type argument (`ChatHost`, `ChatClient` above) must derive from <Term id="socket-manager">`SocketManager`</Term> (host) or <Term id="connection-manager">`ConnectionManager`</Term>
+(client), with a parameterless constructor, because Facepunch creates the instance for you. The **virtual port** is a
+number you choose, so one host can run several independent sockets. Host and client just have to agree on it.
+
+If you would rather not subclass, both factories have interface overloads,
+`CreateRelaySocket(int virtualport, ISocketManager)` and `ConnectRelay(SteamId, int virtualport, IConnectionManager)`,
+which return a plain `SocketManager` / `ConnectionManager` and route every callback to your object.
+
+There are also `CreateNormalSocket` and `ConnectNormal`, which take a `NetAddress` instead of a Steam ID, for **plain UDP by IP**. They use
+the same classes, which is useful for LAN tests (lesson 09), but they don't use the relay. The pair must match:
+a client using `ConnectNormal` can't reach a socket created with `CreateRelaySocket`.
+
+## Connection states
+
+<Sequence
+  title="A relayed connection, from ConnectRelay to Close"
+  actors={[
+    { id: 'c', label: 'Client (ConnectionManager)', kind: 'client' },
+    { id: 'r', label: 'Steam Datagram Relay', kind: 'relay' },
+    { id: 'h', label: 'Host (SocketManager)', kind: 'host' },
+  ]}
+  steps={[
+    { from: 'c', to: 'r', label: 'ConnectRelay(hostId) → state Connecting', note: 'messages sent now are queued', kind: 'reliable' },
+    { from: 'r', to: 'h', label: 'connect request from a verified Steam ID', kind: 'reliable' },
+    { from: 'h', to: 'h', label: 'OnConnecting(connection, info) → Accept() or Close()', note: 'decide within about a second', kind: 'local' },
+    { from: 'r', to: 'c', label: 'FindingRoute', note: 'unreliable messages sent in this state are discarded', kind: 'event' },
+    { from: 'h', to: 'c', label: 'Connected on both sides → OnConnected', kind: 'event' },
+    { from: 'c', to: 'h', label: 'messages flow; Receive() each frame delivers them', kind: 'unreliable' },
+    { from: 'h', to: 'c', label: 'host closes or times out → ClosedByPeer / ProblemDetectedLocally', kind: 'event' },
+    { from: 'c', to: 'c', label: 'OnDisconnected(info) → read info.EndReason, then Close()', note: 'the handle stays allocated until you close it', kind: 'local' },
+  ]}
+/>
+
+The `ConnectionState` values come straight from Valve's API:
+
+| State | Meaning |
+|---|---|
+| `Connecting` | Handshake in progress. The host sees the peer in `SocketManager.Connecting`. |
+| `FindingRoute` | Accepted, still negotiating a relay route. Unreliable sends are dropped. |
+| `Connected` | Ready. The host moves the peer to `SocketManager.Connected`. |
+| `ClosedByPeer` | The other side closed. You must still call `Close()` to free the handle. |
+| `ProblemDetectedLocally` | Timeout or lost internet. Same rule: close it. |
+| `None` | The handle was destroyed. Facepunch treats this as a disconnect too. |
+
+When a connection ends, `info.EndReason` (a `NetConnectionEnd`) says why, grouped like HTTP status codes: 1000–1999
+are **your** codes (whatever you pass to `Close(linger, reasonCode, debugString)`), 3000s are local problems, 4000s
+remote ones such as `Remote_Timeout`, and 5000s miscellaneous ones such as `Misc_Timeout` or
+`Misc_SteamConnectivity`. Log it every time; it is the first thing you'll need when a playtester says "it disconnected".
+
+## The chat session
+
+Here is the first networked piece of the module project: the lobby owner hosts, everyone else connects, and text
+messages are relayed to all. Messages are plain UTF-8 strings for now; lesson 07 replaces them with a small protocol.
+
+```csharp title="ChatHost.cs"
+using System;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using Steamworks;
+using Steamworks.Data;
+
+/// Runs on the lobby owner. One SocketManager accepts every member's connection.
+public sealed class ChatHost : SocketManager
+{
+    public SteamChatSession Session;   // set right after creation
+
+    public override void OnConnecting(Connection connection, ConnectionInfo info)
+    {
+        SteamId who = info.Identity.SteamId;   // verified by Steam, not claimed by the peer
+        if (!Session.IsLobbyMember(who))
+        {
+            connection.Close(false, 1001, "Not a member of this lobby");
+            return;                          // don't call base: base accepts
+        }
+        base.OnConnecting(connection, info);   // no Interface set → connection.Accept()
+    }
+
+    public override void OnConnected(Connection connection, ConnectionInfo info)
+    {
+        base.OnConnected(connection, info);    // adds the connection to the poll group
+        Session.Post($"{new Friend(info.Identity.SteamId).Name} connected");
+    }
+
+    public override void OnDisconnected(Connection connection, ConnectionInfo info)
+    {
+        base.OnDisconnected(connection, info); // no Interface set → connection.Close()
+        Session.Post($"{new Friend(info.Identity.SteamId).Name} left ({info.EndReason})");
+    }
+
+    public override void OnMessage(Connection connection, NetIdentity identity, IntPtr data, int size,
+                                   long messageNum, long recvTime, int channel)
+    {
+        string text = SteamChatSession.Decode(data, size);
+        string line = $"{new Friend(identity.SteamId).Name}: {text}";
+        Session.Post(line);
+        Broadcast(line);
+    }
+
+    public void Broadcast(string line)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(line);
+        foreach (Connection c in Connected)
+            c.SendMessage(bytes, SendType.Reliable);
+    }
+}
+```
+
+```csharp title="ChatClient.cs"
+using System;
+using Steamworks;
+using Steamworks.Data;
+
+/// Runs on every non-owner member. One connection to the host.
+public sealed class ChatClient : ConnectionManager
+{
+    public SteamChatSession Session;
+
+    public override void OnConnected(ConnectionInfo info)
+    {
+        base.OnConnected(info);
+        Session.Post("Connected to host");
+    }
+
+    public override void OnDisconnected(ConnectionInfo info)
+    {
+        base.OnDisconnected(info);
+        Session.Post($"Disconnected: {info.State} / {info.EndReason}");
+        Close();                       // free the handle; ConnectionManager doesn't do it for you
+        Session.HandleClientLost();
+    }
+
+    public override void OnMessage(IntPtr data, int size, long messageNum, long recvTime, int channel)
+    {
+        Session.Post(SteamChatSession.Decode(data, size));
+    }
+}
+```
+
+```csharp title="SteamChatSession.cs"
+using System;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using Steamworks;
+using Steamworks.Data;
+using UnityEngine;
+
+/// Starts a host or client socket when we enter a lobby, pumps it, and tears it down.
+public sealed class SteamChatSession : MonoBehaviour
+{
+    const int VirtualPort = 0;
+
+    ChatHost host;
+    ChatClient client;
+
+    public bool IsHost => host != null;
+    public bool IsConnected => IsHost || (client != null && client.Connected);
+    public event Action<string> LineReceived;
+
+    void Start()
+    {
+        var lobbies = SteamLobbyManager.Instance;
+        lobbies.Entered += HandleLobbyEntered;
+        lobbies.Left += Stop;
+    }
+
+    void OnDestroy()
+    {
+        var lobbies = SteamLobbyManager.Instance;
+        if (lobbies != null) { lobbies.Entered -= HandleLobbyEntered; lobbies.Left -= Stop; }
+        if (SteamClient.IsValid) Stop();
+    }
+
+    void HandleLobbyEntered(Lobby lobby)
+    {
+        Stop();
+        if (lobby.IsOwnedBy(SteamClient.SteamId))
+        {
+            host = SteamNetworkingSockets.CreateRelaySocket<ChatHost>(VirtualPort);
+            host.Session = this;   // safe: callbacks only run inside RunCallbacks, later this frame or after
+            Post("Hosting. Waiting for players…");
+        }
+        else
+        {
+            client = SteamNetworkingSockets.ConnectRelay<ChatClient>(lobby.Owner.Id, VirtualPort);
+            client.Session = this;
+            Post($"Connecting to {lobby.Owner.Name}…");
+        }
+    }
+
+    void Update()
+    {
+        // Without this, messages pile up inside Steam and OnMessage never runs.
+        host?.Receive();
+        client?.Receive();
+    }
+
+    public void Send(string text)
+    {
+        if (IsHost)
+        {
+            string line = $"{SteamClient.Name}: {text}";
+            Post(line);              // the host is a player too, but never connects to itself
+            host.Broadcast(line);
+        }
+        else if (client != null && client.Connected)
+        {
+            client.Connection.SendMessage(Encoding.UTF8.GetBytes(text), SendType.Reliable);
+        }
+    }
+
+    public void Stop()
+    {
+        client?.Close(false, 1000, "Leaving");
+        client = null;
+        host?.Close();               // closes the listen socket and its poll group
+        host = null;
+    }
+
+    public void HandleClientLost() => client = null;
+
+    public bool IsLobbyMember(SteamId id) =>
+        SteamLobbyManager.Instance.Current is Lobby l && l.Members.Any(m => m.Id == id);
+
+    public void Post(string line)
+    {
+        Debug.Log($"[Chat] {line}");
+        LineReceived?.Invoke(line);
+    }
+
+    public static string Decode(IntPtr data, int size)
+    {
+        var bytes = new byte[size];
+        Marshal.Copy(data, bytes, 0, size);   // copy out before the message is released
+        return Encoding.UTF8.GetString(bytes);
+    }
+}
+```
+
+Put `SteamChatSession` on the persistent Steam GameObject and hook `LineReceived` and `Send` to a simple chat UI. Two
+details carry over to every Steam networking project:
+
+- **The host is a player that never connects to itself.** It shows its own messages locally and sends to everyone else.
+  Facepunch's FAQ warns that you can't connect to your own server through the relay, and you don't need to.
+- **`OnMessage` data is only valid during the callback.** Facepunch releases the native message right after your
+  override returns, so copy what you need (`Marshal.Copy`) before returning.
+
+<Callout type="steam" title="ConnectionManager.OnConnecting rarely fires">
+
+A `ConnectionManager` starts with `Connecting = true`, and Facepunch only raises `OnConnecting` on a transition *into*
+connecting. In practice a client sees `OnConnected` or `OnDisconnected`, not `OnConnecting`, so put "connecting…" UI
+right after `ConnectRelay` instead.
+
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Not pumping Receive()">
+
+`SteamClient.RunCallbacks()` delivers **connection state changes**, but not **messages**. Messages wait in a queue on
+the socket until you call `Receive()` on the `SocketManager` or `ConnectionManager`. Forget it and you'll see players
+connect, then nothing. `Receive()` also has a buffer-size argument (default 32 messages per batch) and keeps reading
+until the queue is empty.
+
+</Callout>
+
+<Callout type="pitfall" title="Not closing sockets and connections">
+
+A connection that ended (`ClosedByPeer`, `ProblemDetectedLocally`) keeps its handle until you call `Close()`, and a
+listen socket stays open until `SocketManager.Close()`. Leaving them open leaks handles across editor play sessions and,
+worse, means the other side never gets a clean "closed by peer". It waits for the connection **timeout** instead (several
+seconds; `SteamNetworkingUtils.Timeout` holds the value) and shows a frozen session. Close on leave, on lobby change and in `OnDestroy`, before `SteamClient.Shutdown()`.
+
+</Callout>
+
+<Callout type="pitfall" title="Accepting everything">
+
+The default `SocketManager.OnConnecting` accepts **any** Steam user who knows your Steam ID and virtual port, not just
+your lobby members. Check the verified `info.Identity.SteamId` against the lobby before accepting, as `ChatHost` does,
+and then verify ownership with an auth ticket (lesson 08).
+
+</Callout>
+
+<Callout type="pitfall" title="Starting from the old API or old tutorials">
+
+Plenty of tutorials still use `SteamNetworking.SendP2PPacket` and `OnP2PSessionRequest`. It compiles, and it works
+today, but Valve has deprecated `ISteamNetworking`, and it has no `SocketManager`, no connection states and none of the
+improved reliability layer. Use `SteamNetworkingSockets` for anything new.
+
+</Callout>
+
+<KeyTakeaways>
+
+- **Steam Datagram Relay** carries traffic between Steam IDs through Valve's relays: it works through any NAT (including symmetric), hides IP addresses, and authenticates the remote identity.
+- Host: **`SteamNetworkingSockets.CreateRelaySocket`** with your `SocketManager` subclass. Clients: **`ConnectRelay`** to the host's Steam ID with your `ConnectionManager` subclass, on the same virtual port.
+- Override `OnConnecting` (accept or reject), `OnConnected`, `OnDisconnected` and `OnMessage`, and **call `Receive()` every frame**.
+- Connections go `Connecting → FindingRoute → Connected → ClosedByPeer/ProblemDetectedLocally`. Log `EndReason`, and always **`Close()`** connections and sockets.
+- The old `SteamNetworking` P2P API is **deprecated**: use `SteamNetworkingSockets`.
+
+</KeyTakeaways>
