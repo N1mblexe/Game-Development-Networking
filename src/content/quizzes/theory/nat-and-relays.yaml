@@ -1,0 +1,84 @@
+passPct: 70
+questions:
+  - id: why-connection-fails
+    type: single
+    prompt: >-
+      You host a listen server at home and send a friend your public IP address. Their connection attempt times out. What most likely
+      happened to their packets?
+    options:
+      - Your ISP blocks all UDP traffic
+      - They reached your router, which had no mapping for them and dropped them
+      - They were delivered to your PC, but the game rejected them because they used UDP
+      - The friend's router rewrote the destination port, so they went to the wrong server
+    answer: 1
+    difficulty: 1
+    explanation: >-
+      A NAT only forwards incoming packets that match a mapping created by an **outgoing** packet. Your friend's connection attempt is
+      unsolicited, so the router doesn't know which private machine it is for and drops it. That's why player hosting needs hole
+      punching, a relay, or (as a last resort) port forwarding.
+  - id: punch-order
+    type: order
+    prompt: Put the steps of UDP hole punching through a rendezvous server in order.
+    items:
+      - Both players send a packet to the rendezvous server, which records their public endpoints
+      - The rendezvous server tells each player the other's public endpoint
+      - Both players start sending punch packets to each other's public endpoint
+      - Each NAT creates an outgoing mapping, so the other side's punch packets now look like replies
+      - Game traffic flows directly, with keep-alives holding the mappings open
+    difficulty: 2
+    explanation: >-
+      The rendezvous server is only needed to discover and exchange public endpoints. The trick is that both sides send **outgoing**
+      packets: the first punch in each direction may be dropped, but it creates the mapping that lets the other side's packets in.
+  - id: symmetric-punch
+    type: truefalse
+    prompt: >-
+      Both players are behind NATs with endpoint-dependent ("symmetric") mapping. Plain UDP hole punching through a rendezvous server
+      will usually succeed.
+    answer: false
+    difficulty: 2
+    explanation: >-
+      With endpoint-dependent mapping, each new destination gets a new public port. The port the rendezvous server saw isn't the port
+      the NAT uses towards the other player, so the punch packets arrive at a port with no mapping. These pairs need a relay.
+  - id: pair-success
+    type: numeric
+    prompt: >-
+      Ford, Srisuresh and Kegel measured that about 82% of NATs supported UDP hole punching. If both players' NATs must support it,
+      and the two are independent, roughly what percentage of player pairs can connect directly?
+    answer: 67
+    tolerance: 1.5
+    unit: '%'
+    difficulty: 2
+    explanation: >-
+      0.82 × 0.82 ≈ 0.67, so about **67%** of pairs, and fewer on mobile networks and behind CGNAT. In other words, about a third of
+      sessions would fail without a relay fallback. Requirements on pairs compound, just like fragment loss does.
+  - id: relay-tradeoffs
+    type: multi
+    prompt: Which of these are true of relaying all game traffic? Select all that apply.
+    options:
+      - It works through any NAT, because both players only make outgoing connections
+      - It hides each player's IP address from the others
+      - It always lowers latency compared with a direct connection
+      - Someone has to pay for the bandwidth that passes through the relay
+      - It makes the relay the authority over game state
+    answers: [0, 1, 3]
+    difficulty: 2
+    explanation: >-
+      A relay is a public server that every player connects out to, so NAT never gets in the way, and players only see the relay's
+      address. It usually **adds** some latency (Steam Datagram Relay can sometimes beat the public internet route, but not always) and
+      costs bandwidth. It only forwards packets: the authority model on top is unchanged.
+  - id: stun-ports-differ
+    type: single
+    prompt: >-
+      Your client asks two different STUN servers for its public endpoint. Both report the same public IP, but different ports. What
+      should your connection logic conclude?
+    options:
+      - The NAT uses endpoint-independent mapping, so hole punching should work
+      - The NAT uses endpoint-dependent (symmetric) mapping, so plan to fall back to a relay
+      - One of the STUN servers is faulty
+      - The client is not behind a NAT at all
+    answer: 1
+    difficulty: 3
+    explanation: >-
+      A different public port for each destination is exactly what endpoint-dependent mapping means. The endpoint that the rendezvous
+      server learns will be useless to the other player, so a relay is the reliable path. This test is how STUN-based tools classify
+      a NAT before trying to punch.

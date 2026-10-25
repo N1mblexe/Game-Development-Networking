@@ -1,0 +1,246 @@
+---
+title: Latency, Jitter, Loss, and Bandwidth
+order: 2
+summary: The four numbers that describe every network link, where they come from, and the budgets real-time games have to live within.
+durationMin: 25
+objectives:
+  - Break latency into propagation, serialization, queuing and processing delay, and estimate the minimum RTT between two cities
+  - Explain jitter and packet loss, and how a game measures and absorbs them
+  - Distinguish bandwidth from throughput and calculate how long a packet occupies a link
+  - Explain the MTU, why fragmentation multiplies loss, and why about 1200 bytes is a safe UDP payload
+prerequisites: [theory/packets-and-protocols]
+tags: [fundamentals, latency, jitter, loss, mtu]
+sources:
+  - title: Glenn Fiedler, What Every Programmer Needs To Know About Game Networking
+    url: https://gafferongames.com/post/what_every_programmer_needs_to_know_about_game_networking/
+  - title: RFC 3550, RTP (section 6.4.1, interarrival jitter estimator)
+    url: https://www.rfc-editor.org/rfc/rfc3550
+  - title: RFC 6298, Computing TCP's Retransmission Timer (smoothed RTT)
+    url: https://www.rfc-editor.org/rfc/rfc6298
+  - title: RFC 8085, UDP Usage Guidelines (message size and MTU)
+    url: https://www.rfc-editor.org/rfc/rfc8085
+  - title: RFC 8200, IPv6 Specification (1280-byte minimum link MTU)
+    url: https://www.rfc-editor.org/rfc/rfc8200
+  - title: 'NGO docs: Understanding latency'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/learn/lagandpacketloss.html
+  - title: 'Unity Transport docs: Using pipelines (SimulatorPipelineStage)'
+    url: https://docs.unity3d.com/Packages/com.unity.transport@2.4/manual/pipelines-usage.html
+---
+
+When you press Play with two editor instances on the same machine, the "network" is a memory copy. Packets arrive
+in microseconds, in order, every time. Then a friend in another country joins, and the same code shows enemies
+teleporting, doors opening late and shots that clearly hit but don't count. Nothing in your code changed. The **link**
+changed.
+
+Every link between two machines can be described with four numbers: <Term id="latency">latency</Term>,
+<Term id="jitter">jitter</Term>, <Term id="packet-loss">packet loss</Term> and <Term id="bandwidth">bandwidth</Term>.
+The rest of this course is a toolbox for hiding those four numbers from the player. Before you can hide them, you need
+to know how big they really are.
+
+## Latency: where the milliseconds come from
+
+Latency is the time it takes a packet to get from one machine to the other. Games almost always talk about the
+<Term id="rtt">round-trip time (RTT)</Term> instead: the time from sending a message to receiving the reply. The
+"<Term id="ping">ping</Term>" figure on a scoreboard is usually RTT in milliseconds. If a path is symmetric, one-way
+latency is roughly RTT / 2, but real paths are often asymmetric, so treat that as an estimate.
+
+A packet's latency is the sum of four delays:
+
+| Delay | What causes it | Typical size |
+|---|---|---|
+| **Propagation** | Light in optical fibre travels at about 200,000 km/s, roughly 5 ms per 1000 km | 0–150 ms one way |
+| **Serialization** | Pushing the packet's bits onto the wire: size ÷ link speed | 1200 bytes at 1 Mbit/s ≈ 9.6 ms; at 100 Mbit/s ≈ 0.1 ms |
+| **Queuing** | Waiting in router buffers behind other traffic | 0 ms on an idle link, hundreds of ms on a saturated one |
+| **Processing** | Routers, Wi-Fi, the OS network stack, your own game loop | Microseconds per router, but several ms for Wi-Fi |
+
+Propagation is the one you can't optimise away. London to New York is about 5,600 km, so even a perfectly straight fibre
+gives 28 ms one way and **56 ms RTT**. Real cables don't follow great circles, so measured RTT is closer to 70–80 ms.
+Sydney to Frankfurt is around 16,500 km, which is a physical minimum of 165 ms RTT and 250–300 ms in practice.
+
+Typical RTTs you should design for:
+
+| Connection | Typical RTT |
+|---|---|
+| Wired LAN | Under 1 ms |
+| Same city or region, wired broadband | 5–30 ms |
+| Across a continent | 40–90 ms |
+| Transatlantic | 70–120 ms |
+| Europe ↔ Australia | 250–320 ms |
+| Mobile 4G | 40–100 ms, with frequent spikes |
+
+### How much latency can a game take?
+
+The answer depends on the genre and on which techniques you use to hide it. Rough budgets, assuming good netcode:
+
+- **Fighting games and rhythm games**: every 16.7 ms frame counts. These games use rollback (lesson 12) and still feel worse beyond about 100–150 ms RTT.
+- **Competitive shooters**: under 50 ms feels great, 100 ms is playable, and beyond 150 ms players notice corrections and "shot behind cover" deaths.
+- **Co-op action and MMOs**: 100–200 ms is fine with prediction and interpolation.
+- **Strategy and turn-based games**: 250 ms or more is acceptable, because commands are naturally scheduled ahead.
+
+Remember that the network is only part of what the player feels. Input sampling, your frame time, the render queue
+and the display add 30–100 ms of **input-to-photon** latency even offline. Network latency is added on top.
+
+## Jitter: latency that won't sit still
+
+If every packet took exactly 50 ms, games would be easy: you'd delay everything by 50 ms and play it back smoothly.
+In reality, consecutive packets take 48 ms, 51 ms, 73 ms, 49 ms... That **variation** is jitter. It comes mostly from
+queuing: your packet happened to arrive at a router just behind someone's video stream, or the Wi-Fi radio had to
+retry a frame.
+
+Jitter matters because game data is **periodic**. A server sending 30 snapshots per second sends one every 33 ms. With
+20 ms of jitter, the client sees gaps of 13 ms, then 53 ms, then two snapshots in the same frame. If you render each
+snapshot when it arrives, motion stutters even though nothing was lost.
+
+The standard cure is a <Term id="jitter-buffer">jitter buffer</Term>: hold incoming data for a short, fixed delay and
+then play it out at an even pace. You're trading a little latency for smoothness. You'll build exactly this for remote
+players in the interpolation lesson.
+
+## Packet loss: some packets never arrive
+
+Packet loss is the fraction of packets that never reach their destination. Most loss is **congestion**: a router
+queue is full, so new packets are dropped. Wi-Fi interference, mobile handovers between cell towers and faulty cables
+add more. Typical numbers:
+
+- Wired broadband: 0–0.5%.
+- Good Wi-Fi: 0.5–2%.
+- Bad Wi-Fi or mobile: 2–10%, often in **bursts**, where several packets in a row disappear while the radio struggles.
+
+Bursts matter more than averages. A 2% average spread evenly is barely noticeable at 30 updates per second, but the
+same 2% arriving as one 300 ms blackout every 15 seconds is a visible freeze. When you test, simulate bursty loss as
+well as random loss.
+
+Loss interacts with your delivery choices from lesson 1. For unreliable state, a lost update is simply replaced by the
+next one. For reliable messages, a loss costs at least one extra round trip while the sender notices and resends,
+which is why reliable events "feel" laggier than state on a bad connection. A common trick is **redundancy**: each
+packet repeats the last few inputs, so one lost packet costs nothing.
+
+## Bandwidth and throughput
+
+**Bandwidth** is a link's capacity, such as "100 Mbit/s down, 10 Mbit/s up". <Term id="throughput">Throughput</Term> is
+what you actually achieve, which is lower because of headers, retransmissions, other traffic and congestion.
+
+Three facts matter to game developers:
+
+1. **Upload is usually the bottleneck.** Home connections are often asymmetric, with 5–20× less upload than download. If a
+   player hosts a game, their *upload* has to carry every other player's updates.
+2. **Bits, not bytes.** Link speeds are quoted in bits per second, and packet sizes in bytes. 1 KB/s = 8 kbit/s.
+3. **Saturation creates latency.** If you send more than the link can carry, packets queue in the router, and that queue
+   can add hundreds of milliseconds of delay before anything is dropped (this is called <Term id="bufferbloat">bufferbloat</Term>). A game that
+   floods its link makes its **own** latency worse.
+
+A useful budget: keep a client's steady-state traffic under about 64–256 kbit/s (8–32 KB/s) each way for most action
+games. A server's total upload is that number multiplied by the player count.
+
+## Packet size and the MTU
+
+Every link has a <Term id="mtu">maximum transmission unit (MTU)</Term>, the largest packet it carries in one piece.
+Ethernet's is 1500 bytes. Some of that goes to headers: 20 bytes for IPv4 (40 for IPv6) plus 8 bytes for UDP. And the
+smallest MTU anywhere on the path wins: PPPoE DSL lines use 1492, VPNs and tunnels lose another 50–100 bytes, and IPv6
+only guarantees 1280 bytes end to end.
+
+If a packet is bigger than the path MTU, IP <Term id="fragmentation">fragmentation</Term> splits it, or a router drops it.
+Fragments are reassembled only if **every** fragment arrives, so fragmentation multiplies loss:
+
+> P(packet arrives) = (1 − loss)^fragments
+
+With 5% loss, a 4-fragment packet arrives only 0.95⁴ ≈ 81% of the time, so it is effectively lost **19%** of the time.
+
+That is why most netcode libraries keep each UDP payload at or below about **1200 bytes**: comfortably under the
+1280-byte IPv6 minimum after headers, and safe on almost every path. Netcode that needs to send something larger
+splits it into its own pieces and resends just the missing ones.
+
+## Try it
+
+Switch between presets and send a burst of packets. Start with `LAN` to see what you develop on, then try the others.
+
+<Sim name="link-playground" preset="bad-wifi" caption="Same game, four different links." />
+
+What you should notice:
+
+- On **LAN**, everything arrives instantly and in order. This is why "it works on my machine" means nothing for netcode.
+- On **Mobile 4G**, the average RTT is acceptable, but individual packets vary widely. Spacing on arrival is uneven even though sending was perfectly regular.
+- On **Bad Wi-Fi**, losses come in **clusters**, and jitter spikes are bigger than the average latency.
+- On **Intercontinental**, there's very little jitter or loss, but the base latency is high and nothing you do in software can lower it. You can only hide it.
+
+## Measuring the link in code
+
+Netcode libraries measure RTT continuously by timestamping packets and timing the reply. They then smooth the samples,
+because a single spike shouldn't change gameplay decisions. The smoothing below is the one TCP uses (RFC 6298), and
+the jitter estimate is the one from RTP (RFC 3550). Both are simple exponential moving averages.
+
+```csharp title="LinkStats.cs"
+// Engine-agnostic: call OnPong when the reply to a timestamped ping arrives.
+public sealed class LinkStats
+{
+    public double SmoothedRttMs { get; private set; } = -1; // -1 = no sample yet
+    public double RttVariationMs { get; private set; }
+    public double JitterMs { get; private set; }
+
+    double _lastTransitMs = double.NaN;
+
+    public void OnPong(double sentAtMs, double nowMs)
+    {
+        double sample = nowMs - sentAtMs;
+        if (SmoothedRttMs < 0)
+        {
+            SmoothedRttMs = sample;
+            RttVariationMs = sample / 2;
+            return;
+        }
+        // RFC 6298: alpha = 1/8, beta = 1/4.
+        RttVariationMs += 0.25 * (System.Math.Abs(SmoothedRttMs - sample) - RttVariationMs);
+        SmoothedRttMs += 0.125 * (sample - SmoothedRttMs);
+    }
+
+    // RFC 3550 interarrival jitter: call for each periodic packet with sender and receiver clocks.
+    // Clock offset cancels out because only the *difference* in transit time matters.
+    public void OnPeriodicPacket(double senderTimeMs, double arrivalMs)
+    {
+        double transit = arrivalMs - senderTimeMs;
+        if (!double.IsNaN(_lastTransitMs))
+            JitterMs += (System.Math.Abs(transit - _lastTransitMs) - JitterMs) / 16.0;
+        _lastTransitMs = transit;
+    }
+}
+```
+
+You'll rarely write this yourself, but you'll read these numbers constantly. Netcode for GameObjects exposes the
+transport's RTT per client through the `NetworkTransport` method `GetCurrentRtt(clientId)`, and Steam's connection status reports
+ping and quality per connection.
+
+<Callout type="unity" title="Simulate bad networks in Unity">
+  Unity Transport has a `SimulatorPipelineStage` that adds delay, jitter and drop percentage to your traffic, and NGO's
+  `UnityTransport` component exposes these as debug simulator settings. The Multiplayer Tools package adds a Network
+  Simulator component with presets. Unity's own docs suggest about 20 ms delay for good broadband and up to 200 ms for
+  poor mobile, with jitter around half the delay. Turn it on from day one, not the week before launch.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Testing only on localhost">
+  On localhost, RTT is 0, jitter is 0 and loss is 0, so every timing bug stays hidden. Bugs like "the door opens before the
+  animation" or "the RPC arrives before the object spawns" only appear with latency. Develop with at least 100 ms RTT, 20 ms
+  jitter and 2% loss simulated.
+</Callout>
+
+<Callout type="pitfall" title="Looking at averages only">
+  "Average ping 40 ms" can hide a 95th percentile of 180 ms. Players remember the spikes. When you log network stats, record
+  percentiles (p95, p99) and the longest gap between received packets, not just the mean.
+</Callout>
+
+<Callout type="pitfall" title="Big packets because 'the MTU is 1500'">
+  The path MTU is the *smallest* MTU of every link on the way, and you can't see it. A 1450-byte payload that works at home
+  can be silently dropped on a player's VPN. Keep payloads at about 1200 bytes or less, and let your netcode library fragment
+  anything larger.
+</Callout>
+
+<KeyTakeaways>
+
+- **Latency** is propagation + serialization + queuing + processing. Propagation is about 5 ms per 1000 km of fibre and can't be optimised away.
+- Games reason in **RTT**. Budgets range from about 50 ms for competitive shooters to 250 ms or more for strategy games.
+- **Jitter** is variation in latency. A small, fixed buffer turns uneven arrival into smooth playback, at the cost of a little extra delay.
+- **Packet loss** is mostly congestion, often bursty. Unreliable state shrugs it off, while reliable messages pay at least an extra round trip.
+- **Bandwidth** is capacity and **throughput** is what you get. Upload is the usual bottleneck, and saturating a link adds queuing latency.
+- Keep UDP payloads at or below about **1200 bytes**: fragmentation multiplies loss, and the path MTU can be smaller than you expect.
+
+</KeyTakeaways>

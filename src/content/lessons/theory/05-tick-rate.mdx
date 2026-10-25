@@ -1,0 +1,189 @@
+---
+title: Ticks and Tick Rate
+order: 5
+summary: Why networked games simulate in fixed steps, what tick rate and send rate cost, and how a tick relates to Unity's FixedUpdate.
+durationMin: 20
+objectives:
+  - Explain why networked simulations advance in fixed, numbered ticks rather than variable frames
+  - Distinguish tick rate, send rate and frame rate, and calculate tick intervals and CPU budgets
+  - Implement a fixed-timestep accumulator loop with a catch-up limit
+  - Relate network ticks to Unity's FixedUpdate and Time.fixedDeltaTime
+prerequisites: [theory/latency-jitter-loss, theory/authority-models]
+tags: [simulation, tick-rate, timestep]
+sources:
+  - title: Glenn Fiedler, Fix Your Timestep!
+    url: https://gafferongames.com/post/fix_your_timestep/
+  - title: Valve Developer Wiki, Source Multiplayer Networking (tick, update and command rates)
+    url: https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking
+  - title: Riot Games, Peeking into VALORANT's Netcode (128-tick servers)
+    url: https://technology.riotgames.com/news/peeking-valorants-netcode
+  - title: 'NGO docs: NetworkTime and ticks'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/advanced-topics/networktime-ticks.html
+  - title: 'Unity Manual: Time project settings (Fixed Timestep)'
+    url: https://docs.unity3d.com/Manual/class-TimeManager.html
+---
+
+You already use two clocks in Unity. `Update` runs once per rendered frame, as often as the machine can manage: 144 times a
+second on a gaming PC and 30 on a phone, with `Time.deltaTime` varying every frame. `FixedUpdate` runs at a **fixed** rate,
+50 times a second by default (`Time.fixedDeltaTime = 0.02`), and Unity runs it zero, one or several times per frame to keep up.
+Physics lives in `FixedUpdate` because a simulation that steps by a different `dt` every frame gives different results
+on different machines.
+
+Networked games take that idea one step further. The authoritative simulation advances in fixed steps called
+<Term id="tick">ticks</Term>, and each tick has a **number**. Tick 1820 means the same moment on the server and on every
+client, which is what makes it possible to say "this input belongs to tick 1820" or "this snapshot describes tick 1820".
+
+## Why fixed steps
+
+A variable timestep is fine for a single player, but breaks down as soon as two machines have to agree:
+
+- **Reproducibility.** Integrating movement with `dt = 0.0069` (144 fps) and with `dt = 0.0333` (30 fps) gives slightly different results, especially with acceleration, friction and collisions. A server and client that step differently disagree forever.
+- **Shared vocabulary.** A tick number is a timestamp everyone understands. Inputs, snapshots, hit-scan rewinds and replays all refer to ticks.
+- **Replayability.** Prediction (lesson 7) has to re-run past inputs. That only works if each input is tied to a tick of known length.
+- **Budgeting.** The server knows exactly how much CPU time each tick may take, and the network knows how many updates will be sent.
+
+This approach is known as a <Term id="fixed-timestep">fixed timestep</Term>: the simulation always advances by the same `dt`,
+regardless of how fast frames are rendered.
+
+## Tick rate, send rate and frame rate
+
+Three different rates are easy to confuse:
+
+| Rate | What it is | Typical values |
+|---|---|---|
+| **<Term id="tick-rate">Tick rate</Term>** | How often the authoritative simulation steps | 20–128 Hz |
+| **<Term id="send-rate">Send rate</Term>** | How often state is sent over the network | Same as tick rate, or a fraction of it |
+| **Frame rate** | How often each client renders | 30–240 fps, varies per machine |
+
+The tick interval is simply 1 / tick rate:
+
+| Tick rate | Interval | Example |
+|---|---|---|
+| 10 Hz | 100 ms | Slow strategy games, MMOs with many entities |
+| 20 Hz | 50 ms | Minecraft servers, many survival games |
+| 30 Hz | 33.3 ms | Netcode for GameObjects' default, many co-op games |
+| 60 Hz | 16.7 ms | Fast action games, physics-heavy games |
+| 64 Hz | 15.6 ms | Counter-Strike: Global Offensive matchmaking servers |
+| 128 Hz | 7.8 ms | VALORANT servers |
+
+The send rate may be lower than the tick rate. Source engine games historically ticked at 66 Hz but sent snapshots at 20 Hz
+by default: the server simulated three ticks for every update it sent. Clients don't need every tick if they interpolate
+between snapshots (lesson 8), and sending less saves a lot of bandwidth.
+
+## What a higher tick rate buys you
+
+- **Finer timing.** Inputs wait in a queue until the next tick. At 20 Hz an input waits up to 50 ms (25 ms on average) before it is processed. At 128 Hz the worst case is under 8 ms.
+- **Better sampling of fast motion.** A projectile at 300 m/s moves 15 m between 20 Hz ticks, enough to jump through a thin wall unless you sweep or ray-cast along its path. At 60 Hz it moves 5 m.
+- **More accurate hit detection.** With more ticks there are more recorded positions to rewind to (lesson 9).
+- **Fresher state** for clients, if the send rate rises with it.
+
+## What it costs
+
+- **Server CPU.** A 60 Hz tick has 16.7 ms to simulate *everything*: movement, physics, AI and lag compensation for every player. If one tick takes longer, the next is late, and the server falls behind. Doubling the tick rate halves the budget per tick, which roughly doubles how many servers you need.
+- **Bandwidth.** If the send rate follows the tick rate, bytes per second scale linearly: 400-byte snapshots at 20 Hz are 8 KB/s per client, and at 60 Hz they're 24 KB/s.
+- **Client CPU.** Clients that predict must re-simulate several ticks whenever a correction arrives (lesson 7), and more ticks means more re-simulation.
+
+Most games settle on 30 or 60 Hz, and spend extra tick rate only where it matters most: competitive shooters.
+
+## Try it
+
+The same circular motion is sampled at different tick rates. Watch the shape of the path and the fast-moving object.
+
+<Sim name="tick-rate" preset="compare" caption="One movement, sampled at 10, 30 and 60 Hz." />
+
+What you should notice:
+
+- At **10 Hz**, the circle becomes a polygon. The simulation only "knows" the corners, so anything between two ticks never happened.
+- The fast object can **skip past** a narrow target at low tick rates, because no tick happens while it overlaps.
+- **60 Hz** looks almost continuous, but costs six times the CPU and (if sent every tick) six times the bandwidth of 10 Hz.
+- None of the lines look smooth on a 144 Hz display until the renderer **interpolates** between ticks.
+
+<Sim name="tick-rate" preset="low-tick" caption="10 Hz only: coarse sampling misses fast events." />
+
+## The fixed-timestep loop
+
+Rendering and ticking are decoupled with an **accumulator**. Each frame adds the real elapsed time, and the loop runs as many
+fixed ticks as fit in that time. The remainder becomes an interpolation factor so that rendering stays smooth between ticks.
+This is the loop from Glenn Fiedler's *Fix Your Timestep!*, and it's essentially what Unity does internally for
+`FixedUpdate`.
+
+```csharp title="TickLoop.cs"
+public sealed class TickLoop
+{
+    public const int TickRate = 30;
+    public const double TickDt = 1.0 / TickRate;   // 33.3 ms
+    const int MaxTicksPerFrame = 5;                // avoid the "spiral of death"
+
+    public uint CurrentTick { get; private set; }
+    double _accumulator;
+
+    // Call once per rendered frame with real elapsed seconds (like Time.unscaledDeltaTime).
+    public void Advance(double frameDt, System.Action<uint, double> simulateTick, System.Action<double> render)
+    {
+        _accumulator += frameDt;
+
+        int steps = 0;
+        while (_accumulator >= TickDt && steps < MaxTicksPerFrame)
+        {
+            simulateTick(CurrentTick, TickDt);   // ALWAYS the same dt
+            CurrentTick++;
+            _accumulator -= TickDt;
+            steps++;
+        }
+        if (steps == MaxTicksPerFrame) _accumulator = 0; // we fell behind: drop time instead of freezing
+
+        // 0..1: how far we are between the last tick and the next one.
+        double alpha = _accumulator / TickDt;
+        render(alpha);   // draw Lerp(previousState, currentState, alpha)
+    }
+}
+```
+
+The `MaxTicksPerFrame` guard matters. If one tick takes longer to compute than `TickDt`, the loop runs more ticks next frame
+to catch up, those take even longer, and the game locks up. This is the *spiral of death*. Clamping the catch-up trades a
+brief slowdown for staying alive.
+
+## Ticks in Unity
+
+`FixedUpdate` is already a fixed-timestep loop, so a simple approach is to make your network tick rate equal to your
+physics rate, with one tick per `FixedUpdate`. Unity's docs for NGO recommend exactly that when you use physics. The default
+values don't match out of the box: Unity's Fixed Timestep is 0.02 s (50 Hz), while NGO's `NetworkConfig.TickRate` defaults
+to 30.
+
+If you need full control, for example to re-simulate physics during reconciliation, you can set
+`Physics.simulationMode = SimulationMode.Script` and call `Physics.Simulate(TickDt)` yourself from your own tick loop.
+
+<Callout type="unity" title="Preview: ticks in NGO, Unity Transport and Steam">
+  NGO has its own tick system: set the rate with `NetworkManager` → **Tick Rate**, subscribe to `NetworkManager.NetworkTickSystem.Tick`
+  to run code once per tick, and read `NetworkManager.LocalTime` (ahead of the server, for things the client predicts) and
+  `ServerTime` (behind the server, for replicated objects). `NetworkVariable` changes are collected and sent on ticks. Unity
+  Transport and Steam Networking Sockets have no concept of ticks at all. They send packets whenever you ask, so pacing is your job.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Time.deltaTime inside tick logic">
+  Simulation code that runs on a tick must use the **tick's** fixed `dt`, not `Time.deltaTime`. Using the frame's delta makes the
+  server and each client compute different results, and makes replaying inputs impossible.
+</Callout>
+
+<Callout type="pitfall" title="Reading input in FixedUpdate">
+  `FixedUpdate` can run zero times in a frame, so a `GetKeyDown` checked there is sometimes missed. Sample input in `Update`, collect it
+  ("fire was pressed since the last tick"), and consume it on the next tick.
+</Callout>
+
+<Callout type="pitfall" title="Raising the tick rate to fix stutter">
+  Stutter on remote objects is almost always missing **interpolation** or a too-small jitter buffer, not a low tick rate. Doubling the
+  tick rate doubles your server bill and won't fix it.
+</Callout>
+
+<KeyTakeaways>
+
+- Networked simulations advance in **fixed, numbered ticks** so every machine computes the same results and can refer to the same moment.
+- **Tick rate** (simulation), **send rate** (network) and **frame rate** (rendering) are separate. The send rate is often lower than the tick rate.
+- Tick interval = 1 / tick rate: 50 ms at 20 Hz, 33.3 ms at 30 Hz, 16.7 ms at 60 Hz. That's also the server's CPU budget per tick.
+- Higher tick rates reduce input delay and sample fast motion better, but cost CPU, bandwidth and re-simulation time.
+- Use an **accumulator loop** with a catch-up limit, and render with an interpolation factor between ticks.
+- In Unity, match the network tick to `FixedUpdate` or step physics yourself. Never use `Time.deltaTime` inside tick logic.
+
+</KeyTakeaways>

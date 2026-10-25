@@ -1,0 +1,86 @@
+passPct: 70
+questions:
+  - id: stop-wallhacks
+    type: single
+    prompt: Your server-authoritative shooter validates every input, but wallhacks are common. What is the most effective defence?
+    options:
+      - Encrypt all traffic
+      - Validate movement more strictly
+      - Don't send enemy positions to a client until the enemy could become visible to it
+      - Obfuscate the packet format
+    answer: 2
+    difficulty: 2
+    explanation: >-
+      A wallhack only **reads** data the client already has. Validation doesn't help, and encryption doesn't either, because the cheat
+      reads the decrypted data in the client's memory. If the server uses line-of-sight checks to decide what to send (interest
+      management for security, as in VALORANT's fog of war), there's nothing to draw.
+  - id: buy-item-bug
+    type: codeline
+    prompt: This server RPC lets a cheater spend another player's gold. Which line is the problem?
+    code: |-
+      [Rpc(SendTo.Server)]
+      void BuyItemRpc(ulong buyerId, int itemId, RpcParams rpcParams = default)
+      {
+          var buyer = Players.Get(buyerId);
+          if (itemId < 0 || itemId >= Shop.Items.Length) return;
+          if (buyer.Gold < Shop.Items[itemId].Price) return;
+          buyer.Gold -= Shop.Items[itemId].Price;
+          buyer.Inventory.Add(itemId);
+      }
+    answerLines: [4]
+    difficulty: 2
+    explanation: >-
+      The buyer is looked up from an id **inside the payload**, which the client chooses. Use the sender according to the transport
+      instead: `rpcParams.Receive.SenderClientId`. The other lines are good practice: the item index is range-checked and the price is
+      checked against the server's own data.
+  - id: server-authority-limits
+    type: multi
+    prompt: Which of these cheats does server authority with proper validation **not** stop? Select all that apply.
+    options:
+      - Speed hack
+      - Wallhack
+      - Aimbot
+      - Teleporting
+      - Infinite ammo
+    answers: [1, 2]
+    difficulty: 2
+    explanation: >-
+      Speed hacks, teleports and infinite ammo need the server to believe a result, and a server-authoritative server never does. A
+      wallhack only reads information, and an aimbot only produces legal inputs with superhuman timing. Those need information control
+      and statistical or client-side detection.
+  - id: fire-rate-check
+    type: numeric
+    prompt: >-
+      A weapon fires 600 rounds per minute. The server accepts a shot if the gap since the last shot is at least 90% of the weapon's
+      fire interval, to allow for jitter. What is the smallest gap, in milliseconds, that the server accepts?
+    answer: 90
+    tolerance: 0.5
+    unit: ms
+    difficulty: 1
+    explanation: >-
+      600 rounds per minute is 10 per second, an interval of 100 ms. 90% of that is **90 ms**. The tolerance stops lag bursts from
+      triggering false rejections, while a cheat firing at twice the rate is still blocked. Flag repeated violations rather than banning
+      on one.
+  - id: anticheat-foundation
+    type: truefalse
+    prompt: A good client-side anti-cheat (such as Easy Anti-Cheat or VAC) means you can trust results that clients report.
+    answer: false
+    difficulty: 1
+    explanation: >-
+      Client-side anti-cheat runs on the attacker's own machine, so it can be bypassed, and new cheats are undetected until someone
+      adds them. Treat it as one layer on top of server authority and validation, never as the foundation.
+  - id: replay-protection
+    type: single
+    prompt: >-
+      An attacker records a valid "buy item" packet from a player on the same Wi-Fi and sends it again 50 times. What prevents this?
+    options:
+      - Using TCP instead of UDP
+      - Sequence numbers checked on the server, inside an authenticated and encrypted channel
+      - Making the RPC unreliable
+      - Hiding the server's IP address behind a relay
+    answer: 1
+    difficulty: 3
+    explanation: >-
+      The server rejects a packet whose sequence number it has already processed, and authentication and encryption (for example DTLS)
+      stop the attacker from forging a new sequence number or reading the packet in the first place. A relay hides addresses and absorbs
+      floods, but forwards valid-looking packets.

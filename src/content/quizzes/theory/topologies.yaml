@@ -1,0 +1,70 @@
+passPct: 70
+questions:
+  - id: ranked-topology
+    type: single
+    prompt: You're building a competitive shooter with ranked matchmaking and paid cosmetics. Which topology fits best?
+    options:
+      - Listen server hosted by a random player
+      - Full peer-to-peer mesh
+      - Dedicated servers
+      - Distributed authority
+    answer: 2
+    explanation: >-
+      With something to win or steal, players will modify any server they control. Dedicated servers run on your hardware,
+      give no player a host advantage and keep the match running when anyone leaves.
+  - id: mesh-connections
+    type: numeric
+    prompt: In a full peer-to-peer mesh with 6 players, how many connections are there in total?
+    answer: 15
+    tolerance: 0
+    difficulty: 1
+    explanation: >-
+      Each pair needs one connection: n(n − 1) / 2 = 6 × 5 / 2 = 15. The count grows quadratically, which is one reason
+      P2P meshes rarely go beyond about 8 players.
+  - id: host-upload
+    type: numeric
+    prompt: >-
+      A host serves 9 remote clients at a 20 Hz send rate. Each packet is 500 bytes including headers. What upload rate does
+      the host need, in kilobytes per second?
+    answer: 90
+    tolerance: 1
+    unit: KB/s
+    difficulty: 2
+    explanation: >-
+      9 clients × 20 packets/s × 500 bytes = 90,000 bytes/s = 90 KB/s, or about 0.72 Mbit/s. The host's **upload**, often the
+      smallest number on a home connection, carries every client's traffic.
+  - id: listen-server-cons
+    type: multi
+    prompt: Which are genuine drawbacks of a listen server (host) compared with a dedicated server? Select all that apply.
+    options:
+      - The host player has 0 ms RTT to the server
+      - The match usually ends when the host leaves
+      - Clients cannot use client-side prediction
+      - The host can modify the server and cheat easily
+      - Other players may need NAT traversal or a relay to connect
+    answers: [0, 1, 3, 4]
+    explanation: >-
+      Host advantage, host-quits-the-match-ends, an untrusted server and NAT problems are all real. Prediction works the same
+      way for clients of a host as for clients of a dedicated server.
+  - id: relay-authority
+    type: truefalse
+    prompt: Moving a listen-server game onto a relay makes the relay the authority for the game state.
+    answer: false
+    explanation: >-
+      A relay only forwards packets. It changes the **path** traffic takes (solving NAT and hiding IPs), but the host's game still
+      runs the simulation and is still the authority.
+  - id: host-isclient-bug
+    type: codeline
+    prompt: This code runs on a host as well as on dedicated servers and clients. Which line makes the host player miss their own damage effects?
+    code: |-
+      void OnDamaged(int amount)
+      {
+          if (IsServer)
+              health -= amount;
+          else
+              PlayHitEffect();
+      }
+    answerLines: [5]
+    explanation: >-
+      On a host, `IsServer` and `IsClient` are both true, so the `else` branch never runs and the host's player never sees the
+      hit effect. Use two independent checks: `if (IsServer)` for the rule and `if (IsClient)` for the presentation.

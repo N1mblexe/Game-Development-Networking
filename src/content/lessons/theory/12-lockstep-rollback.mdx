@@ -1,0 +1,206 @@
+---
+title: Deterministic Lockstep and Rollback
+order: 12
+summary: Sending only inputs and letting every machine simulate the same game, from RTS lockstep to fighting-game rollback.
+durationMin: 30
+objectives:
+  - Explain deterministic lockstep and why its bandwidth doesn't depend on the number of units
+  - List the sources of non-determinism in a Unity project and how to remove them
+  - Detect desyncs with state checksums
+  - Explain rollback netcode (predict remote input, save state, resimulate) and how it combines with input delay
+  - Choose between state synchronization, lockstep and rollback for a game
+prerequisites: [theory/tick-rate, theory/state-sync, theory/prediction-reconciliation]
+tags: [lockstep, rollback, determinism, rts, fighting-games]
+sources:
+  - title: Mark Terrano and Paul Bettner, 1500 Archers on a 28.8 (Age of Empires networking)
+    url: https://www.gamedeveloper.com/programming/1500-archers-on-a-28-8-network-programming-in-age-of-empires-and-beyond
+  - title: Glenn Fiedler, Deterministic Lockstep
+    url: https://gafferongames.com/post/deterministic_lockstep/
+  - title: Glenn Fiedler, Floating Point Determinism
+    url: https://gafferongames.com/post/floating_point_determinism/
+  - title: GGPO, rollback networking SDK
+    url: https://www.ggpo.net/
+  - title: Michael Stallone, 8 Frames in 16ms, Rollback Networking in Mortal Kombat and Injustice 2 (GDC 2018)
+    url: https://www.youtube.com/watch?v=7jb0FOcImdg
+---
+
+Age of Empires shipped in 1997 with battles of 1500 units on 28.8 kbit/s modems. Sending every unit's position even 5 times
+a second would have needed far more bandwidth than a modem had. The developers didn't send units at all. They sent **what the
+players did** (select these archers, attack that tower) and had every computer run exactly the same simulation from exactly the
+same commands. With identical inputs and identical code, every machine computed the identical battle.
+
+That idea is <Term id="lockstep">deterministic lockstep</Term>. Its modern descendant, <Term id="rollback">rollback</Term>, is how
+fighting games such as Street Fighter, Mortal Kombat and Guilty Gear feel responsive across a continent. Both rely on
+<Term id="determinism">determinism</Term>: the same inputs must produce bit-for-bit the same results on every machine.
+
+## Lockstep: share inputs, simulate locally
+
+Lockstep is the <Term id="input-replication">input replication</Term> model from lesson 6. The simulation advances in **turns** (ticks).
+For each turn, every player sends their inputs to every other player, and nobody simulates turn *N* until they have **everyone's** input
+for turn *N*.
+
+<Sequence
+  title="Lockstep: no turn runs until every input has arrived"
+  actors={[
+    { id: 'a', label: 'Player A', kind: 'client' },
+    { id: 'b', label: 'Player B', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'a', to: 'a', label: 'Turn 10: sample input, schedule it for turn 12', note: 'input is scheduled two turns ahead to hide the transit time', kind: 'local' },
+    { from: 'a', to: 'b', label: 'A’s input for turn 12', kind: 'reliable' },
+    { from: 'b', to: 'a', label: 'B’s input for turn 12', kind: 'reliable' },
+    { from: 'a', to: 'a', label: 'Simulate turn 11 (inputs arrived during turn 9)', kind: 'local' },
+    { from: 'b', to: 'b', label: 'Simulate turn 11', kind: 'local' },
+    { from: 'a', to: 'a', label: 'Turn 12: have A and B input, simulate', note: 'if B’s input were late, A would stall here', kind: 'local' },
+    { from: 'a', to: 'b', label: 'Checksum of state after turn 12', note: 'a mismatch means a desync', kind: 'unreliable' },
+  ]}
+/>
+
+The appeal is enormous:
+
+- **Bandwidth is independent of world size.** 1500 units or 15 cost the same: a few bytes of input per player per turn. Eight players sending 8 bytes at 10 turns per second is under 1 KB/s each.
+- **No authority needed.** Every machine computes the same truth, so there's nothing to argue about.
+- **Replays are tiny.** A replay is the initial state plus the input log. That's why RTS replays are kilobytes.
+
+And the costs:
+
+- **Input delay.** Your command runs a few turns later, on everyone's machine at once. Age of Empires scheduled commands two 200 ms "communication turns" ahead, and adjusted the turn length to the connection. Players accepted it, because units responded with a confirmation sound immediately.
+- **The slowest player sets the pace.** If one player's input is late, everyone waits. A single player with a 300 ms spike freezes the whole game.
+- **Late joining is hard.** A new player needs the full current state, or must replay every input since the start.
+- **Perfect determinism is mandatory.** One different bit, on one machine, grows into a completely different game.
+
+## Determinism is harder than it looks
+
+A <Term id="desync">desync</Term> happens when two machines' simulations diverge. Common causes in a Unity project:
+
+| Source | Why it diverges | Fix |
+|---|---|---|
+| Floating-point math | Different CPUs, compilers, instruction sets (fused multiply-add, x87 vs SSE) and build settings can round differently | Fixed-point math, or a deterministic float library, and the same build on every machine |
+| `Mathf.Sin`, `Sqrt` and other library maths | Implementations differ between platforms and runtimes | Your own lookup tables or fixed-point versions |
+| Unity physics (PhysX) | Not guaranteed deterministic across machines | Your own deterministic physics, or a deterministic engine |
+| `Random` without a shared seed | Different random sequences | One seeded RNG owned by the simulation, never `UnityEngine.Random` |
+| `Dictionary` / `HashSet` iteration order | Can depend on hash codes and insertion history | Sort before iterating, or use arrays |
+| `Time.deltaTime`, `Update` order, coroutines | Frame timing differs per machine | Simulate only in the fixed tick, in a defined order |
+| Reading anything outside the simulation | Animation state, physics queries, UI | The simulation must only read its own state and the inputs |
+
+Because a desync is silent, lockstep games compute a <Term id="checksum">checksum</Term> (a hash of the important simulation state) every few turns and
+exchange it. If checksums differ, the game knows immediately, and you can log both states to find the first field that disagreed. Without
+checksums, you only find out when players report that their friend "saw a different game".
+
+## Rollback: don't wait, guess
+
+Lockstep's input delay is fine for an RTS and unacceptable for a fighting game, where a punch takes 4 frames and players react in
+about 12. Rollback, popularized by Tony Cannon's GGPO, removes most of that delay with the same trick as client-side prediction
+(lesson 7), applied to the **other** player:
+
+<Steps>
+
+1. Every frame, simulate immediately with your own input and a **predicted** input for the remote player, usually "the same as last frame". Players hold buttons for many frames, so this guess is usually right.
+2. **Save** the game state for every frame you simulate with a predicted input.
+3. When the real remote input for frame *N* arrives, compare it with the prediction. If it matches, do nothing.
+4. If it differs, **roll back**: restore the state of frame *N*, apply the real input, and **resimulate** every frame up to the present, all within the current frame.
+5. Render the corrected present. A punch that started 3 frames ago appears with its first 3 frames skipped.
+
+</Steps>
+
+That last step is why rollback needs a cheap simulation. NetherRealm's GDC talk on Mortal Kombat and Injustice 2 describes simulating
+up to 8 frames inside a single 16 ms frame. Most rollback games also add a small, fixed <Term id="input-delay">input delay</Term> (often 1–3 frames) for *both*
+players. Each frame of delay is a frame less to roll back, so a short delay plus rollback looks much better than either alone.
+
+```csharp title="RollbackSession.cs"
+// Engine-agnostic, two players, 60 fps. GameState must be a plain value that can be copied cheaply.
+public sealed class RollbackSession
+{
+    const int MaxRollback = 8;                         // frames we can rewind; more than that, we stall
+    readonly GameState[] _saved = new GameState[MaxRollback + 1];
+    readonly Input[] _remote = new Input[256];         // confirmed or predicted, indexed by frame % 256
+    readonly bool[] _confirmed = new bool[256];
+    readonly Input[] _local = new Input[256];
+    GameState _state;
+    int _frame, _lastConfirmedRemote = -1;
+
+    public void OnRemoteInput(int frame, Input input)
+    {
+        bool mispredicted = !_remote[frame % 256].Equals(input);
+        _remote[frame % 256] = input;
+        _confirmed[frame % 256] = true;
+        _lastConfirmedRemote = System.Math.Max(_lastConfirmedRemote, frame);
+        if (mispredicted && frame < _frame) Rollback(frame);
+    }
+
+    public void AdvanceFrame(Input localInput)
+    {
+        if (_frame - _lastConfirmedRemote > MaxRollback) return;   // too far ahead: wait (a stall)
+
+        _local[_frame % 256] = localInput;
+        int f = _frame % 256;
+        if (!_confirmed[f]) _remote[f] = _frame > 0 ? _remote[(_frame - 1) % 256] : default; // predict "same as last"
+
+        _saved[_frame % _saved.Length] = _state;                   // save BEFORE simulating
+        _state = Simulation.Step(_state, _local[f], _remote[f]);   // deterministic, no side effects
+        _frame++;
+    }
+
+    void Rollback(int fromFrame)
+    {
+        _state = _saved[fromFrame % _saved.Length];                // the state before fromFrame ran
+        for (int fr = fromFrame; fr < _frame; fr++)
+        {
+            int i = fr % 256;
+            if (!_confirmed[i]) _remote[i] = _remote[(fr - 1 + 256) % 256]; // re-predict from the new truth
+            _saved[fr % _saved.Length] = _state;
+            _state = Simulation.Step(_state, _local[i], _remote[i]);
+        }
+    }
+}
+```
+
+In a real implementation, the ring buffers also need clearing as frames wrap, and side effects such as sounds and particles have to be
+reconciled after a rollback: a hit spark that was predicted but never happened should be cancelled, not left on screen.
+
+## Choosing a model
+
+| | State sync (lessons 6–9) | Deterministic lockstep | Rollback |
+|---|---|---|---|
+| Sends | State | Inputs | Inputs |
+| Bandwidth grows with | Entities that change | Players only | Players only |
+| Needs determinism | No | Yes, bit-exact | Yes, bit-exact |
+| Input latency | Hidden by prediction | Several turns of delay | 0–3 frames of delay |
+| Slow player affects | Only themselves | Everyone (stalls) | Mostly themselves (more rollback) |
+| Late join and reconnect | Easy (send state) | Hard | Hard |
+| CPU cost | Server simulates once | Everyone simulates once | Everyone resimulates up to ~8 frames |
+| Typical genres | Shooters, action, MMOs | RTS, large simulations | Fighting games, small fast P2P games |
+
+<Callout type="unity" title="Preview: lockstep and rollback in Unity">
+  Netcode for GameObjects is a state-synchronization library. It doesn't provide lockstep or rollback, and Unity's PhysX physics isn't deterministic
+  across machines. Lockstep and rollback games in Unity usually run their own fixed-point simulation in plain C#, separate from GameObjects, and send
+  inputs over Unity Transport or Steam Networking Sockets messages. Third-party engines such as Photon Quantum are built entirely around deterministic
+  prediction and rollback.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Determinism by hope">
+  "It stayed in sync for an hour of testing" proves nothing about a different CPU, a different build or a rare code path. Build checksums and a desync
+  log from the first prototype, and test across the platforms and machines you plan to ship on.
+</Callout>
+
+<Callout type="pitfall" title="The simulation reading Unity state">
+  A simulation that reads `transform.position`, an `Animator` parameter or a `Physics.Raycast` result has stopped being deterministic. Keep the simulation
+  in plain data, and have GameObjects only **display** it.
+</Callout>
+
+<Callout type="pitfall" title="Expensive state saves">
+  Rollback saves state every frame and may restore and resimulate eight frames at once. If saving means serializing a scene graph, it won't fit in 16 ms.
+  Keep simulation state small, flat and copyable, such as structs in arrays.
+</Callout>
+
+<KeyTakeaways>
+
+- **Lockstep** sends only inputs and every machine simulates the same game, so bandwidth doesn't depend on unit count.
+- It requires **bit-exact determinism**: fixed-point or controlled floats, seeded RNG, ordered iteration and no frame-time logic.
+- **Desyncs** are silent. Exchange **state checksums** regularly to detect them.
+- Lockstep waits for the slowest player. **Rollback** predicts remote inputs instead, and **resimulates** from saved state when a prediction was wrong.
+- A small **input delay** combined with rollback gives the best feel. Rollback suits fighting games, lockstep suits RTS, and state sync suits almost everything else.
+
+</KeyTakeaways>

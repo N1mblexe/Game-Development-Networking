@@ -1,0 +1,69 @@
+passPct: 70
+questions:
+  - id: tick-interval
+    type: numeric
+    prompt: What is the tick interval, in milliseconds, of a server running at 60 Hz?
+    answer: 16.67
+    tolerance: 0.1
+    unit: ms
+    difficulty: 1
+    explanation: >-
+      1 / 60 s = 0.01667 s = 16.67 ms. That's also the server's whole CPU budget per tick: movement, physics, AI and lag
+      compensation for every player must fit in it.
+  - id: avg-input-wait
+    type: numeric
+    prompt: >-
+      Inputs arrive at a 20 Hz server at random moments and wait for the next tick to be processed. On average, how many
+      milliseconds does an input wait?
+    answer: 25
+    tolerance: 1
+    unit: ms
+    difficulty: 2
+    explanation: >-
+      The interval is 50 ms. An input arriving at a random time waits anywhere from 0 to 50 ms, so 25 ms on average. Higher tick
+      rates cut this hidden delay, which is one reason competitive shooters run at 64–128 Hz.
+  - id: why-fixed
+    type: multi
+    prompt: Why do networked simulations use a fixed timestep? Select all that apply.
+    options:
+      - So server and clients compute the same results from the same inputs
+      - So inputs and snapshots can be labelled with a tick number everyone understands
+      - So prediction can replay past inputs with a known dt
+      - So the game renders at a higher frame rate
+    answers: [0, 1, 2]
+    explanation: >-
+      Fixed steps make results reproducible, give every machine a shared timeline and make replay possible. Rendering is decoupled
+      from the tick and can run at any frame rate, interpolating between ticks.
+  - id: deltatime-bug
+    type: codeline
+    prompt: This movement runs once per network tick on both client and server. Which line makes client and server disagree?
+    code: |-
+      void SimulateTick(PlayerInput input, float tickDt)
+      {
+          Vector3 wish = new Vector3(input.MoveX, 0, input.MoveY);
+          velocity = Vector3.MoveTowards(velocity, wish * maxSpeed, accel * tickDt);
+          position += velocity * Time.deltaTime;
+      }
+    answerLines: [5]
+    explanation: >-
+      `Time.deltaTime` is the frame's duration, which differs on every machine and every frame. Inside tick logic, always use the
+      tick's fixed `tickDt`, or replays and server results won't match.
+  - id: spiral-of-death
+    type: single
+    prompt: What does the "max ticks per frame" limit in a fixed-timestep loop protect against?
+    options:
+      - Running out of network bandwidth
+      - The spiral of death, where catching up on slow ticks makes each frame slower still
+      - Ticks running faster than real time
+      - Floating-point rounding errors
+    answer: 1
+    explanation: >-
+      If ticks take longer than real time, the accumulator grows, the loop runs even more ticks, and the game locks up. Clamping
+      the catch-up trades a brief slowdown for staying responsive.
+  - id: send-vs-tick
+    type: truefalse
+    prompt: The send rate must always equal the tick rate.
+    answer: false
+    explanation: >-
+      Many games send less often than they tick. Source engine games ticked at 66 Hz but sent 20 snapshots per second by default,
+      relying on client interpolation between snapshots to stay smooth.

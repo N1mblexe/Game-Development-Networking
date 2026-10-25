@@ -1,0 +1,67 @@
+passPct: 70
+questions:
+  - id: min-rtt-distance
+    type: numeric
+    prompt: >-
+      Two players are 4,000 km apart, connected by a perfectly straight optical fibre. Light in fibre travels at about
+      200,000 km/s. What is the **minimum possible RTT** in milliseconds?
+    answer: 40
+    tolerance: 2
+    unit: ms
+    difficulty: 2
+    explanation: >-
+      One way is 4,000 km ÷ 200,000 km/s = 20 ms, and the round trip doubles it to 40 ms. Real routes are longer than a
+      straight line and add queuing and processing delay, so the measured RTT would be higher. No code can go below this bound.
+  - id: jitter-meaning
+    type: single
+    prompt: A server sends snapshots exactly every 33 ms, but they arrive 20 ms, 50 ms, 28 ms and 39 ms apart. Which property of the link is this?
+    options:
+      - High latency
+      - Jitter
+      - Packet loss
+      - Low bandwidth
+    answer: 1
+    explanation: >-
+      Every packet arrived, so it isn't loss. Uneven spacing on arrival is **jitter**: variation in latency between packets.
+      The cure is a small jitter buffer that plays data out at an even pace, at the cost of a little extra delay.
+  - id: fragment-loss
+    type: numeric
+    prompt: >-
+      A link loses 10% of packets at random. A message is split into 3 IP fragments, and the message is lost if any fragment
+      is lost. What percentage of these messages are lost?
+    answer: 27.1
+    tolerance: 0.5
+    unit: '%'
+    difficulty: 3
+    explanation: >-
+      The message arrives only if all three fragments arrive: 0.9³ = 0.729, so 27.1% are lost, almost three times the packet
+      loss rate. That's why netcode keeps payloads at about 1200 bytes and splits big messages into its own resendable pieces.
+  - id: latency-components
+    type: multi
+    prompt: Which of these delays can **grow** when a player's connection is saturated by a big download? Select all that apply.
+    options:
+      - Propagation delay
+      - Queuing delay in routers
+      - Packet loss from full router buffers
+      - The speed of light in fibre
+    answers: [1, 2]
+    explanation: >-
+      When a link is full, packets wait in router queues (queuing delay rises, sometimes by hundreds of ms) and are dropped when
+      the queues overflow. Propagation is fixed by distance and the speed of light, so it doesn't change with load.
+  - id: safe-payload
+    type: truefalse
+    prompt: Because Ethernet's MTU is 1500 bytes, a 1450-byte UDP payload is safe to send over the internet.
+    answer: false
+    explanation: >-
+      The path MTU is the smallest MTU on every link along the way. PPPoE, VPNs and tunnels reduce it, and IPv6 only guarantees
+      1280 bytes. After IP and UDP headers, about 1200 bytes is the safe payload size.
+  - id: serialization-delay
+    type: numeric
+    prompt: How long, in milliseconds, does it take to push a 1250-byte packet onto a 2 Mbit/s upload link?
+    answer: 5
+    tolerance: 0.2
+    unit: ms
+    difficulty: 2
+    explanation: >-
+      1250 bytes × 8 = 10,000 bits, and 10,000 bits ÷ 2,000,000 bits/s = 0.005 s = 5 ms. Serialization delay matters on slow
+      uplinks, which is one more reason a host's upload bandwidth limits how many players it can serve.

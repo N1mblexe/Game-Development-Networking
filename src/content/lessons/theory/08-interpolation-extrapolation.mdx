@@ -1,0 +1,200 @@
+---
+title: Interpolation and Extrapolation
+order: 8
+summary: How clients turn a trickle of late, jittery snapshots into smooth motion for everyone else in the world.
+durationMin: 25
+objectives:
+  - Explain why rendering remote entities straight from snapshots looks bad, even with no packet loss
+  - Implement an interpolation buffer that renders remote entities a fixed delay in the past
+  - Choose an interpolation delay from the send rate, jitter and loss
+  - Compare interpolation, extrapolation and dead reckoning, and say where each fits
+prerequisites: [theory/state-sync, theory/prediction-reconciliation]
+tags: [interpolation, extrapolation, smoothing, latency-hiding]
+sources:
+  - title: Gabriel Gambetta, Fast-Paced Multiplayer, Part III (entity interpolation)
+    url: https://www.gabrielgambetta.com/entity-interpolation.html
+  - title: Glenn Fiedler, Snapshot Interpolation
+    url: https://gafferongames.com/post/snapshot_interpolation/
+  - title: Valve Developer Wiki, Source Multiplayer Networking (entity interpolation, cl_interp)
+    url: https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking
+  - title: 'NGO docs: NetworkTransform (interpolation)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/components/networktransform.html
+  - title: 'NGO docs: NetworkTime and ticks (ServerTime for replicated objects)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/advanced-topics/networktime-ticks.html
+---
+
+Prediction makes **your** player feel instant. Everyone else is still a problem. The server sends their positions 20 or 30
+times a second, and the client renders at 60–144 fps. If you set `transform.position` each time a snapshot arrives, a remote
+player stands still for several frames and then jumps 15 cm, over and over. Add jitter, and the jumps become uneven. Lose a
+packet, and they freeze for a moment.
+
+You can't predict other players the way you predict yourself, because you don't have their inputs. What you *can* do is
+take the positions you know and fill in the gaps between them smoothly. There are two ways to fill a gap:
+<Term id="interpolation">interpolation</Term> draws a line between two **known** points, and <Term id="extrapolation">extrapolation</Term>
+guesses beyond the last known point.
+
+## Interpolation: render the past, smoothly
+
+The key idea, used by Source, Overwatch and most shooters since, is to deliberately render remote entities **slightly in
+the past**. If the client always shows the world as it was 100 ms ago, then at almost any moment it already has a snapshot
+from just before that time *and* one from just after. Rendering is a plain blend between two real positions, with no
+guessing.
+
+With snapshots every 50 ms (20 Hz), the timeline looks like this:
+
+| Snapshot | Server time | Client has it? |
+|---|---|---|
+| A | 1000 ms | Yes |
+| B | 1050 ms | Yes |
+| C | 1100 ms | Yes, just arrived |
+| D | 1150 ms | Not yet |
+
+If the client's best estimate of server time is 1110 ms and the <Term id="interpolation-buffer">interpolation delay</Term> is
+100 ms, the render time is 1010 ms. That's between A and B, 20% of the way, so the client draws `Lerp(A, B, 0.2)`. Snapshot C
+is a spare. If it's lost, the client still has something to interpolate to when render time passes 1050.
+
+## Choosing the delay
+
+The delay has to cover the gap between snapshots **plus** the worst jitter you want to absorb:
+
+> delay ≈ send interval × 2 + expected jitter
+
+Valve's Source engine defaulted to 100 ms (`cl_interp 0.1`) with 20 updates per second: two snapshot intervals, so one lost
+packet in a row doesn't cause a stall. At 60 Hz, 2 × 16.7 ms + jitter is more like 40–50 ms. Some games adapt the delay at runtime:
+they grow it when jitter rises and slowly shrink it when the link is stable, the same way a voice-chat jitter buffer does.
+
+The delay is pure added latency for what you **see** of other players. That's the price of smoothness, and it's why the next lesson,
+lag compensation, exists.
+
+## Try it
+
+Compare the presets and watch the remote player go around a corner.
+
+<Sim name="interpolation" preset="interpolation" caption="Rendering a remote player from 20 Hz snapshots." />
+
+What you should notice:
+
+- **Raw snapshots**: the remote player teleports from point to point, even on a perfect link.
+- **Interpolation (100 ms)**: smooth, and it follows the real path, including corners, but it lags about 100 ms (plus half the RTT) behind the server.
+- **Extrapolation**: smooth and closer to "now" while the player goes straight, but it overshoots corners and then has to snap or slide back.
+- **Jittery link**: with a buffer that's too small, the renderer runs out of snapshots and stalls. A larger delay rides through the gaps.
+
+<Sim name="interpolation" preset="jittery" caption="Why the buffer size matters on a jittery link." />
+
+## An interpolation buffer
+
+Each remote entity keeps a short list of timestamped snapshots, sorted by **server** time (never by arrival time). Each frame,
+the client computes the render time and finds the two snapshots around it.
+
+```csharp title="InterpolationBuffer.cs"
+public struct Sample { public double ServerTime; public Vec3 Position; public Quat Rotation; }
+
+public sealed class InterpolationBuffer
+{
+    readonly System.Collections.Generic.List<Sample> _samples = new();
+    public double DelaySeconds = 0.1;            // 100 ms at a 20 Hz send rate
+    const double MaxExtrapolation = 0.1;         // never guess more than 100 ms ahead
+
+    public void Add(Sample s)
+    {
+        // Packets can arrive out of order: insert by server time, drop duplicates and stale samples.
+        int i = _samples.Count;
+        while (i > 0 && _samples[i - 1].ServerTime > s.ServerTime) i--;
+        if (i > 0 && _samples[i - 1].ServerTime == s.ServerTime) return;
+        _samples.Insert(i, s);
+        if (_samples.Count > 32) _samples.RemoveAt(0);
+    }
+
+    // estimatedServerTime comes from the clock sync (for example NGO's ServerTime).
+    public bool TrySample(double estimatedServerTime, out Vec3 position, out Quat rotation)
+    {
+        position = default; rotation = default;
+        if (_samples.Count == 0) return false;
+
+        double renderTime = estimatedServerTime - DelaySeconds;
+
+        // Drop samples we'll never need again, but keep one older than renderTime.
+        while (_samples.Count >= 2 && _samples[1].ServerTime <= renderTime) _samples.RemoveAt(0);
+
+        Sample a = _samples[0];
+        if (_samples.Count == 1 || renderTime <= a.ServerTime)
+        {
+            position = a.Position; rotation = a.Rotation;     // not enough data: hold
+            return true;
+        }
+
+        Sample b = _samples[1];
+        double t = (renderTime - a.ServerTime) / (b.ServerTime - a.ServerTime);
+        t = System.Math.Min(t, 1.0 + MaxExtrapolation / (b.ServerTime - a.ServerTime)); // bounded guess if we ran dry
+        position = Vec3.LerpUnclamped(a.Position, b.Position, (float)t);
+        rotation = Quat.Slerp(a.Rotation, b.Rotation, (float)System.Math.Min(t, 1.0));
+        return true;
+    }
+}
+```
+
+Two details matter. Rotations use **slerp** on quaternions, never a lerp of Euler angles, which would spin the long way round at 359° → 1°.
+And the estimate of server time must be smooth: if it jumps whenever an RTT sample changes, every remote entity jitters with it.
+
+## Extrapolation and dead reckoning
+
+Extrapolation renders the entity at a time **beyond** the newest snapshot, by continuing its motion:
+`position = last.Position + last.Velocity × timeSinceLast`. The classic form is <Term id="dead-reckoning">dead reckoning</Term>,
+named after ship navigation: from a known position, heading and speed, estimate where you are now. Simulation and flight games have
+used it since the 1980s, and the military DIS standard is built around it.
+
+It works well when motion is **smooth and physical**: vehicles, ships, aircraft, projectiles and balls. Those can't turn on the spot.
+It works badly for **player characters**, who can reverse direction in one frame. Every time the guess is wrong, the entity has
+to snap or slide back, which looks like rubber-banding.
+
+| | Interpolation | Extrapolation / dead reckoning |
+|---|---|---|
+| Shows | The past, exactly | A guess at the present |
+| Smoothness | Excellent, if the buffer is big enough | Excellent until motion changes |
+| Errors | None (it only replays real positions) | Overshoot and correction on every change |
+| Added latency | The interpolation delay (40–100 ms) | None |
+| Best for | Characters, anything that changes direction | Vehicles, projectiles, as a short fallback |
+
+Many games use both. They interpolate normally and **briefly extrapolate** (up to 100–250 ms) when the buffer runs dry, and then freeze
+rather than letting the guess run off. Source capped this at 250 ms (`cl_extrapolate_amount`). Racing games often interpolate
+cars with **Hermite** curves using the sent velocities, which follows curved paths better than straight-line lerps between points.
+
+## Interpolating ticks for your own player
+
+There's a second, local kind of interpolation, and it's the one Unity's **Rigidbody → Interpolate** setting does. Physics runs at 50
+Hz in `FixedUpdate`, rendering runs at 144 fps, and the renderer blends between the last two physics states using the accumulator's
+`alpha` from lesson 5. Your predicted player usually needs this too. It has nothing to do with the network, but it's easy to confuse
+with the network interpolation in this lesson.
+
+<Callout type="unity" title="Preview: interpolation in NGO">
+  NGO's `NetworkTransform` interpolates by default (the **Interpolate** setting is on), with several interpolator types such as Lerp and
+  Smooth Dampening, and maximum interpolation times per axis. Replicated objects are rendered against `NetworkManager.ServerTime`, which runs
+  **behind** the server, exactly like the render time above. If you sync positions yourself with a `NetworkVariable`, you need to add your own
+  buffer. Steam Networking Sockets delivers bytes, so you'd build this yourself.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Lerp towards the latest value">
+  `transform.position = Vector3.Lerp(transform.position, target, 0.1f)` in `Update` isn't interpolation. It's frame-rate-dependent smoothing
+  that never quite reaches the target, lags differently at 30 and 144 fps, and still stalls on jitter. Use timestamped samples and a render time.
+</Callout>
+
+<Callout type="pitfall" title="Interpolating your own predicted player">
+  If you push your *own* player through the remote-player interpolation buffer, you add the interpolation delay on top of the RTT and undo all
+  the work prediction did. The local player renders from its predicted state, and remote players render from the buffer.
+</Callout>
+
+<Callout type="pitfall" title="Interpolating through teleports">
+  A respawn or teleport should snap, not glide across the map over 100 ms. Send a teleport flag or counter with the state, and clear the buffer when it changes.
+</Callout>
+
+<KeyTakeaways>
+
+- Rendering remote entities straight from snapshots looks jerky, even without loss, because snapshots are infrequent and jittery.
+- **Interpolation** renders remote entities a fixed delay in the past and blends between two real snapshots, so there's no guessing.
+- A delay of about **two send intervals plus jitter** survives one lost packet. 100 ms at 20 Hz is the classic Source default.
+- **Extrapolation** and **dead reckoning** guess the present from velocity. They suit vehicles and projectiles, and only work as a short fallback for characters.
+- Order samples by **server time**, slerp rotations, snap on teleports, and never interpolate your own predicted player.
+
+</KeyTakeaways>

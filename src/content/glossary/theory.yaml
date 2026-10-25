@@ -1,31 +1,50 @@
 terms:
+  # ------------------------------------------------------------------ 01 packets-and-protocols
   - id: ip-address
     term: IP address
     short: The address that identifies a machine (network interface) on a network, for example 203.0.113.7.
+    long: >-
+      IPv4 addresses are 32 bits and have run out, which is why most home devices use private addresses behind a
+      **NAT**. IPv6 addresses are 128 bits. Together with a **port**, an IP address forms an endpoint.
     lesson: theory/packets-and-protocols
-    seeAlso: [port]
+    seeAlso: [port, nat, endpoint]
   - id: port
     term: Port
     short: A 16-bit number that identifies a program on a machine. IP address + port = endpoint.
+    long: >-
+      Ports 0–1023 are reserved for well-known services. A game server listens on a fixed port (Unity Transport's examples use
+      **7777**), while clients usually send from a random ephemeral port that a **NAT** may rewrite again.
     lesson: theory/packets-and-protocols
-    seeAlso: [ip-address]
+    seeAlso: [ip-address, nat, endpoint]
   - id: mtu
     term: MTU
     aliases: [Maximum Transmission Unit]
     short: The largest packet a link can carry without fragmentation, typically about 1500 bytes on Ethernet.
+    long: >-
+      The smallest MTU on a path wins, and you can't see it from the endpoints. After IP and UDP headers, and allowing
+      for tunnels, VPNs and the 1280-byte IPv6 minimum, about **1200 bytes** is a safe UDP payload.
     lesson: theory/latency-jitter-loss
+    seeAlso: [fragmentation, udp]
   - id: tcp
     term: TCP
     aliases: [Transmission Control Protocol]
     short: A connection-based transport protocol that provides a reliable, ordered byte stream with congestion control.
+    long: >-
+      TCP opens a connection with a three-way handshake, retransmits lost segments and slows down when it detects congestion.
+      Because it delivers one ordered stream, a single lost segment causes **head-of-line blocking**, which is why real-time
+      games avoid it for gameplay traffic.
     lesson: theory/packets-and-protocols
-    seeAlso: [udp, head-of-line-blocking]
+    seeAlso: [udp, head-of-line-blocking, reliable-delivery]
   - id: udp
     term: UDP
     aliases: [User Datagram Protocol]
     short: A connectionless transport protocol that sends independent datagrams with no delivery or ordering guarantees. It is the basis of game netcode.
+    long: >-
+      UDP adds only ports and a checksum to IP. Each datagram arrives whole or not at all, but may be lost, duplicated or
+      reordered. Game netcode builds sequence numbers, acks, channels and fragmentation on top of it, so each message can
+      choose its own guarantees.
     lesson: theory/packets-and-protocols
-    seeAlso: [tcp]
+    seeAlso: [tcp, unreliable-delivery, reliable-delivery]
   - id: head-of-line-blocking
     term: Head-of-line blocking
     short: When one lost packet in an ordered stream delays delivery of every packet queued behind it.
@@ -34,4 +53,612 @@ terms:
       segment is retransmitted. For games this means fresh state waits behind stale state. Per-channel ordering in
       game netcode keeps the blocking inside one channel.
     lesson: theory/packets-and-protocols
-    seeAlso: [tcp]
+    seeAlso: [tcp, channel]
+  - id: endpoint
+    term: Endpoint
+    short: An IP address plus a port, such as 203.0.113.7:7777. It identifies one program's socket on one machine.
+    lesson: theory/packets-and-protocols
+    seeAlso: [ip-address, port, nat]
+
+  # ------------------------------------------------------------------ 02 latency-jitter-loss
+  - id: latency
+    term: Latency
+    aliases: [lag, delay]
+    short: The time a packet takes to travel from one machine to another, made up of propagation, serialization, queuing and processing delay.
+    long: >-
+      Propagation through fibre costs about 5 ms per 1000 km and sets a hard lower bound. Games usually measure the
+      round trip (**RTT**) instead of one-way latency, because only the round trip can be measured with one clock.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [rtt, jitter, ping, bufferbloat]
+  - id: rtt
+    term: RTT
+    aliases: [round-trip time]
+    short: Round-trip time, the time from sending a message to receiving the reply. One-way latency is roughly RTT / 2 on a symmetric path.
+    long: >-
+      Netcode measures RTT continuously with timestamped packets and smooths the samples (for example with TCP's
+      SRTT formula from RFC 6298). RTT drives resend timeouts, interpolation delay and lag compensation.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [latency, ping, lag-compensation]
+  - id: ping
+    term: Ping
+    short: In games, the round-trip time to the server in milliseconds, as shown on a scoreboard. Originally the name of an ICMP echo tool.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [rtt, latency]
+  - id: jitter
+    term: Jitter
+    aliases: [packet delay variation]
+    short: Variation in latency from one packet to the next. Packets sent at even intervals arrive unevenly, which makes motion stutter.
+    long: >-
+      Jitter comes mostly from queuing in routers and from Wi-Fi retries. Games absorb it with a small **jitter
+      buffer**, such as the interpolation delay for remote entities or the input buffer on the server.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [latency, jitter-buffer, interpolation-buffer]
+  - id: jitter-buffer
+    term: Jitter buffer
+    short: A short, deliberate delay that holds incoming data and plays it out at an even pace, trading a little latency for smoothness.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [jitter, interpolation-buffer, input-buffer]
+  - id: packet-loss
+    term: Packet loss
+    aliases: [loss]
+    short: The fraction of packets that never arrive, mostly because of congested router queues, Wi-Fi interference or mobile handovers. Often comes in bursts.
+    long: >-
+      Wired links typically lose 0–0.5%, bad Wi-Fi or mobile 2–10%, usually in bursts. Unreliable state simply
+      waits for the next update, while reliable messages need at least an extra round trip to be resent.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [reliable-delivery, unreliable-delivery, fragmentation]
+  - id: bandwidth
+    term: Bandwidth
+    short: The capacity of a link, in bits per second, for example 100 Mbit/s down and 10 Mbit/s up. Upload is usually the bottleneck for games.
+    long: >-
+      Link speeds are quoted in **bits** per second, while packet sizes are in bytes: 1 KB/s = 8 kbit/s. A server's upload is
+      roughly the per-client rate times the player count, and a host's upload is shared by every remote player.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [throughput, latency]
+  - id: throughput
+    term: Throughput
+    short: The data rate actually achieved over a link, which is lower than its bandwidth because of headers, retransmissions, congestion and other traffic.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [bandwidth]
+  - id: fragmentation
+    term: Fragmentation
+    short: Splitting a packet or message that is larger than the MTU into smaller pieces that are reassembled on arrival. If any piece is lost, the whole message is lost.
+    long: >-
+      With loss rate p, a message in n fragments arrives with probability (1 − p)ⁿ: at 5% loss, a 4-fragment message
+      is lost 19% of the time. Netcode libraries fragment large messages themselves and resend only the missing pieces.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [mtu, packet-loss]
+  - id: bufferbloat
+    term: Bufferbloat
+    short: Excessive queuing delay when a link is saturated and router buffers fill up, adding hundreds of milliseconds of latency before any packet is dropped.
+    long: >-
+      It's why a flatmate's upload can push a player's ping from 30 ms to 400 ms without any loss, and why a game that
+      sends more than its link can carry makes its own latency worse.
+    lesson: theory/latency-jitter-loss
+    seeAlso: [latency, bandwidth, packet-loss]
+
+  # ------------------------------------------------------------------ 03 topologies
+  - id: server
+    term: Server
+    short: The process that holds the authoritative copy of the game state (or most of it) and that clients connect to.
+    lesson: theory/topologies
+    seeAlso: [client, dedicated-server, listen-server, host]
+  - id: client
+    term: Client
+    short: A process that connects to a server, sends the player's input and renders the world it receives.
+    lesson: theory/topologies
+    seeAlso: [server, host]
+  - id: dedicated-server
+    term: Dedicated server
+    short: A server with no local player, usually a headless build in a data centre. Fair, secure and robust, but it costs money to run.
+    long: >-
+      Usually a headless build (Unity's Dedicated Server build target) running in a data centre with a public IP address, so
+      there is no NAT problem and no host advantage. You pay for CPU, bandwidth and operating a fleet in several regions.
+    lesson: theory/topologies
+    seeAlso: [server, listen-server, server-authoritative]
+  - id: listen-server
+    term: Listen server
+    short: A server that runs inside one player's game, so that player is both server and client. Free to run, but gives the host an advantage.
+    long: >-
+      The match depends on the host's upload bandwidth and usually ends when the host leaves, unless the game
+      implements host migration. Other players often need NAT punch-through or a relay to reach the host.
+    lesson: theory/topologies
+    seeAlso: [host, dedicated-server, relay, host-migration]
+  - id: host
+    term: Host
+    short: A game instance that is a server and a local client at the same time, as in NGO's StartHost. On a host, IsServer and IsClient are both true.
+    long: >-
+      Code on a host must handle both roles at once. A common bug is `if (IsServer) ... else ...`, which skips the client half
+      for the host's own player.
+    lesson: theory/topologies
+    seeAlso: [listen-server, server, client]
+  - id: peer-to-peer
+    term: Peer-to-peer (P2P)
+    aliases: [P2P]
+    short: A topology where players' machines send directly to each other with no central server. Platform SDKs also use "P2P" for player-hosted games.
+    long: >-
+      A full mesh of n players has n(n − 1)/2 connections, so it rarely scales beyond about 8 players. With no single
+      authority, P2P games usually rely on deterministic lockstep or rollback. Every peer can see the others' IP addresses.
+    lesson: theory/topologies
+    seeAlso: [lockstep, rollback, relay, nat-punchthrough]
+  - id: relay
+    term: Relay
+    short: A server that forwards packets between players without running game logic. It always gets through NAT and hides IP addresses, at some latency cost.
+    long: >-
+      Examples include TURN servers, Unity Relay and Steam Datagram Relay. A relay changes the path packets take, not
+      the authority model on top of it.
+    lesson: theory/topologies
+    seeAlso: [turn, nat, listen-server]
+  - id: distributed-authority
+    term: Distributed authority
+    short: A topology with no game server, where each client is the authority for the objects it owns and a cloud service routes messages and holds session state.
+    long: >-
+      There is no host advantage and no single point of failure, but each client has the final say over its own
+      objects, so it is weaker against cheating. NGO 2.x supports it through Unity's Multiplayer Services.
+    lesson: theory/topologies
+    seeAlso: [authority, ownership, client-authoritative]
+  - id: host-migration
+    term: Host migration
+    short: Moving the server role to another player when a listen-server host leaves, by transferring the full game state and reconnecting everyone. Hard to do well.
+    lesson: theory/topologies
+    seeAlso: [listen-server, host, distributed-authority]
+
+  # ------------------------------------------------------------------ 04 authority-models
+  - id: authority
+    term: Authority
+    short: The machine whose copy of a piece of state is the truth. Every piece of state needs exactly one authority, and everyone else converges to its value.
+    long: >-
+      Authority can be assigned for the whole world, per object (**ownership**) or per field. The authority's value wins, and
+      other machines treat their own changes as predictions that its next update overwrites.
+    lesson: theory/authority-models
+    seeAlso: [server-authoritative, client-authoritative, ownership]
+  - id: server-authoritative
+    term: Server-authoritative
+    short: A model where clients send inputs or requests and only the server changes game state. It limits cheating, but adds a round trip that prediction must hide.
+    long: >-
+      Clients send **intents** (inputs and requests) and the server simulates and validates them against its own state. Speed
+      hacks, teleports and damage hacks stop working, but information cheats and aimbots don't, and the round trip must be
+      hidden with client-side prediction.
+    lesson: theory/authority-models
+    seeAlso: [authority, client-side-prediction, client-authoritative]
+  - id: client-authoritative
+    term: Client-authoritative
+    aliases: [owner-authoritative]
+    short: A model where a client simulates something itself and reports the result, for example its own position. Responsive and simple, but trivially cheatable.
+    long: >-
+      It is a reasonable trade for co-op movement among friends and for cosmetic state, but for anything competitive it lets a
+      modified client report any position, hit or score. Servers can still sanity-check reports, for example against a maximum
+      speed.
+    lesson: theory/authority-models
+    seeAlso: [authority, server-authoritative, cheating]
+  - id: ownership
+    term: Ownership
+    short: Per-object authority. The owner of an object (often the client controlling it) may be allowed to change its state, and ownership can be transferred at runtime.
+    lesson: theory/authority-models
+    seeAlso: [authority, distributed-authority]
+
+  # ------------------------------------------------------------------ 05 tick-rate
+  - id: tick
+    term: Tick
+    short: One fixed step of the networked simulation. Ticks are numbered, so every machine can refer to the same moment, for example "the input for tick 1820".
+    long: >-
+      Inputs, snapshots, lag-compensation history and replays all refer to tick numbers. The time between ticks (1 / tick
+      rate) is also the server's CPU budget for simulating one step.
+    lesson: theory/tick-rate
+    seeAlso: [tick-rate, fixed-timestep]
+  - id: tick-rate
+    term: Tick rate
+    short: How many simulation ticks run per second, such as 20, 30, 60 or 128 Hz. The tick interval is 1 / tick rate, for example 33.3 ms at 30 Hz.
+    long: >-
+      Higher tick rates reduce input delay and sample fast motion better, but cost server CPU (the whole simulation
+      must fit in one interval) and, if state is sent every tick, bandwidth.
+    lesson: theory/tick-rate
+    seeAlso: [tick, send-rate, fixed-timestep]
+  - id: send-rate
+    term: Send rate
+    aliases: [update rate, snapshot rate]
+    short: How often state is sent over the network. It can be lower than the tick rate, for example a 60 Hz simulation sending snapshots at 20 Hz.
+    lesson: theory/tick-rate
+    seeAlso: [tick-rate, snapshot]
+  - id: fixed-timestep
+    term: Fixed timestep
+    short: Advancing a simulation by the same dt every step, regardless of frame rate, usually with an accumulator loop. Unity's FixedUpdate is one.
+    long: >-
+      Each frame adds the real elapsed time to an accumulator and runs as many fixed steps as fit, keeping the remainder as an
+      interpolation factor for rendering. Cap the steps per frame to avoid the *spiral of death*.
+    lesson: theory/tick-rate
+    seeAlso: [tick, determinism]
+
+  # ------------------------------------------------------------------ 06 state-sync
+  - id: state-synchronization
+    term: State synchronization
+    aliases: [state sync, state replication]
+    short: Keeping clients' copies of the world up to date by sending the authority's results (positions, health, flags). Self-healing, because each update contains the truth.
+    long: >-
+      The authority sends results, usually as snapshots with delta compression, plus events for one-off happenings. Clients
+      don't need to be deterministic, and late joiners just receive the current state. Bandwidth grows with the number of
+      entities that change.
+    lesson: theory/state-sync
+    seeAlso: [snapshot, delta-compression, input-replication]
+  - id: input-replication
+    term: Input replication
+    short: Keeping worlds in step by sending only player inputs and having every machine run the same simulation. Requires determinism.
+    long: >-
+      Bandwidth depends only on the number of players, not the size of the world, which is why RTS games with thousands of
+      units use it. The costs are input delay, the slowest player setting the pace, and a strict need for bit-exact
+      determinism.
+    lesson: theory/state-sync
+    seeAlso: [lockstep, determinism, state-synchronization]
+  - id: snapshot
+    term: Snapshot
+    short: The state of every relevant entity at one tick, serialized and sent to a client. Clients interpolate between recent snapshots.
+    long: >-
+      A naive snapshot of 32 entities at 44 bytes each is about 1.4 KB, already over a safe UDP payload, so real games
+      quantize fields, send deltas against an acknowledged baseline, and send only what is relevant to each client.
+    lesson: theory/state-sync
+    seeAlso: [delta-compression, interpolation, state-synchronization]
+  - id: delta-compression
+    term: Delta compression
+    short: Sending only the fields that changed relative to a baseline snapshot the client has acknowledged, instead of the full state.
+    long: >-
+      The baseline must be the last **acknowledged** snapshot, not the last one sent, or a single lost packet corrupts
+      the client's state. The server keeps a short history of snapshots per client to rebuild any acknowledged baseline.
+    lesson: theory/state-sync
+    seeAlso: [baseline, snapshot, ack]
+  - id: baseline
+    term: Baseline
+    short: The earlier snapshot that a delta is computed against. For unreliable deltas it must be one the receiver has acknowledged.
+    lesson: theory/state-sync
+    seeAlso: [delta-compression, ack]
+  - id: interest-management
+    term: Interest management
+    aliases: [relevancy, area of interest]
+    short: Sending each client only the entities relevant to it, for example nearby or visible ones. Saves bandwidth and stops wallhacks from seeing what isn't sent.
+    lesson: theory/state-sync
+    seeAlso: [snapshot, cheating]
+  - id: rpc
+    term: RPC
+    aliases: [remote procedure call]
+    short: A remote procedure call, a message that runs a named method on another machine. Used for events that happen once, rather than for persistent state.
+    long: >-
+      RPCs are events: "explosion at X", "player 3 joined". Anything a player who joins later must know should be replicated
+      **state** instead, because late joiners never receive RPCs sent before they arrived.
+    lesson: theory/state-sync
+    seeAlso: [state-synchronization, reliable-delivery]
+
+  # ------------------------------------------------------------------ 07 prediction-reconciliation
+  - id: client-side-prediction
+    term: Client-side prediction
+    short: Applying the local player's input immediately on the client, with the same code the server runs, instead of waiting a round trip for the server's result.
+    long: >-
+      The client tags each input with a sequence number, sends it, applies it locally and keeps it in a buffer. When the
+      server's state arrives, **server reconciliation** replays the inputs the server hasn't processed yet. Predict your own
+      movement and cosmetic effects, not kills or contested pickups.
+    lesson: theory/prediction-reconciliation
+    seeAlso: [server-reconciliation, input-buffer, server-authoritative]
+  - id: server-reconciliation
+    term: Server reconciliation
+    short: Correcting a predicting client by resetting it to the server's state and replaying every input the server hasn't processed yet.
+    long: >-
+      The server includes the sequence number of the last input it processed with each state. The client drops older
+      inputs, resets, replays the rest and smooths any remaining difference. If the prediction was right, nothing visibly changes.
+    lesson: theory/prediction-reconciliation
+    seeAlso: [client-side-prediction, sequence-number, rubber-banding]
+  - id: input-buffer
+    term: Input buffer
+    short: A queue of sequence-numbered inputs. Clients keep unacknowledged inputs for replay, and servers keep a few ticks of inputs to absorb jitter.
+    lesson: theory/prediction-reconciliation
+    seeAlso: [client-side-prediction, jitter-buffer, sequence-number]
+  - id: rubber-banding
+    term: Rubber-banding
+    short: A player visibly snapping back to an earlier position when a correction arrives, caused by mispredictions, missing reconciliation or heavy loss.
+    long: >-
+      Small corrections should be blended away with a visual offset over 100–200 ms, keeping the simulation state exact. Large
+      corrections, such as after a teleport or a long stall, should snap.
+    lesson: theory/prediction-reconciliation
+    seeAlso: [server-reconciliation, extrapolation]
+
+  # ------------------------------------------------------------------ 08 interpolation-extrapolation
+  - id: interpolation
+    term: Interpolation
+    aliases: [entity interpolation]
+    short: Rendering remote entities slightly in the past and blending between two received snapshots, so motion is smooth without guessing.
+    long: >-
+      The client keeps timestamped snapshots ordered by server time and renders at *estimated server time − interpolation
+      delay*, blending positions with lerp and rotations with slerp. The cost is that remote entities are shown slightly in
+      the past, which **lag compensation** makes up for.
+    lesson: theory/interpolation-extrapolation
+    seeAlso: [interpolation-buffer, extrapolation, snapshot]
+  - id: interpolation-buffer
+    term: Interpolation delay
+    aliases: [interpolation buffer, interp delay]
+    short: How far in the past remote entities are rendered, typically two snapshot intervals plus jitter, for example 100 ms at 20 Hz.
+    lesson: theory/interpolation-extrapolation
+    seeAlso: [interpolation, jitter-buffer, lag-compensation]
+  - id: extrapolation
+    term: Extrapolation
+    short: Rendering an entity beyond its newest snapshot by continuing its last known motion. No added delay, but wrong whenever motion changes.
+    long: >-
+      Many games interpolate normally and extrapolate only briefly (up to about 250 ms) when the buffer runs dry, then freeze.
+      For characters who can turn on the spot, longer extrapolation overshoots and causes visible corrections.
+    lesson: theory/interpolation-extrapolation
+    seeAlso: [dead-reckoning, interpolation]
+  - id: dead-reckoning
+    term: Dead reckoning
+    short: Estimating an entity's current position from its last known position, velocity (and sometimes acceleration). Works well for vehicles and projectiles.
+    long: >-
+      Named after ship navigation, it has been used by flight and military simulations (the DIS standard) since the 1980s.
+      Senders often only send an update when the receiver's dead-reckoned estimate would drift past a threshold.
+    lesson: theory/interpolation-extrapolation
+    seeAlso: [extrapolation]
+
+  # ------------------------------------------------------------------ 09 lag-compensation
+  - id: lag-compensation
+    term: Lag compensation
+    aliases: [server-side rewind, backward reconciliation]
+    short: The server rewinding other players' hitboxes to where the shooter saw them (about RTT + interpolation delay ago) to judge a shot fairly.
+    long: >-
+      It favours the shooter, at the cost of occasionally hitting targets who have already reached cover on their own
+      screen. Games cap the rewind, typically around 200 ms, and never trust a client's timestamp unclamped.
+    lesson: theory/lag-compensation
+    seeAlso: [hitbox, ring-buffer, interpolation-buffer, favor-the-shooter, peekers-advantage]
+  - id: hitbox
+    term: Hitbox
+    short: Simple collision shapes (capsules, boxes) attached to a character and used for hit detection. They are separate from the rendered mesh.
+    lesson: theory/lag-compensation
+    seeAlso: [lag-compensation]
+  - id: ring-buffer
+    term: Ring buffer
+    aliases: [circular buffer]
+    short: A fixed-size array used as a circle, where new entries overwrite the oldest. Ideal for per-tick history, because it never allocates.
+    lesson: theory/lag-compensation
+    seeAlso: [lag-compensation, input-buffer]
+  - id: favor-the-shooter
+    term: Favor the shooter
+    short: The lag-compensation rule that a shot hits if it was on target on the shooter's screen, even though the target has since moved.
+    lesson: theory/lag-compensation
+    seeAlso: [lag-compensation, peekers-advantage]
+  - id: peekers-advantage
+    term: Peeker's advantage
+    short: A player moving out of cover sees the defender before the defender sees them, because the defender's view is delayed by RTT plus interpolation delay.
+    long: >-
+      It can only be reduced by lowering total latency: higher tick rates, short interpolation delays and servers close
+      to players, which is the approach Riot describes for VALORANT.
+    lesson: theory/lag-compensation
+    seeAlso: [lag-compensation, interpolation-buffer, favor-the-shooter]
+
+  # ------------------------------------------------------------------ 10 reliability-serialization
+  - id: reliable-delivery
+    term: Reliable delivery
+    short: Delivery that guarantees a message arrives exactly once, by resending it until it is acknowledged. May also guarantee order within a channel.
+    long: >-
+      Over UDP it is built from sequence numbers, acks with a bitfield and resending unacknowledged **messages** (not packets)
+      in later packets. Each loss costs at least one extra round trip, so use it for events, not for state that is resent
+      anyway.
+    lesson: theory/reliability-serialization
+    seeAlso: [ack, sequence-number, unreliable-delivery, channel]
+  - id: unreliable-delivery
+    term: Unreliable delivery
+    short: Fire-and-forget delivery with no resends. Right for state that is sent constantly, where a newer update replaces a lost one.
+    long: >-
+      A variant, **unreliable sequenced**, also drops anything older than the newest packet received, which suits
+      latest-value-wins streams such as aim direction.
+    lesson: theory/reliability-serialization
+    seeAlso: [reliable-delivery, udp]
+  - id: sequence-number
+    term: Sequence number
+    short: An increasing number on each packet, message or input, used to detect loss, duplicates and reordering. Compared with wraparound logic.
+    long: >-
+      A 16-bit sequence number wraps after 65,535, about 18 minutes at 60 packets per second. Compare with wraparound: `a` is
+      newer than `b` if it is ahead by less than half the range (32,768).
+    lesson: theory/reliability-serialization
+    seeAlso: [ack, reliable-delivery]
+  - id: ack
+    term: Ack
+    aliases: [acknowledgement]
+    short: A message, or a field in a packet header, telling the sender which packets arrived. Game netcode often acks the newest sequence plus a 32-bit bitfield of older ones.
+    long: >-
+      Because both sides send packets constantly, acks ride along for free, and each packet acknowledges up to 33 packets (the
+      newest plus 32 bits). A lost packet carrying an ack costs nothing, because the next one repeats the information.
+    lesson: theory/reliability-serialization
+    seeAlso: [sequence-number, reliable-delivery, baseline]
+  - id: channel
+    term: Channel
+    aliases: [lane, pipeline]
+    short: A logical stream within a connection with its own delivery rules, such as unreliable or reliable ordered. Ordering is per channel.
+    long: >-
+      Typical channels are unreliable, unreliable sequenced, reliable unordered and reliable ordered. Unity Transport calls
+      them pipelines, and Steam Networking Sockets uses send flags and lanes.
+    lesson: theory/reliability-serialization
+    seeAlso: [reliable-delivery, unreliable-delivery, head-of-line-blocking]
+  - id: serialization
+    term: Serialization
+    short: Converting objects into bytes for sending or storage, and back. Netcode uses compact binary formats with a fixed field order.
+    long: >-
+      Writer and reader must agree exactly on field order and sizes, so version your protocol. Never use `BinaryFormatter` or
+      any serializer that constructs arbitrary types from network data, and check every length against a limit.
+    lesson: theory/reliability-serialization
+    seeAlso: [quantization, bit-packing]
+  - id: quantization
+    term: Quantization
+    short: Mapping a value in a known range to an integer with only the precision needed. Bits needed = ceil(log2(range / precision)).
+    long: >-
+      A position axis in a ±512 m world at 1 mm precision needs 20 bits instead of a 32-bit float. Rotations fit in
+      29 bits with the "smallest three" quaternion encoding.
+    lesson: theory/reliability-serialization
+    seeAlso: [bit-packing, serialization]
+  - id: bit-packing
+    term: Bit-packing
+    short: Writing values with exactly as many bits as they need, back to back, instead of rounding each one up to whole bytes.
+    long: >-
+      A bit writer collects values in a 64-bit scratch word and flushes whole 32-bit words to the buffer. Quantization plus
+      bit-packing typically cuts 50–70% of a snapshot before any delta compression.
+    lesson: theory/reliability-serialization
+    seeAlso: [quantization, serialization]
+
+  # ------------------------------------------------------------------ 11 nat-and-relays
+  - id: nat
+    term: NAT
+    aliases: [Network Address Translation]
+    short: A router feature that lets many devices share one public IP address by rewriting addresses and ports. It drops unsolicited incoming packets.
+    long: >-
+      NATs differ in **mapping** behaviour. Endpoint-independent ("cone") NATs reuse the same public port for every
+      destination and allow hole punching. Endpoint-dependent ("symmetric") NATs don't, so a relay is needed.
+    lesson: theory/nat-and-relays
+    seeAlso: [nat-punchthrough, stun, relay, cgnat]
+  - id: cgnat
+    term: CGNAT
+    aliases: [carrier-grade NAT]
+    short: A NAT run by the ISP, in front of the customer's own router, using the shared 100.64.0.0/10 range. Port forwarding can't get through it.
+    lesson: theory/nat-and-relays
+    seeAlso: [nat, port-forwarding]
+  - id: port-forwarding
+    term: Port forwarding
+    short: A router rule that sends incoming packets on a public port to a fixed machine behind the NAT. Needs router access and fails behind CGNAT.
+    lesson: theory/nat-and-relays
+    seeAlso: [nat, cgnat]
+  - id: stun
+    term: STUN
+    aliases: [Session Traversal Utilities for NAT]
+    short: A protocol (RFC 8489) in which a public server tells a client the public IP address and port its packets appear to come from.
+    long: >-
+      Asking two STUN servers and comparing the answers also shows whether the NAT uses endpoint-independent mapping (same
+      public port for both) or endpoint-dependent mapping (different ports).
+    lesson: theory/nat-and-relays
+    seeAlso: [nat-punchthrough, turn, ice]
+  - id: nat-punchthrough
+    term: NAT punch-through
+    aliases: [hole punching, NAT punch]
+    short: Both peers send packets to each other's public endpoints at about the same time, so each NAT creates a mapping and accepts the other's packets as replies.
+    long: >-
+      A rendezvous server exchanges the endpoints. It needs endpoint-independent mapping on both NATs, and fails with
+      symmetric NAT, so production games fall back to a relay.
+    lesson: theory/nat-and-relays
+    seeAlso: [nat, stun, relay, rendezvous-server]
+  - id: turn
+    term: TURN
+    aliases: [Traversal Using Relays around NAT]
+    short: The IETF standard relay protocol (RFC 8656). Both peers connect out to a TURN server, which forwards traffic between them.
+    long: >-
+      A TURN server always works, because both peers only make outgoing connections, but every byte passes through it, which
+      adds latency and costs bandwidth. ICE uses TURN as its last resort.
+    lesson: theory/nat-and-relays
+    seeAlso: [relay, stun, ice]
+  - id: ice
+    term: ICE
+    aliases: [Interactive Connectivity Establishment]
+    short: A procedure (RFC 8445) that gathers local, STUN and TURN candidates and tries them in order, so peers use the most direct path that works.
+    lesson: theory/nat-and-relays
+    seeAlso: [stun, turn, nat-punchthrough]
+  - id: matchmaking
+    term: Matchmaking
+    short: The service that groups players into a match, by skill, region or party, and tells them how to connect. Often also the rendezvous point for NAT traversal.
+    long: >-
+      Matchmaking usually hands the players a connection target: a dedicated server's address, a relay join code or a lobby.
+      During NAT traversal it often acts as the rendezvous server that exchanges public endpoints.
+    lesson: theory/nat-and-relays
+    seeAlso: [lobby, nat-punchthrough]
+  - id: lobby
+    term: Lobby
+    short: A pre-match group that players join to gather, chat and share settings before the game starts. Its host's id is often used to connect.
+    lesson: theory/nat-and-relays
+    seeAlso: [matchmaking, host]
+  - id: rendezvous-server
+    term: Rendezvous server
+    aliases: [introducer]
+    short: A public server that peers behind NAT both contact, so it can learn and exchange their public endpoints and coordinate hole punching.
+    lesson: theory/nat-and-relays
+    seeAlso: [nat-punchthrough, stun, matchmaking]
+
+  # ------------------------------------------------------------------ 12 lockstep-rollback
+  - id: lockstep
+    term: Deterministic lockstep
+    aliases: [lockstep]
+    short: A model where peers exchange only inputs and nobody simulates a turn until every player's input for it has arrived. Needs bit-exact determinism.
+    long: >-
+      Age of Empires ran 1500-unit battles over 28.8 kbit/s modems this way, scheduling commands two communication turns
+      ahead. Lockstep stalls everyone when one player's input is late, and late joining needs the full state or a replay of
+      every input.
+    lesson: theory/lockstep-rollback
+    seeAlso: [determinism, input-replication, rollback, desync, input-delay]
+  - id: rollback
+    term: Rollback
+    aliases: [rollback netcode, GGPO]
+    short: Simulating with predicted remote inputs and, when the real input differs, restoring a saved state and resimulating up to the present.
+    long: >-
+      Popularized by Tony Cannon's GGPO and used by most modern fighting games. Usually combined with 1–3 frames of input
+      delay, which reduces how far it has to roll back. State must be small and cheap to copy, because it is saved every frame
+      and may be resimulated many frames at once.
+    lesson: theory/lockstep-rollback
+    seeAlso: [lockstep, determinism, client-side-prediction]
+  - id: determinism
+    term: Determinism
+    short: The property that the same inputs produce bit-for-bit the same results on every machine. Required for lockstep and rollback.
+    long: >-
+      Threats include floating-point differences between CPUs and compilers, unseeded randomness, unordered
+      collection iteration, frame-time-dependent logic and non-deterministic physics engines.
+    lesson: theory/lockstep-rollback
+    seeAlso: [desync, lockstep, fixed-timestep]
+  - id: desync
+    term: Desync
+    short: When two machines' copies of a deterministic simulation diverge. Detected by exchanging checksums of the game state.
+    long: >-
+      A desync is silent: both machines keep running, but different games. Exchange checksums every few turns, and log the
+      state when they differ, to find the first field that disagreed.
+    lesson: theory/lockstep-rollback
+    seeAlso: [determinism, lockstep, checksum]
+  - id: checksum
+    term: Checksum
+    aliases: [state hash]
+    short: A small hash of the important simulation state, exchanged by lockstep and rollback peers every few turns to detect a desync as soon as it happens.
+    lesson: theory/lockstep-rollback
+    seeAlso: [desync, determinism]
+  - id: input-delay
+    term: Input delay
+    short: Deliberately running a player's input a few ticks or frames after it is sampled, so remote machines receive it in time. Lockstep uses several turns, rollback 1–3 frames.
+    lesson: theory/lockstep-rollback
+    seeAlso: [lockstep, rollback]
+
+  # ------------------------------------------------------------------ 13 security
+  - id: cheating
+    term: Cheating
+    short: Gaining an unfair advantage by modifying the client, its memory, its inputs or its network traffic. Classified by what it exploits.
+    long: >-
+      **Authority** cheats (speed hacks, teleports) are stopped by server authority and validation. **Information**
+      cheats (wallhacks) are stopped by not sending hidden data. **Input automation** (aimbots) needs detection.
+    lesson: theory/security
+    seeAlso: [server-authoritative, interest-management, client-authoritative, wallhack, aimbot, anti-cheat]
+  - id: wallhack
+    term: Wallhack
+    aliases: [ESP]
+    short: A cheat that draws enemies through walls using data the client already has. Server validation can't see it. Only not sending the data stops it.
+    lesson: theory/security
+    seeAlso: [cheating, interest-management]
+  - id: aimbot
+    term: Aimbot
+    aliases: [triggerbot]
+    short: A cheat that aims, and often fires, automatically. Its inputs are legal, just superhuman, so server authority accepts them and only detection can catch it.
+    lesson: theory/security
+    seeAlso: [cheating, anti-cheat]
+  - id: anti-cheat
+    term: Anti-cheat
+    short: Software and server-side analysis that detect cheating, such as client scanners (Easy Anti-Cheat, BattlEye, VAC) and statistical checks. A layer, never the foundation.
+    lesson: theory/security
+    seeAlso: [cheating, aimbot, wallhack]
+  - id: ddos
+    term: DDoS
+    aliases: [distributed denial of service]
+    short: Flooding a target's IP address with traffic from many machines until its connection fails. A risk whenever players can see each other's IP addresses.
+    lesson: theory/security
+    seeAlso: [relay, peer-to-peer, ip-address]
+  - id: dtls
+    term: DTLS
+    aliases: [Datagram Transport Layer Security]
+    short: TLS adapted for UDP. It authenticates and encrypts datagrams, stopping sniffing, tampering and forged or replayed packets.
+    lesson: theory/security
+    seeAlso: [udp, replay-attack]
+  - id: replay-attack
+    term: Replay attack
+    short: Capturing a valid packet and sending it again to repeat its effect, such as a purchase. Stopped by sequence numbers checked inside an authenticated, encrypted channel.
+    lesson: theory/security
+    seeAlso: [sequence-number, dtls]

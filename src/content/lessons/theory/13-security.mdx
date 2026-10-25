@@ -1,0 +1,190 @@
+---
+title: Security and Cheating
+order: 13
+summary: A threat model for multiplayer games, and the server-side validation, information control and transport security that keep cheaters in check.
+durationMin: 25
+objectives:
+  - 'Classify common cheats by what they exploit: authority, information, input automation or the protocol itself'
+  - Write server-side validation for RPCs and inputs (ownership, rate limits, ranges, cooldowns)
+  - Limit information leaks with interest management and server-side visibility
+  - Explain authentication, encryption, replay protection and safe deserialization at the transport level
+prerequisites: [theory/authority-models, theory/state-sync, theory/lag-compensation, theory/reliability-serialization, theory/nat-and-relays]
+tags: [security, cheating, validation, anti-cheat]
+sources:
+  - title: Gabriel Gambetta, Fast-Paced Multiplayer, Part I (never trust the client)
+    url: https://www.gabrielgambetta.com/client-server-game-architecture.html
+  - title: Riot Games, Demolishing Wallhacks with VALORANT's Fog of War
+    url: https://technology.riotgames.com/news/demolishing-wallhacks-valorants-fog-war
+  - title: Glenn Fiedler, Client Server Connection (connection tokens and spoofing)
+    url: https://gafferongames.com/post/client_server_connection/
+  - title: 'Microsoft: Deserialization risks in use of BinaryFormatter'
+    url: https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-security-guide
+  - title: 'NGO docs: RPC (RequireOwnership, RpcParams)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/advanced-topics/message-system/rpc.html
+  - title: 'NGO docs: Connection approval'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/basics/connection-approval.html
+  - title: 'Steamworks docs: User Authentication and Ownership'
+    url: https://partner.steamgames.com/doc/features/auth
+  - title: 'Steamworks docs: Steam Datagram Relay'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+---
+
+Every copy of your game that ships is running on a machine you don't control. The player can attach a debugger, edit memory with
+Cheat Engine, replace your DLLs, run a proxy that rewrites packets, or write a client from scratch that speaks your protocol. In
+the editor, a `[SerializeField] float moveSpeed = 5` is a design choice. On a player's PC, it is a suggestion.
+
+The previous lessons gave you the most important defence already: **server authority**. This lesson builds on it with a threat
+model, server-side validation, control over what information leaves the server, and transport-level protections. No game is
+uncheatable, but most <Term id="cheating">cheating</Term> is made possible by a handful of design mistakes you can avoid.
+
+## A threat model
+
+Sort cheats by **what they exploit**, because each class has a different defence:
+
+| Class | Examples | Exploits | Main defence |
+|---|---|---|---|
+| **Authority** | Speed hack, teleport, infinite ammo, "I hit you for 9,999" | The server believing results | Server authority and validation |
+| **Information** | Wallhacks, ESP, radar hacks, map reveal | Data the client has but shouldn't show | Don't send it (interest management) |
+| **Input automation** | Aimbots, triggerbots, macros, scripts | Inputs are legal, just superhuman | Statistical detection, client anti-cheat, reporting |
+| **Protocol** | Replayed packets, spoofed sender, malformed packets, floods | The network layer itself | Authentication, encryption, sequence checks, robust parsing, relays |
+| **Exploits** | Duplicating items, calling admin RPCs, skipping cooldowns | Missing checks in game logic | Server-side validation of every request |
+
+Note what server authority does and doesn't solve. It removes the whole **authority** row and most of the **exploits** row, if you
+validate properly. It does nothing about **information** or **input automation**, because a <Term id="wallhack">wallhack</Term> and an <Term id="aimbot">aimbot</Term> only read data and
+press buttons.
+
+## Validate every request
+
+Every message a server receives is attacker-controlled. Before acting on it, ask:
+
+<Steps>
+
+1. **Who sent it?** Use the sender id that the transport tells you, never an id written inside the message.
+2. **May they?** Do they own the object? Are they alive, in the right phase of the match, on the right team?
+3. **Is it in range?** Indices within array bounds, positions within the map, quantities positive and capped, strings within a length limit.
+4. **Is it plausible?** Within reach, within line of sight, within the weapon's fire rate, consistent with the server's own state.
+5. **Is it too frequent?** Rate-limit per connection and per message type.
+
+</Steps>
+
+```csharp title="ServerValidation.cs"
+// Engine-agnostic server-side handler for "I'd like to fire" and "I'd like to use item".
+public sealed class ServerValidation
+{
+    const float FireInterval = 0.1f;          // 600 rounds per minute
+    const int MaxRequestsPerSecond = 30;
+
+    public void OnFireRequest(ulong senderId, ushort weaponSlot, Vec3 aimDir, double viewTick)
+    {
+        Player p = Players.Get(senderId);                         // 1. who: from the transport, not the payload
+        if (p == null || !p.IsAlive) return;                      // 2. may they?
+        if (!RateLimiter.Allow(senderId, MaxRequestsPerSecond)) { Flag(p, "rate"); return; }  // 5. too often?
+        if (weaponSlot >= p.Weapons.Length) { Flag(p, "slot"); return; }                       // 3. in range?
+
+        Weapon w = p.Weapons[weaponSlot];
+        float len = aimDir.Length();
+        if (len < 0.99f || len > 1.01f) { Flag(p, "aim"); return; }                            // 3. a unit vector?
+        if (Now - w.LastFiredAt < FireInterval * 0.9f) return;    // 4. plausible? (small tolerance for jitter)
+        if (w.Ammo <= 0) return;
+
+        w.Ammo--;
+        w.LastFiredAt = Now;
+        Vec3 origin = p.EyePosition;                              // the SERVER's position, never the client's claim
+        HitScan.Process(p, origin, aimDir, viewTick);             // lag-compensated, rewind clamped (lesson 9)
+    }
+
+    // Flag instead of kicking straight away: false positives from lag are common, so act on patterns.
+    void Flag(Player p, string reason) => p.Suspicion.Add(reason, Now);
+}
+```
+
+Movement deserves the same treatment. A server-authoritative server ignores client positions altogether. An owner-authoritative
+one (common in co-op games) should still check that each update moved no further than `maxSpeed × elapsed + tolerance`, and correct
+or flag the client when it did.
+
+## Try it
+
+Try the speed hack and the teleport against each authority model. Then look at what the server-authoritative version still accepts.
+
+<Sim name="authority-cheat" preset="server-authority" caption="Cheats against a server that validates every input." />
+
+What you should notice:
+
+- The **server-authoritative** server rejects impossible movement, because it only ever applies inputs to its own state.
+- A **valid** input sent with perfect timing (what an aimbot does) is accepted. Validation can only reject what is *impossible*, not what is *suspiciously good*.
+- With **client authority**, every cheat succeeds instantly, and validation would have to rebuild the simulation on the server to catch it, which is server authority by another name.
+
+<Sim name="authority-cheat" preset="client-authority" caption="The same cheats against a client-authoritative game." />
+
+## Control information
+
+A wallhack doesn't modify anything. It draws the enemies that your client already knows about, through walls. If the server never
+sends an enemy's position until it's relevant, there's nothing to draw. Riot's VALORANT team built exactly this: the server only sends
+an enemy's position to you shortly before they could become visible, based on server-side line-of-sight checks.
+
+The same idea applies to:
+
+- **Fog of war** in strategy games: send units only to players who can see them. (Lockstep games can't do this, because every client must simulate everything, which is why map hacks are endemic in lockstep RTS games.)
+- **Hidden information** in card and board games: never send the other player's hand or the deck order. Deal on the server.
+- **Loot and spawn tables**: roll on the server and send only results, so data mining a client reveals nothing useful.
+
+This is <Term id="interest-management">interest management</Term> (lesson 6) used for security. It costs server CPU for visibility
+checks, but it is the only reliable defence against information cheats.
+
+## Protect the protocol
+
+Below gameplay, the connection itself needs protection.
+
+- **Authenticate connections.** Before a client can send gameplay messages, it must prove who it is, for example with a platform session ticket (Steam's auth tickets) or a short-lived token from your backend. This is also where you enforce bans.
+- **Encrypt traffic.** Encryption (<Term id="dtls">DTLS</Term> for UDP) stops packet sniffing and tampering on shared networks, and makes it harder to write proxy cheats. Steam Networking Sockets and Unity Relay connections can be encrypted, and Unity Transport supports DTLS secure connections.
+- **Reject <Term id="replay-attack">replays</Term> and duplicates.** An attacker who captures a valid "buy item" packet shouldn't be able to send it again. Sequence numbers (lesson 10), and an encrypted channel that includes them, prevent that.
+- **Parse defensively.** Every length prefix is a lie until checked. Cap array sizes and string lengths before allocating, and treat a failed read as a reason to drop the packet or the connection, not as an exception that kills the server. Never use `BinaryFormatter` or any serializer that creates arbitrary types from network data.
+- **Hide addresses and absorb floods.** In P2P and listen-server games, a player's IP address is a target. Relays such as Steam Datagram Relay hide IP addresses and rate-limit traffic, and dedicated-server hosts provide <Term id="ddos">DDoS</Term> mitigation.
+
+## Detection and anti-cheat
+
+Validation catches the impossible. For the *improbable*, games add:
+
+- **Server-side statistics**: headshot rate, reaction times, accuracy through smoke, impossible pre-aiming. Flag outliers for review rather than banning automatically.
+- **Client-side <Term id="anti-cheat">anti-cheat</Term>** such as Easy Anti-Cheat, BattlEye or VAC, which look for known cheat software and memory tampering. These are useful, but they run on the attacker's machine, so treat them as a layer, never as the foundation.
+- **Replays and reports**: let players report, and keep enough server-side data to review a match.
+
+<Callout type="unity" title="Preview: security tools in Unity and Steam">
+  NGO's `[Rpc]` attribute takes `RequireOwnership = true` to reject calls from non-owners, and an `RpcParams` parameter gives you
+  `rpcParams.Receive.SenderClientId`, the sender according to the transport, which is the one to trust. **Connection approval** lets the server
+  inspect a payload, such as a token, before a client joins. On Steam, **auth session tickets** let a server verify a player's Steam identity and
+  ownership of the game. You'll wire these together in the NGO + Steam module's approval lesson.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Trusting ids inside the payload">
+  `void GiveItemRpc(ulong playerId, int itemId)` lets anyone give anything to anyone. Take the sender from the transport (`RpcParams` in NGO), and
+  never accept "who" as an argument from a client.
+</Callout>
+
+<Callout type="pitfall" title="Validation only on the client">
+  Disabling a button when a player can't afford an item is UX, not security. A modified client sends the request anyway. Every rule must also be
+  checked on the server.
+</Callout>
+
+<Callout type="pitfall" title="Security through obscurity">
+  Obfuscating your packet format or renaming your RPCs slows an attacker down by hours. Assume the protocol is fully known and design so that knowing
+  it doesn't help.
+</Callout>
+
+<Callout type="pitfall" title="Banning on a single check">
+  Lag, jitter and packet loss produce legitimately strange data: a teleport after a 2-second freeze, a burst of inputs after a stall. Correct the player,
+  log the event, and only act on repeated patterns.
+</Callout>
+
+<KeyTakeaways>
+
+- Assume every client is hostile and the protocol is fully known. **Never trust the client.**
+- Classify cheats: **authority** cheats are stopped by server authority, **information** cheats by not sending data, and **input automation** by detection.
+- **Validate** every request on the server: sender from the transport, permission, ranges, plausibility and rate.
+- Use **interest management** so clients only receive what they could legitimately see.
+- Protect the protocol with **authentication, encryption, replay protection, defensive parsing** and **relays** that hide IP addresses.
+- Client-side anti-cheat is a useful layer, but never the foundation.
+
+</KeyTakeaways>

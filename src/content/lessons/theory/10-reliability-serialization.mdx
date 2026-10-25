@@ -1,0 +1,265 @@
+---
+title: Reliability, Channels, and Serialization
+order: 10
+summary: How netcode builds acks, resends and ordered channels on top of UDP, and how quantization and bit-packing shrink every update.
+durationMin: 30
+objectives:
+  - Explain how sequence numbers, acks and ack bitfields provide reliability over UDP without TCP's head-of-line blocking
+  - Compare sequence numbers correctly across wraparound
+  - Use channels to keep reliable traffic from blocking unrelated messages
+  - Quantize floats and bit-pack them, and calculate the bits needed for a given range and precision
+  - Estimate per-client and server bandwidth from entity counts, field sizes and send rate
+prerequisites: [theory/packets-and-protocols, theory/latency-jitter-loss, theory/state-sync]
+tags: [reliability, serialization, bandwidth, quantization]
+sources:
+  - title: Glenn Fiedler, Reliability, Ordering and Congestion Avoidance over UDP
+    url: https://gafferongames.com/post/reliability_ordering_and_congestion_avoidance_over_udp/
+  - title: Glenn Fiedler, Reading and Writing Packets
+    url: https://gafferongames.com/post/reading_and_writing_packets/
+  - title: Glenn Fiedler, Serialization Strategies
+    url: https://gafferongames.com/post/serialization_strategies/
+  - title: Glenn Fiedler, Snapshot Compression (quantization and smallest-three)
+    url: https://gafferongames.com/post/snapshot_compression/
+  - title: Glenn Fiedler, Packet Fragmentation and Reassembly
+    url: https://gafferongames.com/post/packet_fragmentation_and_reassembly/
+  - title: 'Unity Transport docs: Using pipelines'
+    url: https://docs.unity3d.com/Packages/com.unity.transport@2.4/manual/pipelines-usage.html
+  - title: 'Steamworks docs: steamnetworkingtypes (send flags and message size)'
+    url: https://partner.steamgames.com/doc/api/steamnetworkingtypes
+  - title: 'Microsoft: Deserialization risks in use of BinaryFormatter'
+    url: https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-security-guide
+---
+
+Call `JsonUtility.ToJson` on a struct holding one `Vector3` and you get something like `{"x":12.345,"y":0.0,"z":-3.21}`: about 30
+bytes of text for 12 bytes of floats, which in turn are far more precise than any player can see. Multiply by 16 players, 30 times a
+second, and you've used a mobile player's whole upload budget on position updates alone.
+
+This lesson covers the two layers below everything else in netcode: how bytes are made to arrive (or deliberately not), and how
+game state is made into as few bytes as possible. You'll rarely write either from scratch in Unity, but you'll configure both
+constantly, and the settings only make sense once you know what's underneath.
+
+## Reliability on top of UDP
+
+Lesson 1 showed that games want **per-message** guarantees: unreliable for state, reliable for events. Since UDP offers none, netcode
+adds a small header to every packet and builds <Term id="reliable-delivery">reliable delivery</Term> from three pieces.
+
+**1. Sequence numbers.** Every packet carries an increasing 16-bit <Term id="sequence-number">sequence number</Term>. The receiver can
+spot loss (a gap), duplicates (a number it has already seen) and reordering (a number older than the newest).
+
+**2. Acks with a bitfield.** Every packet *also* carries an <Term id="ack">ack</Term>: the newest sequence number received from the
+other side, plus a 32-bit field where bit *n* means "I also received ack − 1 − n". Because both sides send packets constantly, acks
+ride along for free, and each packet acknowledges 33 packets at once. A single lost packet carrying an ack costs nothing, because the
+next one repeats the information.
+
+**3. Resend on silence.** The sender keeps each reliable *message* in a queue. When a packet that carried it is acked, the message is
+done. If no ack arrives within about one RTT plus a margin, the message is put into the **next** packet again. The resend goes in a new
+packet with a new sequence number. Only the message is repeated, never the old packet.
+
+<Sequence
+  title="Acks and resends: one reliable message survives a lost packet"
+  actors={[
+    { id: 'a', label: 'Sender', kind: 'client' },
+    { id: 'b', label: 'Receiver', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'a', to: 'b', label: 'Packet 40: state + reliable msg #7 "door opened"', kind: 'unreliable' },
+    { from: 'b', to: 'a', label: 'Packet 91: ack 40, bits ...111', note: 'msg #7 is acknowledged, remove it from the queue', kind: 'unreliable' },
+    { from: 'a', to: 'b', label: 'Packet 41: state + reliable msg #8 "item picked up", LOST', kind: 'unreliable' },
+    { from: 'a', to: 'b', label: 'Packet 42: state only', kind: 'unreliable' },
+    { from: 'b', to: 'a', label: 'Packet 92: ack 42, bit for 41 is 0', note: 'the sender sees that 41 was not received', kind: 'unreliable' },
+    { from: 'a', to: 'b', label: 'Packet 43: state + msg #8 again', note: 'same message, new packet number', kind: 'reliable' },
+    { from: 'b', to: 'b', label: 'Deliver msg #8 once. A duplicate #8 would be ignored', kind: 'local' },
+    { from: 'b', to: 'a', label: 'Packet 93: ack 43', kind: 'unreliable' },
+  ]}
+/>
+
+State in packets 41 and 42 was never resent. Packet 42's state replaced it. Only the message that **had** to arrive was repeated. That's
+the whole point of building reliability yourself: <Term id="unreliable-delivery">unreliable</Term> and reliable data share the same
+packets, but follow different rules.
+
+### Sequence numbers wrap around
+
+A 16-bit sequence number wraps from 65535 to 0 after about 18 minutes at 60 packets per second. A plain `a > b` then says packet 2 is older
+than packet 65530. The fix is to compare with wraparound: `a` is newer than `b` if it's ahead by less than half the range.
+
+```csharp title="Sequence.cs"
+public static class Sequence
+{
+    // True if a is newer than b, treating ushort sequence numbers as a circle.
+    public static bool IsNewer(ushort a, ushort b) =>
+        (a > b && a - b <= 32768) || (a < b && b - a > 32768);
+
+    // Receiver side: update the ack and ack bitfield when packet 'seq' arrives.
+    public static void OnReceived(ushort seq, ref ushort ack, ref uint ackBits)
+    {
+        if (IsNewer(seq, ack))
+        {
+            int shift = (ushort)(seq - ack);           // wraps correctly
+            ackBits = shift >= 32 ? 0u : (ackBits << shift);
+            if (shift <= 32) ackBits |= 1u << (shift - 1); // the old 'ack' becomes a bit
+            ack = seq;
+        }
+        else
+        {
+            int behind = (ushort)(ack - seq);
+            if (behind >= 1 && behind <= 32) ackBits |= 1u << (behind - 1);  // late packet: mark it
+        }
+    }
+}
+```
+
+## Channels and ordering
+
+Reliable delivery doesn't have to mean ordered delivery. If the chat message is lost, should the "item picked up" event wait for it? No.
+That's head-of-line blocking again. So netcode groups messages into <Term id="channel">channels</Term> (also called lanes or pipelines),
+each with its own rules:
+
+| Channel | Guarantees | Good for |
+|---|---|---|
+| Unreliable | None | Snapshots, deltas, voice |
+| Unreliable sequenced | Drop anything older than the newest received | Latest-value-wins streams, such as aim |
+| Reliable unordered | Arrives exactly once, in any order | Independent events: hit markers, pickups |
+| Reliable ordered | Exactly once, in send order, **within this channel** | Chat, inventory changes, scripted sequences |
+
+Ordering is per channel, so a lost chat message only blocks other chat messages, never movement or combat. Use as few ordered
+channels as you can, and put messages that depend on each other in the same one.
+
+## Serialization
+
+<Term id="serialization">Serialization</Term> turns objects into bytes and back. For netcode, three rules apply:
+
+- **Binary, not text.** JSON and XML are several times larger and slower to parse. Write fields directly in a fixed order, with no field names.
+- **Both sides must agree exactly.** The reader reads fields in the same order, with the same sizes, as the writer wrote them. Changing either breaks compatibility, so version your protocol.
+- **Never use `BinaryFormatter`** or anything else that reconstructs arbitrary types from network data. Microsoft calls it dangerous, and it lets an attacker run code on your server. Read only the types you expect, with length limits (lesson 13).
+
+## Quantization
+
+A 32-bit `float` has about 7 significant digits wherever it is. Nobody needs a player's position to a millionth of a millimetre.
+<Term id="quantization">Quantization</Term> maps a value in a known range to an integer with only the precision you need.
+
+The bits needed for range *R* at precision *p* are `ceil(log2(R / p))`:
+
+| Value | Range | Precision | Steps | Bits |
+|---|---|---|---|---|
+| Position axis | −512 m to +512 m | 1 mm | 1,024,000 | **20** (instead of 32) |
+| Position axis | −512 m to +512 m | 1 cm | 102,400 | **17** |
+| Health | 0 to 1000 | 1 | 1001 | **10** |
+| Yaw angle | 0° to 360° | ~0.35° | 1024 | **10** |
+| Rotation (quaternion) | unit quaternion | ~0.003 per component | | **29** with "smallest three" (instead of 128) |
+
+The **smallest-three** rotation trick: a unit quaternion's components satisfy x² + y² + z² + w² = 1, so you can drop the largest
+component and rebuild it on the other side. The other three must lie between −0.707 and +0.707. Send 2 bits for which component you
+dropped plus 3 × 9 bits for the rest: 29 bits. (Flip the sign of the whole quaternion first so the dropped one is positive; `q` and
+`−q` represent the same rotation.)
+
+## Bit-packing
+
+Quantized values aren't byte-sized, so writing them as bytes wastes space. <Term id="bit-packing">Bit-packing</Term> writes each value
+using exactly as many bits as it needs, one after another into a 64-bit scratch word, and flushes whole words to the buffer.
+
+```csharp title="BitWriter.cs"
+public sealed class BitWriter
+{
+    readonly uint[] _words;
+    ulong _scratch;      // pending bits, low bits first
+    int _scratchBits;
+    int _wordIndex;
+
+    public BitWriter(int maxBytes) => _words = new uint[(maxBytes + 3) / 4];
+
+    public void WriteBits(uint value, int bits)          // 1..32 bits
+    {
+        ulong mask = bits == 32 ? 0xFFFFFFFFul : (1ul << bits) - 1;
+        _scratch |= (value & mask) << _scratchBits;
+        _scratchBits += bits;
+        if (_scratchBits >= 32)
+        {
+            if (_wordIndex >= _words.Length) throw new System.InvalidOperationException("packet full");
+            _words[_wordIndex++] = (uint)_scratch;
+            _scratch >>= 32;
+            _scratchBits -= 32;
+        }
+    }
+
+    // Map min..max to 0..(2^bits - 1), rounding to the nearest step.
+    public void WriteQuantized(float value, float min, float max, int bits)
+    {
+        uint steps = (1u << bits) - 1;
+        float t = (System.Math.Clamp(value, min, max) - min) / (max - min);
+        WriteBits((uint)System.Math.Round(t * steps), bits);
+    }
+
+    public int BitsWritten => _wordIndex * 32 + _scratchBits;
+    // Flush(): write the final partial word. The matching BitReader reverses each step.
+}
+
+// Reading side of WriteQuantized:
+//   float value = min + (reader.ReadBits(bits) / (float)((1u << bits) - 1)) * (max - min);
+// Position with 1 mm precision in a 1024 m world: writer.WriteQuantized(pos.x, -512f, 512f, 20);
+```
+
+Every reader must clamp and range-check what it reads, because a packet can contain anything. A `BitReader` that reads past the end
+of the buffer must fail cleanly, not throw out of your network loop.
+
+## Putting numbers on bandwidth
+
+Take a 16-player arena at 30 Hz. Per player per snapshot: position 3 × 20 bits, rotation 29 bits, velocity 3 × 12 bits and a few bits
+of id and flags. That's about 130 bits, or **16 bytes**, compared with 44 bytes naively. Sixteen players make 260 bytes, plus about
+10 bytes of game header and 28 bytes of IPv4 + UDP header: roughly **300 bytes per packet**.
+
+> 300 bytes × 30 packets/s = 9 KB/s ≈ 72 kbit/s per client
+> 16 clients × 9 KB/s = 144 KB/s ≈ 1.15 Mbit/s server upload
+
+Before delta compression, that's already 2.4 times smaller than the naive version. Note that the 28 header bytes are a fixed cost per
+packet: at 60 packets per second they alone cost 1.7 KB/s, which is one reason to bundle everything for a client into one packet per tick.
+
+<Sim name="bandwidth-calculator" preset="arena-16p" caption="Change players, entities, fields, tick rate and bit-packing." />
+
+What you should notice:
+
+- Bandwidth scales with **players × entities × send rate**. In a battle royale, players × players grows quadratically, so interest management (lesson 6) stops being optional.
+- **Quantization and bit-packing** typically cut 50–70% before any delta compression.
+- The per-packet **header overhead** dominates when payloads are small and the send rate is high.
+- Compare the result with the 1200-byte safe payload: if one tick for one client doesn't fit, you need priority, deltas, or a lower send rate.
+
+## Fragmentation
+
+Some messages don't fit in one packet: a level layout, a long chat history, the initial world state for a late joiner. Rather than
+rely on IP <Term id="fragmentation">fragmentation</Term>, which drops the whole message if any fragment is lost (lesson 2), netcode
+splits large messages into its own numbered fragments under ~1200 bytes. Then only the missing fragments are resent. Keep frequent
+messages small enough that they never need this.
+
+<Callout type="unity" title="Preview: reliability and serialization in Unity and Steam">
+  Unity Transport builds these features as **pipelines**: `ReliableSequencedPipelineStage` (sequence numbers and acks, 32 packets in flight per
+  connection by default), `FragmentationPipelineStage` (splits payloads, 4096 bytes by default) and `UnreliableSequencedPipelineStage`. In NGO you choose
+  `RpcDelivery.Reliable` or `Unreliable` per RPC, implement `INetworkSerializable` for custom types, and use `FastBufferWriter` and `BitWriter`
+  for compact data. `NetworkTransform` offers half-float precision (2 bytes per axis) and quaternion compression (4 bytes per rotation). Steam
+  Networking Sockets has send flags such as `k_nSteamNetworkingSend_Reliable` and `Unreliable`, fragments messages for you, and accepts messages up to 512 KB.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Everything reliable">
+  Making every message reliable "to be safe" means one lost packet delays every message behind it in that channel by a full RTT, and on a bad link the
+  resend queue grows until the connection fails. Use reliable delivery for events, not for state that is resent anyway.
+</Callout>
+
+<Callout type="pitfall" title="Quantizing outside the range">
+  A position quantized to ±512 m silently clamps when a player falls off the map at −600 m. Pick ranges from your level bounds, and handle out-of-range
+  values explicitly (respawn, or fall back to full precision).
+</Callout>
+
+<Callout type="pitfall" title="Prediction and quantization drift">
+  If the server simulates with full-precision floats but clients receive quantized positions, a predicting client's replay starts from slightly different
+  values every time. Quantize the server's own state at the end of each tick so both sides simulate from identical numbers.
+</Callout>
+
+<KeyTakeaways>
+
+- Reliability over UDP is **sequence numbers + acks with a bitfield + resending messages** (not packets) when no ack arrives.
+- Compare sequence numbers with **wraparound** logic. A 16-bit counter wraps in minutes.
+- **Channels** keep ordering local, so one lost message only blocks messages that depend on it.
+- **Quantize** to the precision you need (`ceil(log2(range / precision))` bits) and **bit-pack** the result. Rotations fit in 29 bits with smallest-three.
+- Bandwidth ≈ players × entities × bytes per entity × send rate, plus 28 bytes of header per packet. Always check it against the ~1200-byte payload.
+
+</KeyTakeaways>

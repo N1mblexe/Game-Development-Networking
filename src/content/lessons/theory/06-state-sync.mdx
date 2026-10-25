@@ -1,0 +1,216 @@
+---
+title: State Synchronization
+order: 6
+summary: How the authority keeps every client's copy of the world up to date with snapshots, delta compression, events and prioritization.
+durationMin: 25
+objectives:
+  - Compare state synchronization, input replication and event messages, and say when each fits
+  - Estimate the size of a full snapshot and the bandwidth it needs
+  - Explain delta compression against the last acknowledged snapshot, and why "the last one sent" doesn't work
+  - Use relevance and priority to fit a world into a fixed bandwidth budget
+prerequisites: [theory/tick-rate, theory/authority-models]
+tags: [state, snapshots, delta-compression, bandwidth]
+sources:
+  - title: Glenn Fiedler, Snapshot Interpolation
+    url: https://gafferongames.com/post/snapshot_interpolation/
+  - title: Glenn Fiedler, Snapshot Compression
+    url: https://gafferongames.com/post/snapshot_compression/
+  - title: Glenn Fiedler, State Synchronization
+    url: https://gafferongames.com/post/state_synchronization/
+  - title: Valve Developer Wiki, Source Multiplayer Networking (snapshots and delta compression)
+    url: https://developer.valvesoftware.com/wiki/Source_Multiplayer_Networking
+  - title: 'NGO docs: NetworkTime and ticks (NetworkVariable changes are sent per tick)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/advanced-topics/networktime-ticks.html
+---
+
+When you look at a `GameObject` in the Inspector, you see its state: a Transform, a few serialized fields, maybe a health
+value. If a client had an exact copy of every one of those values, it could render exactly what the server sees. State
+synchronization is the job of getting those values from the authority to everyone else: often enough to look live, small
+enough to fit through a home connection, and robust to the packets that never arrive.
+
+## Three ways to keep worlds in step
+
+| Approach | What crosses the network | Used by |
+|---|---|---|
+| **<Term id="state-synchronization">State synchronization</Term>** | The authority's *results*: positions, health, flags | Most action games, shooters, MMOs, NGO |
+| **<Term id="input-replication">Input replication</Term>** | Only player *inputs*. Every machine simulates the same thing | RTS games, fighting games (lesson 12) |
+| **Events** (often <Term id="rpc">RPCs</Term>) | One-off things that *happened*: "explosion at X", "player 3 joined" | Everything, alongside one of the above |
+
+This lesson is about the first one, together with events. Its key property is that it **heals itself**: if a packet is lost,
+the next update contains the current truth anyway. Nothing builds up, and nobody has to be perfectly deterministic.
+
+## Snapshots
+
+The simplest form of state sync is the <Term id="snapshot">snapshot</Term>: on each send tick, the server serializes the
+state of every relevant entity into a packet and sends it to each client. The client keeps the last few snapshots and renders
+from them.
+
+How big is a snapshot? Take an entity with naive, uncompressed fields:
+
+| Field | Type | Bytes |
+|---|---|---|
+| Entity id | `ushort` | 2 |
+| Position | 3 × `float` | 12 |
+| Rotation | quaternion, 4 × `float` | 16 |
+| Velocity | 3 × `float` | 12 |
+| Health + flags | `ushort` | 2 |
+| **Total** | | **44** |
+
+Thirty-two such entities make **1408 bytes**, which is already over the ~1200-byte safe payload from lesson 2. At a 30 Hz
+send rate that's about 42 KB/s (340 kbit/s) per client, and a 16-player server would upload about 5.4 Mbit/s. This is
+workable on a LAN, but too much for players on Wi-Fi or mobile, and expensive at scale.
+
+There are three ways to shrink this, and real games use all three:
+
+1. **Send fewer bits per field** with quantization and bit-packing (lesson 10). Position in 3 × 20 bits instead of 3 × 32, and rotation in 32 bits instead of 128.
+2. **Send only what changed**, with delta compression.
+3. **Send only what matters to this client**, with relevance and priority.
+
+## Delta compression
+
+Most of the world doesn't change from one tick to the next. Crates sit still, doors stay shut, and a running player's health
+stays the same. <Term id="delta-compression">Delta compression</Term> sends only the difference between the new snapshot and
+a **<Term id="baseline">baseline</Term>** snapshot that the client already has.
+
+The subtle part is choosing the baseline. The obvious choice, "the previous snapshot I sent", fails as soon as a packet is
+lost: the client never received that previous snapshot, so it can't apply a difference against it. The correct baseline is
+**the most recent snapshot the client has acknowledged**.
+
+<Sequence
+  title="Delta compression against the last acknowledged snapshot"
+  actors={[
+    { id: 's', label: 'Server', kind: 'server' },
+    { id: 'c', label: 'Client', kind: 'client' },
+  ]}
+  steps={[
+    { from: 's', to: 'c', label: 'Snapshot 100 (full, 1400 B)', kind: 'unreliable' },
+    { from: 'c', to: 's', label: 'ack 100', note: 'acks usually ride on the client input packets', kind: 'unreliable' },
+    { from: 's', to: 'c', label: 'Snapshot 101 = delta vs 100 (180 B), LOST', kind: 'unreliable' },
+    { from: 's', to: 'c', label: 'Snapshot 102 = delta vs 100 (210 B)', note: 'the server has not seen an ack for 101, so it still uses 100', kind: 'unreliable' },
+    { from: 'c', to: 'c', label: 'Apply delta to stored snapshot 100 → state at 102', kind: 'local' },
+    { from: 'c', to: 's', label: 'ack 102', kind: 'unreliable' },
+    { from: 's', to: 'c', label: 'Snapshot 103 = delta vs 102 (150 B)', kind: 'unreliable' },
+  ]}
+/>
+
+This puts some requirements on both sides:
+
+- The **server** keeps a short history of what it sent to *each* client, typically a ring buffer of the last 32–64 snapshots, so it can rebuild any baseline the client might ack.
+- The **client** keeps the snapshots it received, so it can apply a delta to whichever baseline the server names. Each delta packet says "relative to snapshot 100".
+- If a client hasn't acked anything for longer than the history covers, the server falls back to a **full** snapshot.
+
+Deltas are unreliable and never resent. Losing one costs nothing, because the next delta is computed against a baseline the
+client definitely has. You get reliable-looking results with no resend latency.
+
+## Try it
+
+Toggle between full snapshots and deltas, and watch the bytes-per-second counter while entities start and stop moving.
+
+<Sim name="snapshot-delta" preset="delta" caption="Bytes sent with full snapshots vs deltas against the last acked state." />
+
+What you should notice:
+
+- With **full snapshots**, bandwidth is constant and high, whether anything moves or not.
+- With **deltas**, an idle world costs almost nothing, and bandwidth rises with the number of entities that are actually changing.
+- When a packet is **lost**, the next delta gets a little bigger, because it's relative to an older baseline, but nothing breaks and nothing is resent.
+- Deltas are smallest with a **short RTT**, because acks come back sooner and baselines stay recent.
+
+## Encoding a delta
+
+A practical delta format writes a small bitmask per entity saying which fields changed, followed by just those fields. An
+entity that didn't change at all costs one bit in an "entity changed" mask.
+
+```csharp title="EntityDelta.cs"
+[System.Flags]
+public enum Changed : byte { None = 0, Position = 1, Rotation = 2, Velocity = 4, Health = 8 }
+
+public struct EntityState
+{
+    public Vec3 Position; public Quat Rotation; public Vec3 Velocity; public ushort Health;
+}
+
+public static class EntityDelta
+{
+    // Thresholds stop tiny float noise from counting as a change.
+    const float PosEpsilon = 0.001f;   // 1 mm
+
+    public static Changed Compare(in EntityState baseline, in EntityState current)
+    {
+        Changed mask = Changed.None;
+        if (Vec3.DistanceSq(baseline.Position, current.Position) > PosEpsilon * PosEpsilon) mask |= Changed.Position;
+        if (!Quat.ApproximatelyEqual(baseline.Rotation, current.Rotation)) mask |= Changed.Rotation;
+        if (Vec3.DistanceSq(baseline.Velocity, current.Velocity) > PosEpsilon * PosEpsilon) mask |= Changed.Velocity;
+        if (baseline.Health != current.Health) mask |= Changed.Health;
+        return mask;
+    }
+
+    public static void Write(BitWriter w, in EntityState baseline, in EntityState current)
+    {
+        Changed mask = Compare(baseline, current);
+        w.WriteBits((uint)mask, 4);                       // 4 bits even when nothing changed
+        if ((mask & Changed.Position) != 0) w.WriteQuantizedVec3(current.Position);
+        if ((mask & Changed.Rotation) != 0) w.WriteSmallestThree(current.Rotation);
+        if ((mask & Changed.Velocity) != 0) w.WriteQuantizedVec3(current.Velocity);
+        if ((mask & Changed.Health) != 0) w.WriteBits(current.Health, 10);  // 0..1023
+    }
+    // Read mirrors Write: start from the baseline copy and overwrite only the flagged fields.
+}
+```
+
+`BitWriter`, quantized vectors and the "smallest three" rotation encoding are the subject of lesson 10.
+
+## Relevance and priority
+
+Even perfectly compressed, a 100-player battle royale can't send everything to everyone at 30 Hz. Two more ideas keep the
+packet under budget:
+
+- **<Term id="interest-management">Interest management</Term>** (relevance): only send a client the entities that matter to it, such as those within 200 m, in the same room or in line of sight. This also stops wallhack cheats from seeing players who aren't relevant (lesson 13).
+- **Priority accumulators**: give each entity a priority that grows every tick it isn't sent, faster for nearby or fast-moving objects. Each tick, fill the packet with the highest-priority entities until the byte budget (say 1200 bytes) is used, then reset the priority of the ones you sent. Distant objects still update, just less often.
+
+Both turn bandwidth from "proportional to world size" into a fixed budget per client that you choose.
+
+## State versus events
+
+State sync answers **"what is true now?"**. Some things are better described as **"what just happened?"**: an explosion,
+a chat line, a hit marker. Sending those as state would mean keeping fields such as `lastExplosionTime` around forever.
+Send them as events (RPCs) instead, usually reliably if they matter and unreliably if they're cosmetic.
+
+The rule of thumb:
+
+- If a player who **joins late** needs to know it, it's **state**. A door that is open must appear open to someone who connects ten minutes later.
+- If it only matters **at the moment it happens**, it's an **event**. A late joiner doesn't need to see an explosion from ten minutes ago.
+
+<Callout type="unity" title="Preview: state sync in NGO">
+  In Netcode for GameObjects, a `NetworkVariable` is state. When the authority changes it, it is marked dirty and sent as a delta
+  during the next network tick. Late joiners receive the current value when the object spawns for them, and `OnValueChanged` fires on
+  receivers. RPCs are events. `NetworkTransform` is a specialised state synchronizer with change thresholds, half-precision and
+  quaternion compression options. Unity's Netcode for Entities uses full snapshot-and-delta "ghost" replication like the one in this
+  lesson. Steam Networking Sockets just carries your bytes, so you'd implement snapshots yourself.
+</Callout>
+
+## Pitfalls
+
+<Callout type="pitfall" title="Using RPCs for persistent state">
+  "Call `OpenDoorRpc` on everyone" works until someone joins after the door opened and sees it closed. If it should still be true later,
+  make it state, for example a `NetworkVariable`, and let the event only trigger cosmetic effects.
+</Callout>
+
+<Callout type="pitfall" title="Deltas against the last *sent* snapshot">
+  This works perfectly on a LAN and corrupts the client's world the first time a packet is lost. Always delta against an **acknowledged**
+  baseline, and include the baseline id in the packet.
+</Callout>
+
+<Callout type="pitfall" title="Syncing what clients can compute">
+  A health bar's fill amount, an animation's normalized time or a derived "is low health" flag can all be computed from other state. Every
+  redundant field costs bytes on every update. Sync the inputs to those computations, not their outputs.
+</Callout>
+
+<KeyTakeaways>
+
+- **State sync** sends the authority's results and is self-healing: the next update fixes any loss.
+- A naive **snapshot** of 32 entities is about 1.4 KB, which already exceeds a safe UDP payload. At 30 Hz it costs about 42 KB/s per client.
+- **Delta compression** sends only changes against the **last acknowledged** snapshot, so loss never corrupts state and nothing is resent.
+- **Interest management** and **priority** turn bandwidth into a fixed budget per client and also limit information leaks.
+- Use **state** for anything a late joiner must know, and **events** for things that only matter as they happen.
+
+</KeyTakeaways>
