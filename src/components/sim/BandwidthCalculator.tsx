@@ -261,7 +261,7 @@ export default function BandwidthCalculator(props: BandwidthCalculatorProps) {
       </ControlGrid>
 
       {!compact && (
-        <div className="relative overflow-x-auto rounded-lg border border-border">
+        <div className="relative overflow-x-auto rounded-lg border border-border" tabIndex={0} role="region" aria-label="Replicated fields (scrollable)">
           <table className="w-full min-w-[420px] text-left text-sm">
             <caption className="sr-only">Fields replicated per entity, with their sizes in bits</caption>
             <thead className="bg-surface-2 text-xs text-muted">

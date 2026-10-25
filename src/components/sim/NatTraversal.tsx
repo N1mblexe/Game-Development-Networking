@@ -182,7 +182,7 @@ export default function NatTraversal(props: NatTraversalProps) {
           <p className="mb-1 text-sm text-muted" id={`${id}-matrix`}>
             Does hole punching work? (A's NAT in rows, B's NAT in columns)
           </p>
-          <div className="relative overflow-x-auto">
+          <div className="relative overflow-x-auto" tabIndex={0} role="region" aria-label="Hole punching matrix (scrollable)">
           <table className="text-left text-xs" aria-labelledby={`${id}-matrix`}>
             <thead>
               <tr>

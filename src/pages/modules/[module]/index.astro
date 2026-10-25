@@ -22,7 +22,7 @@ const prereqModules = (await getModules()).filter((m) => d.prerequisites.include
 <BaseLayout title={d.title} description={d.summary} accent={d.color}>
   <header class="mb-10">
     <div class="mb-4 flex items-center gap-3">
-      <span class="grid h-12 w-12 place-items-center rounded-xl text-lg font-bold text-white" style={`background:${d.color}`}>{d.badge}</span>
+      <span class="bg-module-solid grid h-12 w-12 place-items-center rounded-xl text-lg font-bold" style={`--module:${d.color}`}>{d.badge}</span>
       <div>
         <p class="text-sm text-muted">Module {d.order}</p>
         <h1 class="text-3xl font-extrabold tracking-tight">{d.title}</h1>
@@ -44,10 +44,10 @@ const prereqModules = (await getModules()).filter((m) => d.prerequisites.include
   <ol class="grid gap-3">
     {
       lessons.map((l, i) => (
-        <li>
+        <li class="min-w-0">
           <a href={lessonUrl(l)} class="card flex gap-4 p-4 hover:border-accent">
             <span class="w-6 shrink-0 text-right font-mono text-muted">{i + 1}</span>
-            <span class="min-w-0 flex-1">
+            <span class="min-w-0 flex-1 [overflow-wrap:anywhere]">
               <span class="block font-semibold">{l.data.title}</span>
               <span class="block text-sm text-muted">{l.data.summary}</span>
             </span>

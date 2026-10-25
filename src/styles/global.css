@@ -78,6 +78,8 @@
   body {
     background: var(--bg);
     min-height: 100dvh;
+    /* Long API names (SteamNetworkingSockets.CreateRelaySocket) must wrap instead of widening the page. */
+    overflow-wrap: break-word;
   }
   :focus-visible {
     outline: 2px solid var(--accent);
@@ -153,12 +155,22 @@
     padding-left: 1em;
     color: var(--muted);
   }
+  /* Lesson tables are wrapped in a focusable .table-scroll region (src/components/mdx/Table.astro). */
+  .prose .table-scroll {
+    overflow-x: auto;
+    margin-block: 1.25em;
+  }
+  .prose .table-scroll:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   .prose table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.95rem;
-    display: block;
-    overflow-x: auto;
+  }
+  .prose .table-scroll > table {
+    margin: 0;
   }
   .prose th,
   .prose td {
@@ -220,4 +232,19 @@
   .no-print {
     display: none !important;
   }
+}
+
+/*
+ * Module colors are brand hues picked per module (src/content/modules/*.yaml) and are not guaranteed to
+ * contrast with the page. Use these instead of the raw color for anything that carries text:
+ *   text-module-ink   module-tinted text, AA (4.5:1) on bg/surface in both themes
+ *   bg-module-solid   module-tinted badge background with white text on it
+ * They read --module at the element itself, so `style="--module: #e8833a"` on the element works.
+ */
+@utility text-module-ink {
+  color: color-mix(in oklab, var(--module) 58%, var(--text));
+}
+@utility bg-module-solid {
+  background-color: color-mix(in oklab, var(--module) 68%, #000);
+  color: #fff;
 }

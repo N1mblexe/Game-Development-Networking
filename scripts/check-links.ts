@@ -16,7 +16,7 @@
  * Exits 1 when anything is broken. Output is grouped by source file under src/ when it can be inferred.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, posix, relative, resolve } from 'node:path';
+import { join, posix, relative, resolve } from 'node:path';
 
 const args = process.argv.slice(2);
 const arg = (name: string) => {
@@ -196,6 +196,3 @@ for (const [from, list] of [...byFrom].sort(([a], [b]) => a.localeCompare(b))) {
 }
 console.log(`\n${problems.length} broken reference(s) (${unique.size} unique) in ${byFrom.size} file(s)`);
 process.exit(1);
-
-// Keep tsc happy about unused helpers in some configurations.
-void dirname;
