@@ -28,8 +28,12 @@ sources:
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkList-1.html
   - title: 'NGO 2.13 API: NetworkVariableUpdateTraits'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkVariableUpdateTraits.html
-  - title: 'NGO source: NetworkVariable.cs (Value setter)'
-    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/develop-2.0.0/com.unity.netcode.gameobjects/Runtime/NetworkVariable/NetworkVariable.cs
+  - title: 'NGO source v2.13.3: NetworkVariable.cs (Value setter)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/NetworkVariable/NetworkVariable.cs
+  - title: 'NGO source v2.13.3: NetworkBehaviourUpdater.cs (dirty objects are processed on each network tick)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Core/NetworkBehaviourUpdater.cs
+  - title: 'Unity Collections 2.2 API: FixedStringMethods.CopyFromTruncated'
+    url: https://docs.unity3d.com/Packages/com.unity.collections@2.2/api/Unity.Collections.FixedStringMethods.html
 ---
 
 Ask a single question about every piece of data in your game: **"Should a player who joins mid-match know this?"**
@@ -41,15 +45,15 @@ and NGO keeps every client's copy up to date, including clients that connect lat
 ## How a NetworkVariable travels
 
 A NetworkVariable wraps a value of some type. You read and write it through `.Value`. When the authority changes
-`.Value`, NGO marks the variable **dirty**. At the end of the frame, it collects dirty variables and sends their new
-values to every client allowed to read them. Clients apply the value and invoke `OnValueChanged`.
+`.Value`, NGO marks the variable **dirty**. On the next network tick (30 per second by default), it collects dirty
+variables and sends their new values to every client allowed to read them. Clients apply the value and invoke `OnValueChanged`.
 
 <Diagram name="ngo-netvar-flow" caption="The server writes Value, the variable is marked dirty, NGO sends a delta to readers, and each client applies it and raises OnValueChanged." />
 
 What you should notice:
 
 - You never "send" a NetworkVariable. You change the value and NGO decides when and to whom to send it.
-- Only the **latest** value is sent. If you change health from 50 to 40 to 30 in one frame, clients see 50 then 30.
+- Only the **latest** value is sent. If you change health from 50 to 40 to 30 within one tick, clients see 50 then 30.
   NetworkVariables are **eventually consistent**: they guarantee the final state, not every intermediate step.
 - When a client joins or the object spawns, the **full** current value goes inside the spawn data, and after that NGO
   sends only changes. That's [delta compression](../../theory/state-sync/) applied for you.
@@ -191,7 +195,7 @@ if (player.TryGetComponent(out PlayerHealth health)) health.Heal(25);
 <Callout type="pitfall" title="State that changes back within one tick">
 
 If `ApplyDamage` reset health to 100 immediately after reaching 0, clients would never see 0: both writes happen before
-the end-of-frame send, so only 100 goes out. Remember that NetworkVariables sync **state, not history**. If clients need
+the next tick's send, so only 100 goes out. Remember that NetworkVariables sync **state, not history**. If clients need
 to see that something *happened* (a death animation or a kill-feed line), send an event as an RPC, or keep the state long
 enough to be sent, as the respawn delay does here.
 
@@ -220,10 +224,13 @@ public class PlayerName : NetworkBehaviour
     {
         if (IsOwner)
         {
-            // FixedString32Bytes holds up to 29 bytes of UTF-8. Longer input throws, so trim first.
+            // FixedString32Bytes holds up to 29 bytes of UTF-8. Assigning a longer string throws in the Editor and
+            // development builds, and trimming by char count isn't enough (one char can take up to 4 bytes),
+            // so copy only what fits.
             string chosen = PlayerPrefs.GetString("name", $"Player {OwnerClientId}");
-            if (chosen.Length > 20) chosen = chosen.Substring(0, 20);
-            DisplayName.Value = chosen;
+            var name = new FixedString32Bytes();
+            name.CopyFromTruncated(chosen);
+            DisplayName.Value = name;
         }
         base.OnNetworkSpawn();
     }
@@ -361,7 +368,7 @@ registration.
   them, and that check walks the whole collection. Prefer `NetworkList`.
 - `SetUpdateTraits(new NetworkVariableUpdateTraits { MinSecondsBetweenUpdates = 0.1f })` limits how often a noisy
   variable is sent, and `MaxSecondsBetweenUpdates` forces a periodic resend.
-- Changes are collected per object at the end of the frame, so changes to variables on **different** objects can arrive
+- Changes are collected per object on each tick, so changes to variables on **different** objects can arrive
   in a different order than you made them. If order matters across objects, use RPCs.
 
 ## NetworkVariable or RPC?
