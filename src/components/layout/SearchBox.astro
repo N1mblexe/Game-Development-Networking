@@ -110,9 +110,10 @@ import { withBase } from '../../lib/url';
 </style>
 
 <script>
-  import type { PagefindModal } from '@pagefind/component-ui';
+  // The subset of <pagefind-modal>'s API used here (@pagefind/component-ui is a transitive dependency).
+  type PagefindModalEl = HTMLElement & { open?: () => void; isOpen?: boolean };
 
-  const modal = () => document.querySelector<HTMLElement & Partial<Pick<PagefindModal, 'open' | 'isOpen'>>>('[data-search-modal]');
+  const modal = () => document.querySelector<PagefindModalEl>('[data-search-modal]');
   let returnFocus: HTMLElement | null = null;
 
   async function openSearch() {
