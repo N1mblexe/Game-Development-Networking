@@ -31,3 +31,451 @@ cards:
     lesson: theory/packets-and-protocols
     front: What kind of data needs reliable delivery?
     back: One-time events that must arrive exactly once, such as pickups, deaths, chat messages and match start.
+
+  # ------------------------------------------------------------------ 02 latency-jitter-loss
+  - id: latency-components
+    lesson: theory/latency-jitter-loss
+    front: Which four delays add up to a packet's latency?
+    back: Propagation, serialization (pushing bits onto the wire), queuing in router buffers, and processing.
+  - id: fibre-latency
+    lesson: theory/latency-jitter-loss
+    front: How much one-way latency does optical fibre add per 1000 km?
+    back: About 5 ms, because light in fibre travels at roughly 200,000 km/s. It's a hard floor that no software can lower.
+  - id: rtt-vs-one-way
+    lesson: theory/latency-jitter-loss
+    front: Why do games measure RTT instead of one-way latency?
+    back: RTT can be timed with a single clock. One-way latency is only roughly RTT / 2, and only on a symmetric path.
+  - id: jitter-cure
+    lesson: theory/latency-jitter-loss
+    front: What is jitter, and how do games absorb it?
+    back: Variation in latency from packet to packet. A small, fixed jitter buffer holds data briefly and plays it out at an even pace.
+  - id: loss-causes
+    lesson: theory/latency-jitter-loss
+    front: What causes most packet loss, and what shape does it take?
+    back: Congestion (full router queues), plus Wi-Fi interference and mobile handovers. It often comes in bursts, which hurt more than the average suggests.
+  - id: upload-bottleneck
+    lesson: theory/latency-jitter-loss
+    front: Which direction of a home connection usually limits a player who hosts?
+    back: Upload, which is often 5–20 times smaller than download. The host must upload every update to every other player.
+  - id: bufferbloat
+    lesson: theory/latency-jitter-loss
+    front: What happens when a game sends more than its link can carry?
+    back: Packets queue in router buffers, adding up to hundreds of milliseconds of latency before anything is dropped (bufferbloat).
+  - id: safe-udp-payload
+    lesson: theory/latency-jitter-loss
+    front: What is a safe UDP payload size, and why?
+    back: About 1200 bytes. It fits under the 1280-byte IPv6 minimum MTU after headers and survives tunnels and VPNs.
+  - id: fragment-loss
+    lesson: theory/latency-jitter-loss
+    front: With loss rate p, how likely is a message in n IP fragments to arrive?
+    back: (1 − p) to the power n. At 5% loss, a 4-fragment message is lost about 19% of the time.
+
+  # ------------------------------------------------------------------ 03 topologies
+  - id: dedicated-tradeoff
+    lesson: theory/topologies
+    front: What are the strengths and the main cost of a dedicated server?
+    back: It is fair, secure and survives any player leaving. It costs money and operations work, and needs servers in several regions.
+  - id: listen-server
+    lesson: theory/topologies
+    front: What is a listen server?
+    back: A server running inside one player's game, so that player is a host (server and client at once). Free, but the host has an advantage.
+  - id: host-advantage
+    lesson: theory/topologies
+    front: What is host advantage?
+    back: The host's own client has 0 ms RTT to the server, while everyone else pays their full round trip.
+  - id: host-leaves
+    lesson: theory/topologies
+    front: What happens to a listen-server match when the host quits?
+    back: It ends, unless the game implements host migration, which transfers the full state to another player and reconnects everyone.
+  - id: mesh-connections
+    lesson: theory/topologies
+    front: How many connections does a full peer-to-peer mesh of n players need?
+    back: n(n − 1) / 2, so 6 for 4 players and 28 for 8. Each peer's upload grows with the player count.
+  - id: relay-path
+    lesson: theory/topologies
+    front: Does moving a game onto a relay change who is authoritative?
+    back: No. A relay only changes the path packets take. The authority model on top, usually a listen server, stays the same.
+  - id: distributed-authority-summary
+    lesson: theory/topologies
+    front: How does distributed authority work?
+    back: Each client simulates and owns some objects, and a cloud service routes messages and keeps session state. It's cheap and robust, but weak against cheating.
+  - id: host-is-both
+    lesson: theory/topologies
+    front: On a host, what are IsServer and IsClient?
+    back: Both true. Code written as if (IsServer) ... else ... silently skips the client half for the host player.
+
+  # ------------------------------------------------------------------ 04 authority-models
+  - id: authority-def
+    lesson: theory/authority-models
+    front: What does it mean for a machine to be the authority over a piece of state?
+    back: Its value is the truth. Every other machine holds a copy that it displays, predicts and corrects towards the authority's value.
+  - id: one-authority
+    lesson: theory/authority-models
+    front: Why must each piece of state have exactly one authority?
+    back: Two writers cause split-brain. Each applies its own change, and players see different results or flicker depending on arrival order.
+  - id: server-authoritative-def
+    lesson: theory/authority-models
+    front: What do clients send in a server-authoritative game?
+    back: Inputs. The server simulates and sends back results, so cheats are limited to what inputs can do.
+  - id: server-authority-cost
+    lesson: theory/authority-models
+    front: What is the main cost of server authority, and what hides it?
+    back: Every action waits a full RTT (plus up to a tick) before it shows. Client-side prediction hides that delay.
+  - id: client-authority-risk
+    lesson: theory/authority-models
+    front: What does client authority hand to cheaters?
+    back: Anything the client reports is believed, so speed hacks, teleports and damage hacks work instantly. Conflicts also have no referee.
+  - id: intent-not-result
+    lesson: theory/authority-models
+    front: Why phrase client messages as intents rather than results?
+    back: An intent ("I'd like to pick up item 7") can be refused by the authority. A result ("I picked it up") can only be believed or rebuilt.
+  - id: ownership-def
+    lesson: theory/authority-models
+    front: What is ownership?
+    back: Per-object authority. The server owns everything by default and can grant clients ownership of some objects, which can change at runtime.
+  - id: coop-authority-split
+    lesson: theory/authority-models
+    front: What is a common, pragmatic authority split for a co-op game?
+    back: Owner-authoritative movement for each player, server-authoritative health, enemies, doors and pickups, and unsynchronized local cosmetics.
+
+  # ------------------------------------------------------------------ 05 tick-rate
+  - id: tick-def
+    lesson: theory/tick-rate
+    front: What is a tick?
+    back: One fixed, numbered step of the authoritative simulation. Tick 1820 means the same moment on the server and every client.
+  - id: tick-interval
+    lesson: theory/tick-rate
+    front: How do you get the tick interval from the tick rate?
+    back: Interval = 1 / tick rate. 20 Hz is 50 ms, 30 Hz is 33.3 ms and 60 Hz is 16.7 ms, which is also the server's CPU budget per tick.
+  - id: three-rates
+    lesson: theory/tick-rate
+    front: What's the difference between tick rate, send rate and frame rate?
+    back: Tick rate is how often the simulation steps, send rate how often state is sent, and frame rate how often each client renders.
+  - id: why-fixed-step
+    lesson: theory/tick-rate
+    front: Why do networked games simulate with a fixed timestep?
+    back: So every machine computes the same results, inputs and snapshots can refer to tick numbers, and past inputs can be replayed exactly.
+  - id: tick-rate-cost
+    lesson: theory/tick-rate
+    front: What does doubling the tick rate cost?
+    back: It halves the CPU budget per tick (roughly doubling server count), and doubles bandwidth if the send rate follows it.
+  - id: accumulator-loop
+    lesson: theory/tick-rate
+    front: How does a fixed-timestep accumulator loop work?
+    back: Each frame adds real elapsed time and runs as many fixed ticks as fit. The remainder becomes an interpolation factor for rendering.
+  - id: spiral-of-death
+    lesson: theory/tick-rate
+    front: What is the spiral of death, and how do you prevent it?
+    back: Slow ticks cause more catch-up ticks next frame, which are slower still, until the game locks up. Cap the ticks run per frame.
+  - id: unity-rate-defaults
+    lesson: theory/tick-rate
+    front: What are Unity's default Fixed Timestep and NGO's default tick rate?
+    back: Fixed Timestep is 0.02 s (50 Hz). NGO's NetworkConfig.TickRate is 30. They don't match unless you set them.
+  - id: input-sampling
+    lesson: theory/tick-rate
+    front: Where should you read input for a tick-based simulation?
+    back: In Update, collected until the next tick consumes it. FixedUpdate can run zero times in a frame, so key presses get missed there.
+
+  # ------------------------------------------------------------------ 06 state-sync
+  - id: sync-approaches
+    lesson: theory/state-sync
+    front: What are the three ways to keep game worlds in step?
+    back: State synchronization (send results), input replication (send inputs, everyone simulates) and events such as RPCs (send what happened).
+  - id: state-sync-self-healing
+    lesson: theory/state-sync
+    front: Why is state synchronization called self-healing?
+    back: Every update carries the current truth, so a lost packet is fixed by the next one and nobody needs to be deterministic.
+  - id: naive-entity-size
+    lesson: theory/state-sync
+    front: How big is a naive, uncompressed entity in a snapshot?
+    back: About 44 bytes (id, 3-float position, 4-float quaternion, 3-float velocity, health). 32 entities already exceed 1200 bytes.
+  - id: delta-compression
+    lesson: theory/state-sync
+    front: What does delta compression send?
+    back: Only the differences between the new snapshot and a baseline snapshot the client already has.
+  - id: delta-baseline
+    lesson: theory/state-sync
+    front: Which baseline must unreliable deltas use?
+    back: The most recent snapshot the client has acknowledged. The last one sent might have been lost.
+  - id: delta-history
+    lesson: theory/state-sync
+    front: What does the server keep for delta compression, and what is its fallback?
+    back: A ring buffer of recent snapshots per client (often 32–64). If the client's last ack is older than that, it sends a full snapshot.
+  - id: interest-management
+    lesson: theory/state-sync
+    front: What is interest management?
+    back: Sending each client only the entities relevant to it, for example nearby or visible ones. It saves bandwidth and limits information leaks.
+  - id: priority-accumulator
+    lesson: theory/state-sync
+    front: How does a priority accumulator fill a fixed packet budget?
+    back: Each entity's priority grows every tick it isn't sent, faster if near or fast. Send the highest until the budget is used, then reset those.
+  - id: state-or-event
+    lesson: theory/state-sync
+    front: How do you decide between state and an event?
+    back: If a player who joins later needs to know it, it's state. If it only matters as it happens, it's an event.
+
+  # ------------------------------------------------------------------ 07 prediction-reconciliation
+  - id: prediction-def
+    lesson: theory/prediction-reconciliation
+    front: What is client-side prediction?
+    back: The client applies its own input immediately with the same simulation code the server runs, instead of waiting a round trip.
+  - id: prediction-alone
+    lesson: theory/prediction-reconciliation
+    front: Why isn't prediction enough on its own?
+    back: Server states arrive old. Snapping to them moves the player back in time on every update, which is rubber-banding.
+  - id: last-processed-input
+    lesson: theory/prediction-reconciliation
+    front: What extra number does the server send for reconciliation?
+    back: The sequence number of the last input it processed for that player, so the client knows which predictions the state includes.
+  - id: reconciliation-steps
+    lesson: theory/prediction-reconciliation
+    front: What are the steps of server reconciliation?
+    back: Drop acknowledged inputs, reset to the server state, then replay every remaining buffered input with the fixed tick dt.
+  - id: misprediction-causes
+    lesson: theory/prediction-reconciliation
+    front: What usually causes mispredictions?
+    back: Things the client couldn't know, such as other players, server-side stuns or rejected input, plus divergent code and lost input packets.
+  - id: redundant-inputs
+    lesson: theory/prediction-reconciliation
+    front: How do you stop lost input packets from causing mispredictions?
+    back: Send the last 3–5 inputs in every packet, so a single lost packet costs nothing.
+  - id: replay-side-effects
+    lesson: theory/prediction-reconciliation
+    front: What must never happen during an input replay?
+    back: Side effects such as sounds and particles. Keep the simulation step pure and trigger effects only for new ticks.
+  - id: client-runs-ahead
+    lesson: theory/prediction-reconciliation
+    front: Why do predicting clients run ahead of the server, and by how much?
+    back: So input for tick N arrives in time for tick N. The lead is about RTT / 2 plus the server's input buffer.
+  - id: what-not-to-predict
+    lesson: theory/prediction-reconciliation
+    front: What should a client not predict?
+    back: Contested or irreversible outcomes such as kills, score, contested pickups and server-owned randomness.
+
+  # ------------------------------------------------------------------ 08 interpolation-extrapolation
+  - id: interpolation-def
+    lesson: theory/interpolation-extrapolation
+    front: How does interpolation make remote players smooth?
+    back: It renders them a fixed delay in the past, so there are almost always two real snapshots to blend between.
+  - id: extrapolation-def
+    lesson: theory/interpolation-extrapolation
+    front: What is extrapolation?
+    back: Guessing beyond the newest snapshot by continuing the motion, for example position + velocity × time since the last update.
+  - id: interp-delay-rule
+    lesson: theory/interpolation-extrapolation
+    front: How big should the interpolation delay be?
+    back: About two send intervals plus the expected jitter, so one lost snapshot doesn't cause a stall.
+  - id: source-interp-default
+    lesson: theory/interpolation-extrapolation
+    front: What was the Source engine's default interpolation delay?
+    back: 100 ms (cl_interp 0.1) at 20 updates per second, which is two snapshot intervals.
+  - id: interp-sort-order
+    lesson: theory/interpolation-extrapolation
+    front: How should an interpolation buffer order its samples?
+    back: By server time, never by arrival time, because packets can arrive out of order.
+  - id: slerp-rotations
+    lesson: theory/interpolation-extrapolation
+    front: How should rotations be interpolated?
+    back: With slerp on quaternions. Lerping Euler angles spins the long way round, for example from 359° to 1°.
+  - id: dead-reckoning-fit
+    lesson: theory/interpolation-extrapolation
+    front: Where does dead reckoning work well, and where badly?
+    back: Well for smooth physical motion such as vehicles, ships and projectiles. Badly for characters, who can reverse in one frame.
+  - id: interp-own-player
+    lesson: theory/interpolation-extrapolation
+    front: Should your own predicted player go through the interpolation buffer?
+    back: No. That adds the interpolation delay on top of the RTT and undoes prediction. Only remote entities use the buffer.
+  - id: interp-teleports
+    lesson: theory/interpolation-extrapolation
+    front: How do you stop a teleport from gliding across the map?
+    back: Send a teleport flag or counter with the state, and clear the buffer and snap when it changes.
+
+  # ------------------------------------------------------------------ 09 lag-compensation
+  - id: lag-compensation-def
+    lesson: theory/lag-compensation
+    front: What is lag compensation?
+    back: The server rewinds other players' hitboxes to where the shooter saw them, tests the shot, then restores the present.
+  - id: view-age
+    lesson: theory/lag-compensation
+    front: How far in the past does a shooter see remote players?
+    back: About one-way latency (RTT / 2) plus the interpolation delay.
+  - id: rewind-amount
+    lesson: theory/lag-compensation
+    front: How far must the server rewind to judge a shot?
+    back: About RTT plus the interpolation delay, because the shot also takes a one-way trip to reach the server.
+  - id: favor-the-shooter
+    lesson: theory/lag-compensation
+    front: What does "favor the shooter" mean?
+    back: If the crosshair was on the target on the shooter's screen, the shot hits, even though the target has since moved.
+  - id: shot-behind-cover
+    lesson: theory/lag-compensation
+    front: Why do players sometimes die after reaching cover?
+    back: On a high-ping shooter's screen they were still in the open, and the lag-compensated server agreed with the shooter.
+  - id: peekers-advantage
+    lesson: theory/lag-compensation
+    front: What is peeker's advantage, and what reduces it?
+    back: A player stepping out sees the defender before the defender sees them. Only lower total latency (tick rate, interp delay, nearby servers) shrinks it.
+  - id: clamp-rewind
+    lesson: theory/lag-compensation
+    front: Why must the server clamp the rewind time?
+    back: To stop cheaters claiming they fired long ago, and to limit shot-behind-cover. A cap around 200–250 ms is typical.
+  - id: record-poses
+    lesson: theory/lag-compensation
+    front: When should the server record hitbox poses for its history?
+    back: At the end of each tick, after movement, so tick N's record matches what clients receive in snapshot N.
+  - id: projectile-compensation
+    lesson: theory/lag-compensation
+    front: How are projectiles usually lag-compensated?
+    back: The server spawns them and fast-forwards them by the shooter's latency, so they start where the shooter saw them leave the barrel.
+
+  # ------------------------------------------------------------------ 10 reliability-serialization
+  - id: reliability-pieces
+    lesson: theory/reliability-serialization
+    front: What three pieces build reliable delivery on top of UDP?
+    back: Sequence numbers on every packet, acks with a bitfield in every packet, and resending unacknowledged messages in new packets.
+  - id: ack-bitfield
+    lesson: theory/reliability-serialization
+    front: What does a 32-bit ack bitfield do?
+    back: Bit n means "I also received ack − 1 − n", so every packet acknowledges up to 33 packets and a lost ack costs nothing.
+  - id: resend-messages
+    lesson: theory/reliability-serialization
+    front: When a packet is lost, what gets resent?
+    back: Only the reliable messages it carried, copied into the next packet with a new sequence number. Stale state is never resent.
+  - id: sequence-wraparound
+    lesson: theory/reliability-serialization
+    front: How do you compare 16-bit sequence numbers that wrap around?
+    back: Treat them as a circle. a is newer than b if it's ahead by less than half the range (32768).
+  - id: channels-ordering
+    lesson: theory/reliability-serialization
+    front: Why split reliable messages into several channels?
+    back: Ordering is per channel, so a lost message only blocks messages behind it in the same channel, never movement or combat.
+  - id: quantization-bits
+    lesson: theory/reliability-serialization
+    front: How many bits does a quantized value need?
+    back: ceil(log2(range / precision)). A 1024 m axis at 1 mm precision needs 20 bits instead of 32.
+  - id: smallest-three
+    lesson: theory/reliability-serialization
+    front: How does smallest-three rotation compression work?
+    back: Drop the largest quaternion component and rebuild it from the unit length. Send 2 bits for its index plus the other three, for example 3 × 9 bits.
+  - id: no-binaryformatter
+    lesson: theory/reliability-serialization
+    front: Why should you never deserialize network data with BinaryFormatter?
+    back: The bytes decide which types get constructed, so an attacker can run code on your server. Read only the fields you expect, with limits.
+  - id: header-overhead
+    lesson: theory/reliability-serialization
+    front: What fixed cost does every UDP packet pay, and why does it matter?
+    back: 28 bytes of IPv4 + UDP header. With small payloads and high send rates it dominates, so bundle each tick's data into one packet.
+
+  # ------------------------------------------------------------------ 11 nat-and-relays
+  - id: nat-def
+    lesson: theory/nat-and-relays
+    front: What does a NAT router do to incoming packets that match no mapping?
+    back: It drops them. Mappings are only created by outgoing packets, so nobody can call in first.
+  - id: private-ranges
+    lesson: theory/nat-and-relays
+    front: Which address ranges are private under RFC 1918?
+    back: 10.0.0.0/8, 172.16.0.0/12 (172.16 to 172.31) and 192.168.0.0/16. They aren't routable on the internet.
+  - id: cgnat
+    lesson: theory/nat-and-relays
+    front: Why doesn't port forwarding help a player behind CGNAT?
+    back: Their router is behind a second NAT inside the ISP (often using 100.64.0.0/10), which the player can't configure.
+  - id: cone-vs-symmetric
+    lesson: theory/nat-and-relays
+    front: What's the difference between endpoint-independent ("cone") and endpoint-dependent ("symmetric") mapping?
+    back: Cone NAT reuses one public port for every destination. Symmetric NAT gives each destination a new port, which defeats hole punching.
+  - id: stun-purpose
+    lesson: theory/nat-and-relays
+    front: What does a STUN server tell a client?
+    back: The public IP and port its packets appear to come from. Comparing two STUN servers' answers reveals the NAT's mapping behaviour.
+  - id: hole-punching
+    lesson: theory/nat-and-relays
+    front: How does UDP hole punching work?
+    back: A rendezvous server exchanges public endpoints, then both peers send to each other at once, so each NAT treats the other's packets as replies.
+  - id: relay-tradeoffs
+    lesson: theory/nat-and-relays
+    front: What do relays give you, and what do they cost?
+    back: They always connect and hide players' IPs. They add some latency, and someone pays for the bandwidth.
+  - id: nat-keepalive
+    lesson: theory/nat-and-relays
+    front: Why send keep-alives every 15–20 seconds?
+    back: Idle NAT mappings expire, often after 30–60 s on consumer routers, and the next packet from the other side is then dropped.
+  - id: try-direct-then-relay
+    lesson: theory/nat-and-relays
+    front: What connection strategy do production games use?
+    back: Try a direct (hole-punched) connection and fall back to a relay, or relay everything for IP privacy.
+
+  # ------------------------------------------------------------------ 12 lockstep-rollback
+  - id: lockstep-def
+    lesson: theory/lockstep-rollback
+    front: What is deterministic lockstep?
+    back: Every machine exchanges inputs and simulates the same game, and nobody simulates turn N until it has everyone's input for turn N.
+  - id: lockstep-bandwidth
+    lesson: theory/lockstep-rollback
+    front: Why does lockstep bandwidth not depend on unit count?
+    back: Only inputs are sent, a few bytes per player per turn, whether the battle has 15 units or 1500.
+  - id: lockstep-costs
+    lesson: theory/lockstep-rollback
+    front: What are the main costs of lockstep?
+    back: Input delay, the slowest player stalling everyone, hard late joining, and a strict need for bit-exact determinism.
+  - id: determinism-def
+    lesson: theory/lockstep-rollback
+    front: What does determinism mean for lockstep and rollback?
+    back: The same inputs must produce bit-for-bit the same state on every machine, every time.
+  - id: nondeterminism-sources
+    lesson: theory/lockstep-rollback
+    front: Name common sources of non-determinism in a Unity project.
+    back: Floating-point differences, platform maths, PhysX, unseeded or global Random, Dictionary iteration order and frame-time logic.
+  - id: desync-checksums
+    lesson: theory/lockstep-rollback
+    front: How do lockstep games detect desyncs?
+    back: They exchange a checksum (hash) of the simulation state every few turns. A mismatch means the simulations have diverged.
+  - id: rollback-def
+    lesson: theory/lockstep-rollback
+    front: How does rollback netcode avoid waiting for remote input?
+    back: It predicts the remote input (usually "same as last frame"), saves state, and on a misprediction restores and resimulates to the present.
+  - id: input-delay-plus-rollback
+    lesson: theory/lockstep-rollback
+    front: Why do rollback games still add 1–3 frames of input delay?
+    back: Each frame of delay is one frame less to roll back, so a short delay plus rollback looks better than either alone.
+  - id: rollback-state
+    lesson: theory/lockstep-rollback
+    front: What must rollback simulation state look like?
+    back: Small, flat and cheap to copy, such as structs in arrays, because it's saved every frame and may be resimulated eight frames at once.
+
+  # ------------------------------------------------------------------ 13 security
+  - id: never-trust-client
+    lesson: theory/security
+    front: What should you assume about every client?
+    back: That it is hostile and the protocol is fully known. Every message the server receives is attacker-controlled.
+  - id: cheat-classes
+    lesson: theory/security
+    front: What are the main classes of cheats?
+    back: Authority (speed hacks), information (wallhacks), input automation (aimbots), protocol attacks (replays, floods) and game-logic exploits.
+  - id: authority-doesnt-stop
+    lesson: theory/security
+    front: Which cheats does server authority not stop?
+    back: Information cheats like wallhacks and input automation like aimbots, because they only read data and press legal buttons.
+  - id: validation-questions
+    lesson: theory/security
+    front: What should the server check before acting on a request?
+    back: Who sent it, whether they may, whether values are in range, whether it's plausible, and whether it's too frequent.
+  - id: sender-from-transport
+    lesson: theory/security
+    front: Where should the server get a message's sender from?
+    back: From the transport, such as rpcParams.Receive.SenderClientId in NGO. Never from an id inside the payload.
+  - id: wallhack-defense
+    lesson: theory/security
+    front: What is the only reliable defence against wallhacks?
+    back: Don't send the data. Use server-side visibility checks so a client only receives enemies it could plausibly see.
+  - id: replay-protection
+    lesson: theory/security
+    front: What stops an attacker from resending a captured packet?
+    back: Sequence numbers checked by the server, inside an authenticated, encrypted channel such as DTLS.
+  - id: defensive-parsing
+    lesson: theory/security
+    front: How should a server parse network data?
+    back: Check every length prefix against a cap before allocating, and drop bad packets instead of throwing out of the network loop.
+  - id: client-anticheat-layer
+    lesson: theory/security
+    front: What role should client-side anti-cheat play?
+    back: A useful extra layer. It runs on the attacker's machine, so it can never be the foundation.
