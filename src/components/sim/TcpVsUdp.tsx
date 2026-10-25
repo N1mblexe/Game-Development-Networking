@@ -187,7 +187,7 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, p: Palette, n
   drawChart(ctx, p, now, m, 12, h - chartH - 4, w - 24, chartH);
 }
 
-function drawLane(ctx: CanvasRenderingContext2D, p: Palette, now: number, m: Model, kind: 'tcp' | 'udp', y0: number, w: number, lh: number, narrow: boolean) {
+function drawLane(ctx: CanvasRenderingContext2D, p: Palette, now: number, m: Model, kind: 'tcp' | 'udp', y0: number, w: number, _lh: number, narrow: boolean) {
   const pad = 12;
   const isTcp = kind === 'tcp';
   const color = isTcp ? p.violet : p.teal;
