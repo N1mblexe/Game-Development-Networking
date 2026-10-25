@@ -20,7 +20,7 @@ const golden: { passPct: number; questions: Q[] } = parse(
 const LESSON = '/modules/theory/packets-and-protocols/';
 
 /** Answer one rendered question correctly (or deliberately wrong for single choice). */
-async function answer(page: Page, scope: Locator, q: Q, wrong = false) {
+async function answer(scope: Locator, q: Q, wrong = false) {
   switch (q.type) {
     case 'single': {
       const idx = wrong ? ((q.answer as number) + 1) % q.options!.length : (q.answer as number);
@@ -68,7 +68,7 @@ test.describe('lesson quiz', () => {
     for (const [i, q] of golden.questions.entries()) {
       const scope = quiz.locator(`[data-question="${q.id}"]`);
       await expect(scope).toBeVisible();
-      await answer(page, scope, q);
+      await answer(scope, q);
       await quiz.getByRole('button', { name: 'Check' }).click();
       await expect(quiz.locator('[data-feedback]')).toHaveAttribute('data-feedback', 'correct');
       await expect(quiz.locator('[data-feedback]')).toBeFocused();
@@ -91,14 +91,14 @@ test.describe('lesson quiz', () => {
     await quiz.getByRole('button', { name: 'Check' }).click();
     await expect(quiz).toContainText('Answer the question first.');
 
-    await answer(page, quiz.locator(`[data-question="${first.id}"]`), first, true);
+    await answer(quiz.locator(`[data-question="${first.id}"]`), first, true);
     await quiz.getByRole('button', { name: 'Check' }).click();
     await expect(quiz.locator('[data-feedback]')).toHaveAttribute('data-feedback', 'wrong');
     await expect(quiz.locator('[data-feedback]')).toContainText('Not quite');
     await quiz.getByRole('button', { name: /Next question/ }).click();
 
     for (const q of rest) {
-      await answer(page, quiz.locator(`[data-question="${q.id}"]`), q);
+      await answer(quiz.locator(`[data-question="${q.id}"]`), q);
       await quiz.getByRole('button', { name: 'Check' }).click();
       await quiz.getByRole('button', { name: /Next question|See results/ }).click();
     }
@@ -253,7 +253,7 @@ test.describe('module exam (fixture)', () => {
     for (let i = 0; i < 4; i++) {
       const scope = exam.locator('[data-question]');
       const id = await scope.getAttribute('data-question');
-      await answer(page, scope, fixtureAnswers[id!]);
+      await answer(scope, fixtureAnswers[id!]);
       if (i === 0) {
         // Go forward and back: the answer is kept.
         await exam.getByRole('button', { name: /^Next/ }).click();
