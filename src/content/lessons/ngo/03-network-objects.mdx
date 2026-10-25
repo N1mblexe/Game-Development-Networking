@@ -27,6 +27,8 @@ sources:
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/playerobjects.html
   - title: 'NGO 2.13 manual: Object visibility'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/object-visibility.html
+  - title: 'NGO source v2.13.3: NetworkObject.cs (OnDestroy invalid-destroy check) and NetworkSpawnManager.cs (nested NetworkObject warning)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Core/NetworkObject.cs
   - title: 'NGO 2.13 API: NetworkObject'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkObject.html
 ---
@@ -94,7 +96,8 @@ found, and nothing appears. The prefab isn't in any network prefabs list on that
 
 <Callout type="pitfall" title="Nested NetworkObjects">
 
-Only one NetworkObject per prefab. The Editor won't let you add a second NetworkObject inside a network prefab. If you need
+Only one NetworkObject per prefab. The docs say not to nest them, and if you spawn a prefab that has a second NetworkObject
+on a child, NGO logs a warning that child NetworkObjects "will not be spawned over the network". If you need
 two independently networked things (a tank and a detachable turret), make two prefabs and attach them at runtime with
 NetworkObject parenting (`TrySetParent`), or use the `AttachableBehaviour` helper added in 2.5.
 
@@ -205,7 +208,8 @@ Despawning rules from the docs:
 
 - Only the **authority** despawns. `Despawn()` destroys the GameObject by default, and `Despawn(false)` keeps it for reuse.
 - Destroying a spawned object on the authority with `Destroy(gameObject)` also despawns it everywhere.
-- **Never** call `Destroy` on a spawned NetworkObject from a non-authority client. NGO throws. Ask the server with an RPC instead.
+- **Never** call `Destroy` on a spawned NetworkObject from a non-authority client. NGO logs an "Invalid Destroy" error, your
+  local copy is gone, and the object stays spawned on the server and every other client. Ask the server with an RPC instead.
 - To keep many short-lived objects (projectiles) cheap, NGO supports pooling through `NetworkManager.PrefabHandler` and
   `INetworkPrefabInstanceHandler`. Pooling is an optimization, so start without it.
 

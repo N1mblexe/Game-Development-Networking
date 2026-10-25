@@ -83,7 +83,7 @@ cards:
   - id: no-client-destroy
     lesson: ngo/network-objects
     front: May a client Destroy a spawned NetworkObject?
-    back: No, NGO throws. Only the authority despawns. A client asks the server with an RPC.
+    back: No. NGO logs an Invalid Destroy error and the object stays spawned everywhere else. Only the authority despawns, so a client asks the server with an RPC.
   - id: no-nesting
     lesson: ngo/network-objects
     front: How many NetworkObjects can a network prefab contain?
