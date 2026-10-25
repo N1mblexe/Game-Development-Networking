@@ -242,7 +242,7 @@ cards:
 - id: dw-mppm-tags
   lesson: ngo-steam/dev-workflow
   front: How do MPPM players auto-start as host or client?
-  back: 'Read player tags: `CurrentPlayer.Tags` on Unity 6.4+, `CurrentPlayer.ReadOnlyTags()` in MPPM 1.x.'
+  back: 'Read player tags: `CurrentPlayer.Tags` on Unity 6.3+, `CurrentPlayer.ReadOnlyTags()` in MPPM 1.x.'
 - id: dw-restart-trap
   lesson: ngo-steam/dev-workflow
   front: Why does a copied dev build sometimes launch Spacewar instead?
