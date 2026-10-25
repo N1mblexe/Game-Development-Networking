@@ -52,8 +52,7 @@ questions:
     prompt: Order the steps for testing a cold-start invite on your own App ID with two accounts.
     items:
       - Install a build on both PCs and make the two accounts friends
-      - Account A hosts a lobby and sends an invite
-      - Account B closes the game completely
+      - With B's game completely closed, account A hosts a lobby and sends B an invite
       - Account B clicks **Join Game** in Steam chat
       - "Steam launches B's build with `+connect_lobby <id>`, and B lands in A's lobby"
     explanation: >-
