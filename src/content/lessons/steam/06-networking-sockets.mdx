@@ -33,7 +33,7 @@ sources:
     url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
   - title: 'Steamworks API: ISteamNetworkingSockets'
     url: https://partner.steamgames.com/doc/api/ISteamNetworkingSockets
-  - title: 'GameNetworkingSockets: steamnetworkingtypes.h (connection states, end reasons)'
+  - title: 'GameNetworkingSockets: steamnetworkingtypes.h (connection states, end reasons, P2P_Transport_ICE_Enable)'
     url: https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/include/steam/steamnetworkingtypes.h
 ---
 
@@ -67,7 +67,9 @@ What you should notice:
 - The cost is an extra hop. SDR keeps it small by choosing relays near both players and routing over Valve's backbone.
 
 Depending on each player's Steam networking settings, Steam may also try a direct NAT-punched route and use it when
-it's better. Your code doesn't change either way: you connect to a Steam ID and Steam decides how the packets travel.
+it's better. A direct route does share IP addresses between the two peers (Valve's ICE setting defaults to the user's
+preference in the Steam client), so "IPs stay hidden" holds for relayed traffic. Your code doesn't change either way:
+you connect to a Steam ID and Steam decides how the packets travel.
 
 <Diagram name="topology" variant="relay" caption="Relayed host topology: every client connects to the host through relays; nobody needs an open port or learns another player's IP." />
 
@@ -121,7 +123,7 @@ a client using `ConnectNormal` can't reach a socket created with `CreateRelaySoc
   steps={[
     { from: 'c', to: 'r', label: 'ConnectRelay(hostId) → state Connecting', note: 'messages sent now are queued', kind: 'reliable' },
     { from: 'r', to: 'h', label: 'connect request from a verified Steam ID', kind: 'reliable' },
-    { from: 'h', to: 'h', label: 'OnConnecting(connection, info) → Accept() or Close()', note: 'decide within about a second', kind: 'local' },
+    { from: 'h', to: 'h', label: 'OnConnecting(connection, info) → Accept() or Close()', note: 'decide within a second or two', kind: 'local' },
     { from: 'r', to: 'c', label: 'FindingRoute', note: 'unreliable messages sent in this state are discarded', kind: 'event' },
     { from: 'h', to: 'c', label: 'Connected on both sides → OnConnected', kind: 'event' },
     { from: 'c', to: 'h', label: 'messages flow; Receive() each frame delivers them', kind: 'unreliable' },
