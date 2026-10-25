@@ -1,0 +1,493 @@
+title: Networking for Games — Module Exam
+drawCount: 15
+passPct: 80
+questions:
+  # ------------------------------------------------------------------ 01 packets-and-protocols
+  - id: tcp-handshake-cost
+    type: single
+    prompt: A client opens a new TCP connection to a server. At minimum, how long does it wait before it can send its first byte of game data?
+    options:
+      - No time at all, it can send immediately
+      - Half an RTT
+      - One full RTT, for the SYN / SYN-ACK exchange
+      - Three RTTs, one for each handshake packet
+    answer: 2
+    difficulty: 1
+    tags: [packets-and-protocols]
+    explanation: >-
+      The client sends SYN, the server answers SYN-ACK, and only then can the client send its ACK together with data. That's one round
+      trip before anything useful moves. UDP has no handshake: the first datagram can already carry data.
+  - id: udp-datagram-boundaries
+    type: truefalse
+    prompt: Like TCP, UDP is a byte stream, so one message you send may arrive split across two receive calls.
+    answer: false
+    difficulty: 2
+    tags: [packets-and-protocols]
+    explanation: >-
+      UDP sends independent **datagrams**: each one arrives whole or not at all, with its boundaries intact. TCP is the byte stream, so
+      TCP applications have to frame their own messages (for example with length prefixes).
+
+  # ------------------------------------------------------------------ 02 latency-jitter-loss
+  - id: bufferbloat
+    type: single
+    prompt: >-
+      A player's ping jumps from 30 ms to 400 ms whenever their flatmate uploads a video, but almost no packets are lost. Which
+      component of latency is growing?
+    options:
+      - Propagation delay
+      - Queuing delay in the router's buffers
+      - Serialization delay on the server
+      - Processing delay in the game loop
+    answer: 1
+    difficulty: 2
+    tags: [latency-jitter-loss]
+    explanation: >-
+      The upload saturates the link, so packets wait in the router's queue behind the video. Big buffers can add hundreds of
+      milliseconds before anything is dropped. This is called bufferbloat, and it's also why a game that floods its own link makes its
+      own latency worse.
+  - id: bits-and-bytes
+    type: numeric
+    prompt: A client receives game traffic at 24 KB/s. What is that in kbit/s?
+    answer: 192
+    tolerance: 1
+    unit: kbit/s
+    difficulty: 1
+    tags: [latency-jitter-loss]
+    explanation: >-
+      Link speeds are in bits per second, packet sizes in bytes. 24 KB/s × 8 = **192 kbit/s**. Mixing the two up is the most common
+      error in bandwidth budgets: it is off by a factor of 8.
+  - id: bursty-loss
+    type: single
+    prompt: Two links both lose 2% of packets on average. Which one will look worse in a 30 Hz action game?
+    options:
+      - The one that loses single packets spread evenly over time
+      - The one that loses packets in bursts, such as a 300 ms blackout every 15 seconds
+      - Both look the same, because the average is the same
+      - Neither, because 2% loss is invisible
+    answer: 1
+    difficulty: 2
+    tags: [latency-jitter-loss]
+    explanation: >-
+      An isolated lost snapshot is replaced 33 ms later and is barely visible. A 300 ms burst is nine snapshots in a row, which drains
+      any interpolation buffer and shows as a freeze. Test with bursty loss, not just random loss, and log percentiles rather than means.
+
+  # ------------------------------------------------------------------ 03 topologies
+  - id: mesh-upload
+    type: numeric
+    prompt: >-
+      In an 8-player peer-to-peer mesh, every peer sends its own 200-byte update (headers included) to every other peer at 20 Hz. What
+      upload does each peer need, in KB/s?
+    answer: 28
+    tolerance: 0.5
+    unit: KB/s
+    difficulty: 2
+    tags: [topologies]
+    explanation: >-
+      Each peer sends to 7 others: 7 × 200 bytes × 20/s = 28,000 bytes/s = **28 KB/s** (224 kbit/s). Upload per peer grows with the
+      player count, which is one reason meshes rarely go past about 8 players.
+  - id: distributed-authority-traits
+    type: multi
+    prompt: Which of these are true of the distributed authority topology? Select all that apply.
+    options:
+      - Each client simulates and has authority over the objects it owns
+      - A cloud service routes messages and keeps a copy of session state
+      - It offers the strongest cheat resistance of all topologies
+      - When the session owner leaves, another client can be promoted
+      - A dedicated game server runs all the game logic
+    answers: [0, 1, 3]
+    difficulty: 2
+    tags: [topologies]
+    explanation: >-
+      There is no game server: owners simulate their own objects, and the service only routes and stores state. That makes it cheap and
+      robust to players leaving, but each owner has the final say on its objects, so cheat resistance is weak. Unity describes it as a
+      poor fit for high-performance competitive games.
+  - id: steam-p2p-meaning
+    type: truefalse
+    prompt: When Steam's documentation talks about "P2P" networking, it always means a full mesh in which no player is a host.
+    answer: false
+    difficulty: 2
+    tags: [topologies]
+    explanation: >-
+      Platforms use "P2P" to mean player-to-player without a dedicated server. A Steam "P2P game" is very often a **listen server**
+      whose traffic goes through Steam Datagram Relay. Look at who is authoritative, not at the name.
+
+  # ------------------------------------------------------------------ 04 authority-models
+  - id: pickup-race
+    type: single
+    prompt: >-
+      In a server-authoritative game, two players send "I'd like to pick up health pack #7" for the same server tick. What should
+      happen?
+    options:
+      - Both get the health pack, because both requests were valid when sent
+      - The server processes one request first, gives it the pack, and refuses the other because the pack is gone
+      - The player with the lower ping wins, as measured by the clients
+      - Neither gets it, and the server asks both clients to retry
+    answer: 1
+    difficulty: 1
+    tags: [authority-models]
+    explanation: >-
+      The authority handles requests one at a time against its own state, so the conflict resolves itself. The loser's client sees the
+      pack disappear on the next update. This only works because the clients sent **intents**, which can be refused, not results.
+  - id: trust-the-client
+    type: multi
+    prompt: In a competitive server-authoritative shooter, which of these is it reasonable to let the client decide? Select all that apply.
+    options:
+      - Which emote its character plays
+      - Its own health
+      - The direction its flashlight cone points, as a cosmetic effect
+      - How much ammo it has left
+      - Where its character is standing
+    answers: [0, 2]
+    difficulty: 2
+    tags: [authority-models]
+    explanation: >-
+      Cosmetic state can't give anyone an advantage, so trusting the client costs nothing. Health, ammo and position decide the outcome
+      of fights, so they belong to the server. Aim direction is the one input that *must* come from the client, which is why aimbots
+      survive server authority.
+
+  # ------------------------------------------------------------------ 05 tick-rate
+  - id: ticks-per-snapshot
+    type: numeric
+    prompt: A server simulates at 60 Hz and sends snapshots at 20 Hz. How many ticks does it simulate for every snapshot it sends?
+    answer: 3
+    tolerance: 0
+    unit: ticks
+    difficulty: 1
+    tags: [tick-rate]
+    explanation: >-
+      60 ÷ 20 = **3**. The send rate is often lower than the tick rate: clients interpolate between snapshots, so they don't need every
+      tick, and sending less saves bandwidth. Source games historically ticked at 66 Hz and sent 20 snapshots per second.
+  - id: projectile-step
+    type: numeric
+    prompt: A bullet travels at 400 m/s on a 30 Hz server. How many metres does it move between two ticks?
+    answer: 13.33
+    tolerance: 0.1
+    unit: m
+    difficulty: 2
+    tags: [tick-rate]
+    explanation: >-
+      400 m/s × (1/30) s ≈ **13.3 m**. Anything thinner than that can be skipped entirely if you only test the bullet's position at each
+      tick. Fast projectiles need a sweep or ray-cast along the path they travelled during the tick.
+  - id: unity-default-rates
+    type: truefalse
+    prompt: Out of the box, Unity's Fixed Timestep and Netcode for GameObjects' tick rate are the same, so one network tick equals one FixedUpdate.
+    answer: false
+    difficulty: 2
+    tags: [tick-rate]
+    explanation: >-
+      Unity's Fixed Timestep defaults to 0.02 s (50 Hz), while NGO's `NetworkConfig.TickRate` defaults to 30. If you want one tick per
+      physics step, you have to set them to match yourself.
+
+  # ------------------------------------------------------------------ 06 state-sync
+  - id: late-join-door
+    type: single
+    prompt: >-
+      Doors are opened with `OpenDoorRpc()` sent to every client. Players who join mid-match see open doors as closed. What is the
+      right fix?
+    options:
+      - Send the RPC reliably
+      - Resend the RPC every second
+      - Make the door's open state replicated **state** (for example a NetworkVariable) and use the event only for effects
+      - Have late joiners request every RPC that was ever sent
+    answer: 2
+    difficulty: 1
+    tags: [state-sync]
+    explanation: >-
+      If a player who joins later needs to know it, it is state. Late joiners receive current state when the object spawns for them,
+      but they never receive events from before they joined. Keep the RPC for the creak and the dust, not for the truth.
+  - id: history-exhausted
+    type: single
+    prompt: >-
+      The server keeps the last 32 snapshots it sent to each client for delta compression. A client on a bad link hasn't acknowledged
+      anything for longer than that. What should the server send next?
+    options:
+      - A delta against the last snapshot it sent
+      - Nothing, until the client acks again
+      - A full snapshot, which the client can use as a new baseline
+      - A delta against snapshot 0
+    answer: 2
+    difficulty: 2
+    tags: [state-sync]
+    explanation: >-
+      A delta is only useful if the client still has its baseline, and the server can only build deltas against snapshots it still
+      remembers. When the acked baseline has fallen out of the history, a full snapshot resets both sides.
+  - id: priority-accumulator
+    type: truefalse
+    prompt: With priority accumulators and a fixed byte budget per packet, distant entities are never sent to a client.
+    answer: false
+    difficulty: 2
+    tags: [state-sync]
+    explanation: >-
+      An unsent entity's priority keeps growing every tick, so even a distant one eventually outranks the rest and gets sent. It just
+      updates less often. Leaving entities out entirely is the job of interest management (relevance).
+
+  # ------------------------------------------------------------------ 07 prediction-reconciliation
+  - id: last-processed-input
+    type: single
+    prompt: For reconciliation to work, what extra information must the server include with each player's authoritative state?
+    options:
+      - The server's current frame rate
+      - The sequence number of the last input it processed for that player
+      - A copy of all the inputs it has received
+      - The player's RTT
+    answer: 1
+    difficulty: 1
+    tags: [prediction-reconciliation]
+    explanation: >-
+      That number tells the client exactly which of its predicted inputs the state already includes. The client drops those, resets to
+      the server state, and replays the inputs that came after.
+  - id: correction-blend
+    type: truefalse
+    prompt: >-
+      To hide a small misprediction, the client should slowly move its **simulation** state towards the server's value over a few
+      frames.
+    answer: false
+    difficulty: 3
+    tags: [prediction-reconciliation]
+    explanation: >-
+      The simulation state must snap to the corrected value immediately, or every later replay starts from a wrong position and the
+      error never goes away. Hide the jump with a **visual** offset on the rendered model that decays over 100–200 ms.
+  - id: client-lead
+    type: numeric
+    prompt: >-
+      A client has 80 ms RTT, and the server keeps a 2-tick input buffer at 30 Hz. Roughly how far ahead of the server, in milliseconds,
+      should the client simulate so that its inputs arrive just in time?
+    answer: 107
+    tolerance: 4
+    unit: ms
+    difficulty: 3
+    tags: [prediction-reconciliation]
+    explanation: >-
+      Lead ≈ RTT / 2 + input buffer = 40 ms + 2 × 33.3 ms ≈ **107 ms**. Running ahead by the one-way trip makes input for tick N arrive
+      in time for tick N, and the buffer absorbs jitter. Overwatch adjusts this per client while the game runs.
+
+  # ------------------------------------------------------------------ 08 interpolation-extrapolation
+  - id: rotation-slerp
+    type: single
+    prompt: A remote player turns from a yaw of 359° to 1°. Interpolating the Euler angle with a plain lerp makes the model spin almost a full circle. What should you do?
+    options:
+      - Send rotations more often
+      - Slerp between quaternions, which takes the shortest path
+      - Clamp the angle to 0–180°
+      - Extrapolate rotation instead
+    answer: 1
+    difficulty: 1
+    tags: [interpolation-extrapolation]
+    explanation: >-
+      A lerp from 359 to 1 goes through 180, the long way round. Spherical interpolation between quaternions always follows the shorter
+      arc, and blends smoothly in all three axes.
+  - id: buffer-runs-dry
+    type: truefalse
+    prompt: >-
+      When the interpolation buffer runs out of snapshots, a common approach is to extrapolate briefly (up to about 250 ms) and then
+      freeze the entity rather than keep guessing.
+    answer: true
+    difficulty: 2
+    tags: [interpolation-extrapolation]
+    explanation: >-
+      A short extrapolation hides one or two missing snapshots, but the guess gets worse every millisecond, especially for characters
+      who can change direction. Source capped it with `cl_extrapolate_amount` (0.25 s by default).
+
+  # ------------------------------------------------------------------ 09 lag-compensation
+  - id: peekers-advantage
+    type: single
+    prompt: Which of these reduces peeker's advantage in a lag-compensated shooter?
+    options:
+      - A longer interpolation delay on every client
+      - Raising the maximum rewind time
+      - 'Lower total latency: higher tick rates, short interpolation delays and servers close to players'
+      - Turning lag compensation off for defenders
+    answer: 2
+    difficulty: 2
+    tags: [lag-compensation]
+    explanation: >-
+      The defender sees the peeker late by roughly RTT plus interpolation delay, so the advantage shrinks only when that total shrinks.
+      That's the approach Riot describes for VALORANT: 128-tick servers, low interpolation delay and many nearby data centres.
+  - id: history-coverage
+    type: numeric
+    prompt: A server ticks at 128 Hz and keeps 32 history slots per player. How many milliseconds of history does that cover?
+    answer: 250
+    tolerance: 1
+    unit: ms
+    difficulty: 2
+    tags: [lag-compensation]
+    explanation: >-
+      32 slots × (1000 / 128) ms = 32 × 7.8125 ms = **250 ms**, which matches a typical maximum rewind. A higher tick rate needs more slots
+      to cover the same time.
+
+  # ------------------------------------------------------------------ 10 reliability-serialization
+  - id: acks-per-packet
+    type: numeric
+    prompt: >-
+      Each packet carries the newest received sequence number plus a 32-bit ack bitfield. At most, how many received packets can a single
+      packet acknowledge?
+    answer: 33
+    tolerance: 0
+    unit: packets
+    difficulty: 2
+    tags: [reliability-serialization]
+    explanation: >-
+      The ack field covers the newest packet, and each of the 32 bits covers one of the 32 before it: **33** in total. Because acks are
+      repeated in every packet, losing one of them costs nothing.
+  - id: smallest-three-bits
+    type: numeric
+    prompt: >-
+      With "smallest three" rotation compression, you send 2 bits for the index of the dropped component and 10 bits for each of the
+      three others. How many bits is one rotation?
+    answer: 32
+    tolerance: 0
+    unit: bits
+    difficulty: 2
+    tags: [reliability-serialization]
+    explanation: >-
+      2 + 3 × 10 = **32** bits, a quarter of four 32-bit floats. The dropped (largest) component is rebuilt from x² + y² + z² + w² = 1,
+      and the remaining three always lie between −0.707 and +0.707, so the bits only need to cover that range.
+  - id: binaryformatter
+    type: truefalse
+    prompt: >-
+      `BinaryFormatter` is safe for network messages as long as your own code only ever serializes your own types with it.
+    answer: false
+    difficulty: 2
+    tags: [reliability-serialization, security]
+    explanation: >-
+      What matters is what the **receiver** deserializes, and that's decided by the bytes, which an attacker controls. BinaryFormatter
+      can be made to construct arbitrary types, which leads to remote code execution. Microsoft calls it dangerous and has removed it from
+      .NET 9. Read only the fields you expect, with length limits.
+
+  # ------------------------------------------------------------------ 11 nat-and-relays
+  - id: cgnat-port-forward
+    type: single
+    prompt: >-
+      A player has forwarded UDP port 7777 on their home router and still can't host. Their router reports its WAN address as
+      100.72.14.3. What's the most likely reason?
+    options:
+      - Port 7777 is reserved by the operating system
+      - The ISP uses carrier-grade NAT, so the router's "public" address is itself behind another NAT
+      - The router's firewall blocks UDP
+      - The player's IP address changed
+    answer: 1
+    difficulty: 3
+    tags: [nat-and-relays]
+    explanation: >-
+      `100.64.0.0/10` is the shared address range used for CGNAT. Incoming packets are dropped at the ISP's NAT, which the player can't
+      configure, so port forwarding at home can't help. This is common on mobile networks and increasingly on home broadband, and it's
+      why games need a relay fallback.
+  - id: private-addresses
+    type: multi
+    prompt: Which of these are private (RFC 1918) addresses that are not routable on the public internet? Select all that apply.
+    options:
+      - 192.168.1.20
+      - 10.0.0.5
+      - 172.20.1.1
+      - 8.8.8.8
+      - 172.40.0.1
+    answers: [0, 1, 2]
+    difficulty: 2
+    tags: [nat-and-relays]
+    explanation: >-
+      RFC 1918 reserves `10.0.0.0/8`, `172.16.0.0/12` (172.16 to 172.31) and `192.168.0.0/16`. 172.40.0.1 is outside the 172.16–31 range,
+      and 8.8.8.8 is a public DNS server.
+  - id: ice-order
+    type: order
+    prompt: Put the connection paths that ICE tries in order, from first preference to last resort.
+    items:
+      - Local network (host) addresses
+      - Public addresses discovered with STUN, via hole punching
+      - A TURN relay
+    difficulty: 2
+    tags: [nat-and-relays]
+    explanation: >-
+      A LAN path is fastest and free, a punched direct path is next best, and the relay always works but adds latency and costs
+      bandwidth. Game connection flows follow the same "try direct, fall back to a relay" order.
+
+  # ------------------------------------------------------------------ 12 lockstep-rollback
+  - id: lockstep-bandwidth
+    type: numeric
+    prompt: >-
+      In an 8-player lockstep RTS, each player sends 8 bytes of input per turn to each of the 7 other players, at 10 turns per second.
+      Ignoring headers, how many bytes per second does each player upload?
+    answer: 560
+    tolerance: 0
+    unit: B/s
+    difficulty: 1
+    tags: [lockstep-rollback]
+    explanation: >-
+      7 × 8 bytes × 10 = **560 B/s**, whether there are 15 units on the map or 1,500. That's the appeal of lockstep: bandwidth depends on
+      the number of players, not the size of the world. (In practice packet headers would dominate this tiny payload.)
+  - id: choose-model
+    type: single
+    prompt: Which networking model fits a two-player fighting game played between cities hundreds of kilometres apart?
+    options:
+      - Deterministic lockstep with several turns of input delay
+      - State synchronization from a dedicated server, with interpolation for the opponent
+      - Rollback with a small, fixed input delay
+      - Client-authoritative state sync
+    answer: 2
+    difficulty: 2
+    tags: [lockstep-rollback]
+    explanation: >-
+      Fighting games need frame-exact inputs and both players seeing the same thing. Lockstep's delay is too long, and interpolating the
+      opponent puts them in the past. Rollback predicts the remote input and corrects mispredictions, and a 1–3 frame input delay
+      reduces how much it has to roll back.
+  - id: lockstep-maphack
+    type: single
+    prompt: Why are map hacks so common in lockstep RTS games?
+    options:
+      - Lockstep games don't encrypt their traffic
+      - Every client simulates the entire game, so the full state, including hidden enemy units, is in every client's memory
+      - Lockstep has no server, so nobody validates inputs
+      - Replays reveal the map
+    answer: 1
+    difficulty: 2
+    tags: [lockstep-rollback, security]
+    explanation: >-
+      Determinism requires every machine to simulate everything, so fog of war can only be a rendering choice. The data is there for a
+      cheat to draw. State-sync games can avoid this by never sending what a player can't see.
+
+  # ------------------------------------------------------------------ 13 security
+  - id: sender-id-fill
+    type: fill
+    prompt: >-
+      In an NGO RPC with an `RpcParams rpcParams` parameter, which property gives you the sender's client id as reported by the transport?
+      (Write the property name.)
+    answers: [SenderClientId, rpcParams.Receive.SenderClientId, Receive.SenderClientId]
+    placeholder: PropertyName
+    difficulty: 2
+    tags: [security]
+    explanation: >-
+      `rpcParams.Receive.SenderClientId` comes from the connection the message arrived on, so a client can't fake it. A player id passed
+      as an RPC argument is just data the client chose.
+  - id: unbounded-allocation
+    type: codeline
+    prompt: A single malformed packet can make this server allocate gigabytes or throw. Which line does the damage?
+    code: |-
+      void OnLoadout(BitReader r, ulong sender) {
+          if (!Players.TryGet(sender, out var p)) return;
+          int count = (int)r.ReadBits(32);
+          var items = new int[count];
+          for (int i = 0; i < count; i++) items[i] = (int)r.ReadBits(16);
+          p.SetLoadout(items);
+      }
+    answerLines: [4]
+    difficulty: 3
+    tags: [security]
+    explanation: >-
+      `count` comes straight from the packet, so it can be 2 billion or, after the cast, negative. Allocating from it before checking it
+      lets one packet exhaust memory or crash the network loop. Check `count` against a small maximum (a loadout might hold 8 items) and
+      drop the packet otherwise. Every length prefix is a lie until it's checked.
+  - id: cheat-classes
+    type: single
+    prompt: >-
+      Players discover that sending the "sell item" request twice within the same tick pays them twice for one item. Which class of
+      cheat is this, and what fixes it?
+    options:
+      - An information cheat, fixed with interest management
+      - An input-automation cheat, fixed with statistical detection
+      - A game-logic exploit, fixed by validating every request against the server's own current state
+      - A protocol cheat, fixed with encryption
+    answer: 2
+    difficulty: 2
+    tags: [security]
+    explanation: >-
+      The requests are legitimate messages from a legitimate client. The bug is that the server doesn't re-check that the item is still
+      owned before paying out. Validate each request against current server state, so the second "sell" fails because the item is gone.
