@@ -52,6 +52,7 @@ Since NGO 1.8, one attribute covers every direction: `[Rpc(SendTo.X)]`. Two rule
 ```csharp title="PingExample.cs"
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 public class PingExample : NetworkBehaviour
 {
@@ -71,7 +72,7 @@ public class PingExample : NetworkBehaviour
 
     void Update()
     {
-        if (IsClient && Input.GetKeyDown(KeyCode.P)) PingRpc(Time.frameCount);
+        if (IsClient && Keyboard.current.pKey.wasPressedThisFrame) PingRpc(Time.frameCount);
     }
 }
 ```
@@ -144,6 +145,7 @@ the NetworkPrefabsList.
 ```csharp title="PlayerShooting.cs"
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 public class PlayerShooting : NetworkBehaviour
 {
@@ -158,7 +160,7 @@ public class PlayerShooting : NetworkBehaviour
     void Update()
     {
         if (!IsSpawned || !IsOwner) return;
-        if (Input.GetMouseButtonDown(0))
+        if (Mouse.current.leftButton.wasPressedThisFrame)
         {
             // Send intent only: an aim direction. The server decides everything else.
             Vector3 aim = m_Muzzle.forward;

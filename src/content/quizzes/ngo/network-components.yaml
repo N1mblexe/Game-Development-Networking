@@ -1,0 +1,84 @@
+passPct: 70
+questions:
+  - id: snap-back
+    type: codeline
+    prompt: >-
+      The crate has a NetworkTransform with the default Authority Mode. A client runs this to nudge it, the crate moves for
+      a moment and then snaps back. Click the line that can never work on a client.
+    code: |-
+      void Update()
+      {
+          if (!IsSpawned || !IsClient) return;
+          if (Keyboard.current.eKey.wasPressedThisFrame)
+              transform.position += Vector3.forward;
+      }
+    answerLines: [5]
+    explanation: >-
+      The default Authority Mode is **Server**, so only the server's changes are synchronized and the next server update
+      overwrites the client's copy. Ask the server to move it with an RPC, or make the transform owner-authoritative and
+      give the client ownership.
+  - id: owner-authority-tradeoff
+    type: multi
+    prompt: You switch the player's NetworkTransform from Server to Owner authority. Which statements are true? Select all that apply.
+    options:
+      - The owner's movement responds instantly to input
+      - The server can no longer be cheated, because it still validates every update automatically
+      - Other clients still receive the owner's movement through the server
+      - The owner now decides its position, so movement is client-authoritative
+      - Clients now send movement directly to each other, peer to peer
+    answers: [0, 2, 3]
+    explanation: >-
+      Owner authority removes the round-trip delay for the owner, but the client now decides its position. NetworkTransform
+      doesn't veto regular updates, so any validation must be your own server code. In client-server, traffic still goes
+      through the server.
+  - id: trigger-bug
+    type: codeline
+    prompt: Remote players never see the jump animation, although the owner does. Click the buggy line.
+    code: |-
+      static readonly int k_Jump = Animator.StringToHash("Jump");
+      [SerializeField] Animator m_Animator;
+      [SerializeField] NetworkAnimator m_NetworkAnimator;
+
+      void Jump()
+      {
+          if (!IsOwner) return;
+          m_Animator.SetTrigger(k_Jump);
+      }
+    answerLines: [8]
+    explanation: >-
+      Triggers must be set through `NetworkAnimator.SetTrigger`. Calling `Animator.SetTrigger` directly only fires the
+      trigger locally, so non-authority instances never see it.
+  - id: teleport-where
+    type: single
+    prompt: >-
+      The player's NetworkTransform is owner-authoritative. The server wants to respawn the player at a new point without
+      it sliding across the map. What works?
+    options:
+      - The server sets transform.position directly
+      - The server calls Teleport on its copy
+      - The server sends an RPC to the owner, and the owner calls Teleport
+      - The server despawns and respawns the NetworkTransform component
+    answer: 2
+    explanation: >-
+      `Teleport` only works on the authority (`CanCommitToTransform`) and throws elsewhere. For an owner-authoritative
+      transform that's the owner, so the server asks it with a `SendTo.Owner` RPC. Calling `SetState` on the server is the
+      other option, because NGO forwards it to the owner.
+  - id: rigidbody-kinematic
+    type: truefalse
+    prompt: With a NetworkRigidbody, every instance runs the physics simulation for the body, and NGO averages the results.
+    answer: false
+    explanation: >-
+      Only the authority simulates. With `AutoUpdateKinematicState` on (the default), NGO makes the Rigidbody kinematic on
+      every non-authority instance, and those copies follow the NetworkTransform updates.
+  - id: bandwidth-steps
+    type: order
+    prompt: For a top-down player, order these NetworkTransform savings from the one you should try first to the one you should try last.
+    items:
+      - Turn off axes that never change (position Y, rotation X and Z, all scale)
+      - Raise the position and rotation thresholds slightly
+      - Enable half float precision
+      - Profile again and only then consider unreliable deltas
+    explanation: >-
+      Bytes you never send are the cheapest, so drop unused axes first. Thresholds then reduce how often you send, and
+      precision settings shrink each update. Unreliable deltas have extra caveats, such as not combining well with
+      Rigidbody motion, so try them last and measure.

@@ -1,0 +1,359 @@
+---
+title: Network Components
+order: 7
+summary: Replicate movement, animation and physics with NetworkTransform, NetworkAnimator and NetworkRigidbody, and choose server or owner authority for each.
+durationMin: 30
+objectives:
+  - Configure NetworkTransform axes, thresholds, precision and interpolation for an object
+  - Choose between server and owner authority, and explain the latency and cheating trade-off
+  - Synchronize Animator parameters and triggers with NetworkAnimator
+  - Run networked physics with NetworkRigidbody and avoid the common timing and authority bugs
+prerequisites: [ngo/rpcs, theory/authority-models, theory/interpolation-extrapolation]
+tags: [ngo, networktransform, networkanimator, physics]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: NetworkTransform'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/helper/networktransform.html
+  - title: 'NGO 2.13 manual: NetworkAnimator'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/helper/networkanimator.html
+  - title: 'NGO 2.13 manual: Physics'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/physics.html
+  - title: 'NGO 2.13 API: NetworkTransform'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Components.NetworkTransform.html
+  - title: 'NGO 2.13 API: NetworkAnimator'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Components.NetworkAnimator.html
+  - title: 'NGO 2.13 API: NetworkRigidbodyBase'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Components.NetworkRigidbodyBase.html
+  - title: 'NGO source v2.13.3: NetworkTransform.cs (SetState, Teleport, OnClientRequestChange)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Components/NetworkTransform.cs
+---
+
+You could replicate a player's position with a NetworkVariable holding a `Vector3`, and it would even work, badly. Positions
+change every frame, a raw value teleports between updates, and you'd still need rotation, scale, parenting and
+teleports. NGO ships ready-made components for the three things almost every game needs to replicate: the
+<Term id="network-transform">NetworkTransform</Term>, the <Term id="network-animator">NetworkAnimator</Term> and the
+<Term id="network-rigidbody">NetworkRigidbody</Term>. They are ordinary `NetworkBehaviour`s in the
+`Unity.Netcode.Components` namespace, so everything from the previous lessons applies to them. The one new decision
+they force on you is **who is the authority for this motion?**
+
+## NetworkTransform: what it sends
+
+Lesson 6's `Projectile` already had a NetworkTransform. The server moved the projectile, and every client saw it fly.
+Under the hood, each network <Term id="tick">tick</Term> the authority instance checks which axes changed by more than a
+threshold, serializes only those axes, and sends them. Non-authority instances buffer the received states and
+[interpolate](../../theory/interpolation-extrapolation/) between them.
+
+| Inspector setting | Field | What it's for |
+|---|---|---|
+| Axis to Synchronize | `SyncPositionX/Y/Z`, `SyncRotAngleX/Y/Z`, `SyncScaleX/Y/Z` | Turn off axes that never change (a top-down player never needs position Y or rotation X/Z) |
+| Thresholds | `PositionThreshold` (default 0.001), `RotAngleThreshold` (0.01), `ScaleThreshold` (0.01) | Minimum change before an axis is sent. Higher means less bandwidth and coarser motion |
+| Interpolate | `Interpolate` (on by default) | Smooth motion on non-authority instances. Leave it on |
+| Interpolation type | `PositionInterpolationType`, `RotationInterpolationType`, `ScaleInterpolationType` | `LegacyLerp` (default), `Lerp` (recommended for new projects) or `SmoothDampening` |
+| Use Half Float Precision | `UseHalfFloatPrecision` | 2 bytes per axis instead of 4, sent as deltas from the last full position |
+| Use Quaternion Compression | `UseQuaternionCompression` | Rotation as 4 bytes (smallest-three) |
+| In Local Space | `InLocalSpace` | Sync local values, useful for parented objects |
+| Use Unreliable Deltas | `UseUnreliableDeltas` | Send deltas unreliably, with a full refresh about once per second while moving |
+
+<Callout type="tip" title="Start with axes and thresholds">
+
+The cheapest bytes are the ones you never send. For the arena, sync only position X and Z and rotation Y on the player,
+turn off all scale axes, and you've removed two-thirds of the per-update data before touching any compression setting.
+
+</Callout>
+
+Interpolation is client-side only. The authority always shows its own exact transform, and a server or host gets no
+smoothing for objects it doesn't own unless you add your own.
+
+## Server authority or owner authority?
+
+The **Authority Mode** dropdown (the `AuthorityMode` field, of type `NetworkTransform.AuthorityModes`) has two values:
+
+- **Server** (the default). Only the server's changes are synchronized. If a client moves its copy, the next update
+  from the server overwrites it.
+- **Owner**. Only the owner's changes are synchronized, to the server and from there to everyone else.
+
+This is the [authority-models](../../theory/authority-models/) trade-off from theory, applied to one component:
+
+| | Server authority | Owner authority |
+|---|---|---|
+| Who moves the transform | Server code | The owner's code |
+| Owner's input feels | Delayed by about one <Term id="rtt">RTT</Term> | Instant |
+| Cheating | The server decides every position | The client decides, so it's <Term id="client-authoritative">client-authoritative</Term> movement |
+| Good for | NPCs, pickups, projectiles, moving platforms | Player avatars, held items, cameras |
+
+<Sequence
+  title="Owner-authoritative movement for client 1's player"
+  actors={[
+    { id: 'c1', label: 'Client 1 (owner)', kind: 'client' },
+    { id: 's', label: 'Server', kind: 'server' },
+    { id: 'c2', label: 'Client 2', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'c1', to: 'c1', label: 'Read input, move transform this frame', note: 'No waiting: the owner is the authority for this transform.', kind: 'local' },
+    { from: 'c1', to: 's', label: 'Next tick: changed axes (X, Z, rotation Y)', kind: 'reliable' },
+    { from: 's', to: 's', label: 'Apply and interpolate', note: 'The server is not the authority here. It accepts the owner\'s state.', kind: 'local' },
+    { from: 's', to: 'c2', label: 'Forward the same state', kind: 'reliable' },
+    { from: 'c2', to: 'c2', label: 'Buffer and interpolate', note: 'Client 2 sees client 1 about one RTT in the past.', kind: 'local' },
+  ]}
+/>
+
+What you should notice:
+
+- The owner never waits for the network, which is why owner authority feels good for player movement.
+- Client-to-client traffic still goes through the server. Owner authority changes **who decides**, not the topology.
+- The server receives positions it didn't compute. Anything it validates (speed, walls) must be checked on the server
+  after the fact, because NetworkTransform has no veto for regular updates.
+
+<Callout type="unity" title="ClientNetworkTransform in older tutorials">
+
+Before the Authority Mode dropdown existed, owner authority meant subclassing `NetworkTransform` and overriding the
+protected `OnIsServerAuthoritative()` to return `false`, usually in a class named `ClientNetworkTransform`. That override
+still works and takes precedence. In NGO 2.x, prefer the dropdown. In a distributed-authority session (lesson 11),
+NGO forces owner authority automatically.
+
+</Callout>
+
+## Moving the arena player
+
+Add a **NetworkTransform** to `PlayerAvatar`, set **Authority Mode** to **Owner**, sync only position X/Z and rotation Y,
+and set the interpolation types to **Lerp**. Then add this script and list it in `PlayerSetup`'s **Owner Only** array, so
+it's enabled only on the owner's machine.
+
+```csharp title="PlayerMovement.cs"
+using Unity.Netcode;
+using Unity.Netcode.Components;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+/// On PlayerAvatar, next to an owner-authoritative NetworkTransform.
+/// PlayerSetup enables this component only for the owner.
+public class PlayerMovement : NetworkBehaviour
+{
+    [SerializeField] float m_Speed = 6f;
+    [SerializeField] float m_TurnSpeed = 720f;
+    [SerializeField] float m_ArenaRadius = 20f;
+
+    NetworkTransform m_NetworkTransform;
+    PlayerHealth m_Health;
+
+    void Awake()
+    {
+        m_NetworkTransform = GetComponent<NetworkTransform>();
+        m_Health = GetComponent<PlayerHealth>();
+    }
+
+    void Update()
+    {
+        // Only the owner moves. NetworkTransform sends the result on the next tick.
+        if (!IsSpawned || !IsOwner || m_Health.IsDead) return;
+
+        var keyboard = Keyboard.current;
+        if (keyboard == null) return;
+
+        Vector2 input = Vector2.zero;
+        if (keyboard.wKey.isPressed) input.y += 1f;
+        if (keyboard.sKey.isPressed) input.y -= 1f;
+        if (keyboard.dKey.isPressed) input.x += 1f;
+        if (keyboard.aKey.isPressed) input.x -= 1f;
+
+        Vector3 move = new Vector3(input.x, 0f, input.y);
+        if (move.sqrMagnitude > 1f) move.Normalize();
+
+        transform.position += move * (m_Speed * Time.deltaTime);
+        transform.position = Vector3.ClampMagnitude(transform.position, m_ArenaRadius);
+
+        if (move.sqrMagnitude > 0.01f)
+        {
+            Quaternion facing = Quaternion.LookRotation(move);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, facing, m_TurnSpeed * Time.deltaTime);
+        }
+    }
+
+    // Called by the server through PlayerHealth when the player respawns.
+    [Rpc(SendTo.Owner)]
+    public void RespawnAtRpc(Vector3 position)
+    {
+        // Teleport skips interpolation, so remote players don't see the avatar slide across the map.
+        // It throws on a non-authority instance; this RPC runs on the owner, which is the authority.
+        m_NetworkTransform.Teleport(position, Quaternion.identity, transform.localScale);
+    }
+}
+```
+
+Then extend `RespawnAfterDelay` in `PlayerHealth` from lesson 5 so the server picks the spawn point and tells the owner:
+
+```csharp title="PlayerHealth.cs"
+IEnumerator RespawnAfterDelay()
+{
+    yield return new WaitForSeconds(m_RespawnDelay);
+    Vector2 offset = Random.insideUnitCircle * 8f;
+    GetComponent<PlayerMovement>().RespawnAtRpc(new Vector3(offset.x, 0f, offset.y));
+    Health.Value = MaxHealth;
+}
+```
+
+Two details matter here. First, `Teleport` only works on the authority (`CanCommitToTransform`), which for an
+owner-authoritative transform is the owner. That's why the server sends an RPC instead of moving the transform itself.
+Second, `SetState(posIn, rotIn, scaleIn, teleportDisabled)` is the more flexible sibling: called on the server for an
+owner-authoritative transform, NGO forwards it to the owner. Several `Teleport` or `SetState` calls within one tick
+don't stack, so only the last one counts.
+
+<Callout type="pitfall" title="Moving the non-authority copy">
+
+With server authority, a client that writes `transform.position` on its own copy sees the object jump back on the next
+update. With owner authority, the **server** writing the position has the same effect. If something moves but "snaps
+back", check which side the component's authority is on before anything else.
+
+</Callout>
+
+## NetworkAnimator
+
+A NetworkAnimator references an `Animator` (on the root or a child) and synchronizes its states, transitions and
+parameters. It has the same **Authority Mode** choice as NetworkTransform: server by default, or owner. With server
+authority, the owner sees its own animations about one round trip late. With owner authority, they're instant. For a
+player whose movement is owner-authoritative, make the animator owner-authoritative too, or the legs lag behind the body.
+
+The rules from the docs:
+
+- Set bools, floats and ints directly on the `Animator`, **on the authority instance**. NetworkAnimator detects the change
+  and sends only parameters that changed since the previous frame.
+- Set triggers through `NetworkAnimator.SetTrigger`, never `Animator.SetTrigger`, or non-authority instances won't fire them.
+- Late joiners receive the current state, any in-progress transition and the current parameter values, **but not triggers**.
+- A parameter that changes every frame costs a message every frame. Exclude it with the **Animator Parameter Entries**
+  list or `EnableParameterSynchronization(name, false)` and compute it locally instead.
+
+```csharp title="PlayerAnimation.cs"
+using Unity.Netcode;
+using Unity.Netcode.Components;
+using UnityEngine;
+
+/// On PlayerAvatar. The Animator (on the child "Model") has a float "Speed" and a trigger "Fire".
+/// The NetworkAnimator's Authority Mode is set to Owner in the Inspector.
+public class PlayerAnimation : NetworkBehaviour
+{
+    static readonly int k_Speed = Animator.StringToHash("Speed");
+    static readonly int k_Fire = Animator.StringToHash("Fire");
+
+    [SerializeField] NetworkAnimator m_NetworkAnimator;
+    Vector3 m_LastPosition;
+
+    protected override void OnNetworkPreSpawn(ref NetworkManager networkManager)
+    {
+        m_LastPosition = transform.position;
+        base.OnNetworkPreSpawn(ref networkManager);
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        // Speed changes every frame: don't send it. Every instance derives it from the replicated transform.
+        m_NetworkAnimator.EnableParameterSynchronization(k_Speed, false);
+        base.OnNetworkSpawn();
+    }
+
+    void Update()
+    {
+        if (!IsSpawned) return;
+        float speed = (transform.position - m_LastPosition).magnitude / Mathf.Max(Time.deltaTime, 0.0001f);
+        m_LastPosition = transform.position;
+        m_NetworkAnimator.Animator.SetFloat(k_Speed, speed);
+    }
+
+    // Called by PlayerShooting on the owner right after it sends FireRpc.
+    public void PlayFire()
+    {
+        if (IsOwner) m_NetworkAnimator.SetTrigger(k_Fire);
+    }
+}
+```
+
+Because `Speed` is derived from the position that NetworkTransform already replicates, it costs zero extra bandwidth and
+can never disagree with the motion. That's the same "derive presentation from replicated facts" idea as the player
+colors in lesson 4.
+
+## NetworkRigidbody: physics with one authority
+
+Physics engines aren't deterministic across machines, so NGO doesn't try to simulate the same body everywhere. Adding a
+**NetworkRigidbody** (it requires a `Rigidbody` and a `NetworkTransform`) makes exactly one instance simulate:
+
+- The authority's Rigidbody is **non-kinematic**: forces, velocities and collisions apply.
+- Every other instance is **kinematic** and simply follows the NetworkTransform updates.
+- `AutoUpdateKinematicState` (on by default) flips this when ownership changes. Turn it off only if your own code sets
+  kinematic state.
+- `UseRigidBodyForMotion` makes the NetworkTransform read and apply state through the Rigidbody (`MovePosition`,
+  `MoveRotation`) instead of the Transform, which works with Rigidbody interpolation.
+
+The arena gets pushable crates. Each crate is an in-scene placed NetworkObject with a Rigidbody, a server-authoritative
+NetworkTransform, a NetworkRigidbody with **Use Rigid Body For Motion** ticked, and this script:
+
+```csharp title="ArenaCrate.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+/// In-scene placed crate. Physics runs on the server only; clients see a kinematic copy.
+[RequireComponent(typeof(Rigidbody))]
+public class ArenaCrate : NetworkBehaviour
+{
+    Rigidbody m_Rigidbody;
+
+    void Awake() => m_Rigidbody = GetComponent<Rigidbody>();
+
+    // Server only: called by Projectile when it hits this crate.
+    public void Push(Vector3 impulse)
+    {
+        if (!IsServer) return;
+        m_Rigidbody.AddForce(impulse, ForceMode.Impulse);
+    }
+}
+```
+
+In `Projectile.OnTriggerEnter`, before the player check, add:
+
+```csharp title="Projectile.cs"
+if (other.TryGetComponent(out ArenaCrate crate))
+{
+    crate.Push(transform.forward * 4f);
+    NetworkObject.Despawn();
+    return;
+}
+```
+
+Every decision runs on the server: the trigger, the force and the physics step. Clients only see the result.
+
+<Callout type="pitfall" title="Mixing authorities in one collision">
+
+Players are owner-authoritative, crates are server-authoritative. When client 1 walks into a crate, the server sees
+client 1's position about half an RTT late, so the push happens late and the crate seems to "jump" on client 1's screen.
+The physics docs call this out: when objects with different authorities collide, the result depends on latency. Keep
+interactions that must feel tight under one authority, and test them with the Network Simulator (lesson 12).
+
+</Callout>
+
+<Callout type="pitfall" title="Changing a Rigidbody inside an RPC or OnValueChanged">
+
+NGO processes inbound messages in `EarlyUpdate`, before `FixedUpdate` runs the physics step. Applying forces or setting
+velocities directly in an RPC body or `OnValueChanged` callback can produce surprising results. Store the request and
+apply it in `FixedUpdate`, or use the NetworkRigidbody helpers such as `SetLinearVelocity`.
+
+</Callout>
+
+<Callout type="pitfall" title="Changing NetworkTransform settings at runtime">
+
+Toggling `Interpolate`, `InLocalSpace`, `UseHalfFloatPrecision`, `UseQuaternionSynchronization`,
+`UseQuaternionCompression`, `SlerpPosition` or `UseUnreliableDeltas` while spawned sends a full state update and resets
+interpolation, so the object visibly teleports. Choose them on the prefab. Also note that axis toggles and thresholds
+aren't synchronized: after an ownership change, the new owner uses its own values.
+
+</Callout>
+
+<KeyTakeaways>
+
+- **NetworkTransform** sends only changed axes above a threshold each tick, and non-authority instances interpolate. Turn off unused axes first.
+- **Authority Mode** decides who moves the object: server (default, safe, delayed for the owner) or owner (instant, but client-authoritative).
+- `Teleport` and `SetState` move without interpolation and must run on, or be forwarded to, the authority.
+- **NetworkAnimator**: set parameters on the authority, fire triggers with `NetworkAnimator.SetTrigger`, and exclude per-frame parameters you can derive locally.
+- **NetworkRigidbody** simulates only on the authority and makes other copies kinematic. Avoid cross-authority collisions for tight interactions, and don't touch Rigidbodies in message callbacks.
+
+</KeyTakeaways>

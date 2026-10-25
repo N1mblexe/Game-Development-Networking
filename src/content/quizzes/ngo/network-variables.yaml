@@ -9,7 +9,7 @@ questions:
       void Update()
       {
           if (!IsOwner) return;
-          if (Input.GetKeyDown(KeyCode.H))
+          if (Keyboard.current.hKey.wasPressedThisFrame)
               Health.Value += 10;
       }
     answerLines: [7]
