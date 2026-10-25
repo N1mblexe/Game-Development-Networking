@@ -1,0 +1,73 @@
+passPct: 70
+questions:
+  - id: relay-purpose
+    type: single
+    prompt: A friend can't join your host over the internet, although LAN play works. Which service solves this directly?
+    options:
+      - Lobby
+      - Relay
+      - Authentication
+      - The Network Simulator
+    answer: 1
+    explanation: >-
+      The host is behind NAT, so incoming connections never reach it. With Relay, both sides connect out to a relay server
+      that forwards traffic. Lobby helps players find each other but doesn't move game packets.
+  - id: relay-overwrite
+    type: codeline
+    prompt: Relay joins time out on every client. Click the line that undoes the relay setup.
+    code: |-
+      JoinAllocation allocation = await RelayService.Instance.JoinAllocationAsync(code);
+      var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+      transport.SetRelayServerData(allocation.ToRelayServerData("dtls"));
+      transport.SetConnectionData("127.0.0.1", 7777);
+      NetworkManager.Singleton.StartClient();
+    answerLines: [4]
+    explanation: >-
+      `SetConnectionData` switches the transport back to a direct connection to localhost, replacing the relay data. Use
+      one connection path per start.
+  - id: relay-host-order
+    type: order
+    prompt: Order the steps for hosting through Relay directly, without sessions.
+    items:
+      - Initialize Unity Services and sign in
+      - Create a Relay allocation for the number of clients
+      - Set the relay server data on UnityTransport
+      - Request the join code for the allocation
+      - Call StartHost and show the join code
+    explanation: >-
+      Every UGS call needs a signed-in player. The allocation reserves relay capacity, the transport must point at it
+      before NGO starts, and the join code is what clients use to find the allocation.
+  - id: session-shutdown
+    type: codeline
+    prompt: The game uses a Relay session. After pressing Leave, the session package logs a warning and the next Host fails. Click the buggy line.
+    code: |-
+      public async Task LeaveAsync()
+      {
+          NetworkManager.Singleton.Shutdown();
+          m_Session = null;
+          await Task.Yield();
+      }
+    answerLines: [3]
+    explanation: >-
+      With sessions, the package owns the NetworkManager's lifetime and warns not to call `Shutdown` yourself. Call
+      `await m_Session.LeaveAsync()`, which stops the network and leaves the session cleanly.
+  - id: sessions-do
+    type: multi
+    prompt: What does creating a session with WithRelayNetwork() do for you? Select all that apply.
+    options:
+      - Allocates Relay and configures Unity Transport
+      - Calls StartHost on the NetworkManager
+      - Keeps the underlying lobby alive without manual heartbeats
+      - Makes the game server-authoritative against cheating automatically
+      - Gives you a join code in session.Code
+    answers: [0, 1, 2, 4]
+    explanation: >-
+      Sessions combine Lobby, Relay and the NGO start call. They don't change your authority model: validation is still
+      your server code's job.
+  - id: steam-or-ugs
+    type: truefalse
+    prompt: For a game shipping on PC (Steam), PlayStation and mobile with cross-play, Steam lobbies alone are enough for matchmaking between all players.
+    answer: false
+    explanation: >-
+      Steam lobbies and friends only exist for Steam users. Cross-platform games need a platform-agnostic backend such as
+      Unity's Lobby and Relay, possibly combined with Steam features on PC.
