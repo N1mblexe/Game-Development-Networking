@@ -1,0 +1,434 @@
+---
+title: Inside FacepunchTransport
+order: 2
+summary: Install the community FacepunchTransport, read what its source really does, check its NGO 2.x compatibility, and patch the three things a production game needs before writing SteamBootstrap.
+durationMin: 25
+objectives:
+  - Install FacepunchTransport from its git URL and explain what the package contains
+  - Trace how the transport initializes Steam, pumps callbacks, starts sockets and maps NetworkDelivery to SendType
+  - Explain the three ids in play (NGO clientId, transport id, SteamId) and why the transport hides the SteamId
+  - Embed and patch the transport so it stops shutting Steam down, reports RTT and uses Facepunch.Steamworks 2.5.2
+  - Write a SteamBootstrap that owns Steam's lifetime for the whole application
+prerequisites: [ngo-steam/architecture, ngo/setup, steam/setup-and-callbacks, steam/networking-sockets]
+tags: [ngo, steam, transport, facepunch]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.x (FacepunchTransport on main needs 2.2.0 or later)' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026)' }
+    - { name: Facepunch.Steamworks, version: '2.5.2 (the package bundles an older 2.3.2 build)' }
+sources:
+  - title: 'FacepunchTransport package folder (package.json, README, CHANGELOG)'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/tree/main/Transports/com.community.netcode.transport.facepunch
+  - title: 'FacepunchTransport.cs (main)'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/blob/main/Transports/com.community.netcode.transport.facepunch/Runtime/FacepunchTransport.cs
+  - title: 'Community transports: install from a git URL'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/blob/main/Transports/README.md
+  - title: 'Facepunch transport commit history'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/commits/main/Transports/com.community.netcode.transport.facepunch
+  - title: 'Issue 247: GetCurrentRtt does nothing'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/issues/247
+  - title: 'Issue 217: connectedClients steamId is always 0 with the bundled Facepunch.Steamworks'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/issues/217
+  - title: 'NGO source: NetworkTransport.cs (develop-2.0.0)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/develop-2.0.0/com.unity.netcode.gameobjects/Runtime/Transports/NetworkTransport.cs
+  - title: 'NGO CHANGELOG (OnEarlyUpdate added in 2.2.0)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/develop-2.0.0/com.unity.netcode.gameobjects/CHANGELOG.md
+  - title: 'NGO 2.13 manual: Transports'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/transports.html
+  - title: 'Facepunch.Steamworks wiki: Installing for Unity'
+    url: https://wiki.facepunch.com/steamworks/Installing_For_Unity
+  - title: 'Facepunch.Steamworks releases'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/releases
+  - title: 'Facepunch.Steamworks: SteamClient.cs'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/master/Facepunch.Steamworks/SteamClient.cs
+  - title: 'SteamNetworkingSockets transport (Steamworks.NET based)'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/tree/main/Transports/com.community.netcode.transport.steamnetworkingsockets
+---
+
+In Unity you can swap a render pipeline without rewriting your game objects, because the engine talks to an
+abstraction. NGO works the same way. Everything it sends goes through one abstract class, `NetworkTransport`, and the
+NetworkManager's **Network Transport** field decides which implementation runs. Unity Transport is the default.
+<Term id="facepunch-transport">FacepunchTransport</Term> is a community implementation that sends the same bytes over Steam
+instead of raw UDP.
+
+It's a small file, about 300 lines, and you should read it, because three of its behaviours will bite you in production.
+This lesson walks through the source as it stands on the repository's `main` branch, then patches it.
+
+## Installing it
+
+The transport lives in Unity's community contributions repository. Install it through **Window → Package Manager →
++ → Install package from git URL** with:
+
+```text
+https://github.com/Unity-Technologies/multiplayer-community-contributions.git?path=/Transports/com.community.netcode.transport.facepunch
+```
+
+The repository's transport README documents this `?path=/Transports/<package-name>` pattern. After installing, add a
+`FacepunchTransport` component to your NetworkManager's GameObject and select it in the NetworkManager's
+**Network Transport** field.
+
+What you get:
+
+| Item | What the package actually contains |
+|---|---|
+| `package.json` | Name `com.community.netcode.transport.facepunch`, version **2.0.0**, and an **empty** `dependencies` block. The NGO dependency was removed in September 2026, so NGO isn't installed for you. |
+| `Runtime/FacepunchTransport.cs` | The transport, namespace `Netcode.Transports.Facepunch` |
+| `Runtime/Facepunch/` | **Bundled** `Facepunch.Steamworks.*.dll` builds for Win32, Win64, macOS and Linux, plus `redistributable_bin` (the native `steam_api` libraries). The README says they are Facepunch.Steamworks **2.3.2**. |
+| Assembly definition | Editor plus Windows, macOS and Linux standalone players only, with `allowUnsafeCode` enabled |
+
+### Is it compatible with NGO 2.x?
+
+This is the question everyone asks, and the package's own metadata gives the wrong answer. The CHANGELOG's latest
+entry (2.0.0) says "Targets the Netcode for GameObjects 1.0.0 package". The **code** on `main` tells a different story:
+
+- In April 2026, a change titled "Don't use MonoBehaviour methods in transports" moved the transport's per-frame work into
+  an override of `NetworkTransport.OnEarlyUpdate()`. NGO's CHANGELOG lists `NetworkTransport.OnEarlyUpdate` as **added in 2.2.0**.
+  The current transport therefore **needs NGO 2.2.0 or later** and won't compile against NGO 1.x.
+- Every abstract member it overrides (`Send`, `PollEvent`, `StartClient`, `StartServer`, `DisconnectRemoteClient`,
+  `DisconnectLocalClient`, `GetCurrentRtt`, `Shutdown`, `Initialize(NetworkManager)`, `ServerClientId`) matches the
+  `NetworkTransport` class in NGO 2.13.
+- September 2026 commits fixed a duplicate `#endregion` compile error and a double `SteamClient.Init` crash.
+
+So the answer is that **`main` targets NGO 2.x (2.2 or later), even though its version number and CHANGELOG were never updated.**
+If you're stuck on NGO 1.x, pin an older commit with a `#<commit-hash>` suffix on the git URL instead.
+
+<Callout type="note" title="Alternatives you will see mentioned">
+
+- **SteamNetworkingSockets Transport** (same repository, by Heathen) does the same job on top of **Steamworks.NET**
+  instead of Facepunch.Steamworks. Use it if your project is already built on Steamworks.NET. Don't ship both wrappers in one game.
+- **Your own fork.** Many shipped games embed and patch FacepunchTransport, which is exactly what we do below.
+  It's one file, so owning it is cheap.
+
+</Callout>
+
+## Reading the source
+
+### Fields
+
+```csharp title="FacepunchTransport.cs (excerpt, unmodified)"
+[SerializeField] private uint steamAppId = 480;
+
+[Tooltip("The Steam ID of the user targeted when joining as a client.")]
+[SerializeField] public ulong targetSteamId;
+
+[Header("Info")]
+[ReadOnly]
+[SerializeField] private ulong userSteamId;
+
+private LogLevel LogLevel => NetworkManager.Singleton.LogLevel;
+```
+
+- `steamAppId` is **private** and defaults to <Term id="app-id">App ID</Term> 480, Valve's <Term id="spacewar">Spacewar</Term> test app.
+  It's only used if the transport has to initialize Steam itself.
+- `targetSteamId` is the one field your code sets: the <Term id="target-steam-id">SteamId to connect to</Term> when starting as a client.
+- `userSteamId` is display-only. It shows your own SteamId in the inspector during play.
+- There's no log-level field. The transport reads `NetworkManager.Singleton.LogLevel`, so set **Log Level: Developer** on the
+  NetworkManager to see its `[FacepunchTransport]` messages.
+
+### Initialization and callbacks
+
+```csharp title="FacepunchTransport.cs (excerpt, unmodified)"
+public override void Initialize(NetworkManager networkManager = null)
+{
+    connectedClients = new Dictionary<ulong, Client>();
+    try
+    {
+        if (!SteamClient.IsValid)
+            SteamClient.Init(steamAppId, false);   // asyncCallbacks: false
+    }
+    catch (Exception e) { /* logged */ }
+}
+
+protected override void OnEarlyUpdate()
+{
+    SteamClient.RunCallbacks();
+    if (!m_SteamInitialized && SteamClient.IsValid)
+    {
+        m_SteamInitialized = true;
+        SteamNetworkingUtils.InitRelayNetworkAccess();
+        userSteamId = SteamClient.SteamId;
+    }
+}
+```
+
+NGO calls `Initialize` when you start a host or client, and calls `EarlyUpdate()` (which invokes `OnEarlyUpdate`) every frame while
+the NetworkManager runs. Two consequences:
+
+1. If Steam isn't initialized yet, the transport initializes it with `asyncCallbacks: false`. Facepunch's docs for that flag are
+   explicit: you then "need to call RunCallbacks manually every frame".
+2. The transport pumps <Term id="steam-callbacks">Steam callbacks</Term> **only while NGO is running**. In your main menu, before
+   `StartHost`, nothing pumps them, so lobby callbacks such as `OnLobbyEntered` never fire.
+
+That's why we initialize Steam ourselves, at boot, in `SteamBootstrap`. The transport then sees `SteamClient.IsValid` and skips its own `Init`.
+
+### Starting, sending and receiving
+
+```csharp title="FacepunchTransport.cs (excerpt, unmodified)"
+public override bool StartServer()
+{
+    socketManager = SteamNetworkingSockets.CreateRelaySocket<SocketManager>();
+    socketManager.Interface = this;
+    return true;
+}
+
+public override bool StartClient()
+{
+    connectionManager = SteamNetworkingSockets.ConnectRelay<ConnectionManager>(targetSteamId);
+    connectionManager.Interface = this;
+    return true;
+}
+```
+
+Both use **relay** sockets on virtual port 0, so all traffic goes through <Term id="steam-datagram-relay">SDR</Term>. Both return
+`true` immediately: Steam connects asynchronously, so `StartClient()` succeeding means only "dialing has started". The server
+accepts **every** incoming connection in `ISocketManager.OnConnecting` (`connection.Accept()`). Filtering who gets in is NGO's job,
+which is why [connection approval](../steam-auth-approval/) matters.
+
+NGO's five delivery types collapse into Steam's two basic send types:
+
+| `NetworkDelivery` (NGO) | `SendType` (Steam) |
+|---|---|
+| `Reliable`, `ReliableSequenced`, `ReliableFragmentedSequenced` | `SendType.Reliable` |
+| `Unreliable`, `UnreliableSequenced` | `SendType.Unreliable` |
+
+Steam's reliable messages are already ordered and fragmented, so nothing is lost semantically. Note that the transport never sets
+a `NoNagle` flag, so Steam may hold small messages for its Nagle timer (5 ms by default, per `SteamNetworkingUtils.NagleTime`)
+before sending them.
+
+### Three ids, and why you can't get the SteamId
+
+<Sequence
+  title="Who calls whom when a client connects"
+  actors={[
+    { id: 'ngo', label: 'NGO (client)', kind: 'client' },
+    { id: 'ft', label: 'FacepunchTransport', kind: 'service' },
+    { id: 'st', label: 'Steam / SDR', kind: 'steam' },
+    { id: 'hft', label: 'Host transport', kind: 'service' },
+    { id: 'hngo', label: 'NGO (host)', kind: 'host' },
+  ]}
+  steps={[
+    { from: 'ngo', to: 'ft', label: 'StartClient()', kind: 'local' },
+    { from: 'ft', to: 'st', label: 'ConnectRelay(targetSteamId)', kind: 'reliable' },
+    { from: 'st', to: 'hft', label: 'OnConnecting: Accept()', note: 'accepts everyone', kind: 'event' },
+    { from: 'hft', to: 'hngo', label: 'NetworkEvent.Connect(transportId = connection.Id)', kind: 'event' },
+    { from: 'st', to: 'ft', label: 'OnConnected', kind: 'event' },
+    { from: 'ft', to: 'ngo', label: 'NetworkEvent.Connect(ServerClientId = 0)', kind: 'event' },
+    { from: 'ngo', to: 'hngo', label: 'ConnectionRequest + ConnectionData', note: 'NGO handshake starts; approval runs on the host', kind: 'reliable' },
+  ]}
+/>
+
+On the host, the transport identifies each peer by its Steam **connection handle** (`connection.Id`). That number is the
+<Term id="transport-client-id">transport client id</Term>. NGO maps it to its own <Term id="client-id">client id</Term> (0 for the host, then 1, 2, 3 and so on), and you can
+convert between them with `NetworkManager.GetClientIdFromTransportId` and `GetTransportIdFromClientId`.
+
+The **SteamId** is a third id. The transport stores it in a private `Client` class (`steamId = info.Identity.SteamId`) and
+never exposes it. With the bundled 2.3.2 DLLs, it's reportedly **always 0** anyway (issue 217, fixed by newer Facepunch.Steamworks
+builds). Don't fight this: in lesson 6 the client sends its SteamId and an <Term id="auth-session-ticket">auth ticket</Term> in its
+<Term id="connection-payload">connection payload</Term>, and the host verifies both with Steam. That's more trustworthy than reading it off a socket anyway.
+
+### Two behaviours you must change
+
+```csharp title="FacepunchTransport.cs (excerpt, unmodified)"
+public override unsafe ulong GetCurrentRtt(ulong clientId)
+{
+    return 0;
+}
+
+public override void Shutdown()
+{
+    connectionManager?.Close();
+    socketManager?.Close();
+    SteamClient.Shutdown();
+}
+```
+
+- **`GetCurrentRtt` always returns 0** (open issue 247). NGO's `NetworkTimeSystem` uses the transport's RTT to offset the
+  client's local time by half a round trip, so with 0 the client's `LocalTime` runs behind by that half RTT, and any RTT display you build will show 0.
+- **`Shutdown` shuts down Steam itself.** NGO calls `NetworkTransport.Shutdown()` every time the NetworkManager stops. That includes
+  a client being kicked or the host quitting. After that, `SteamClient.IsValid` is `false`, your lobby is unreachable (`Lobby.Leave()` now
+  fails), your friends list is gone, and the next session re-initializes Steam, using the transport's App ID field.
+
+## Patching it: embed, swap the DLLs, fix two methods
+
+<Steps>
+
+1. **Embed the package.** Copy the folder `Library/PackageCache/com.community.netcode.transport.facepunch@…` to
+   `Packages/com.community.netcode.transport.facepunch`, then remove the git entry from `Packages/manifest.json`. Unity treats
+   a package inside `Packages/` as embedded, which means it's editable and versioned with your project. This is now your
+   <Term id="vendored-transport">vendored transport</Term>.
+2. **Replace the bundled Steamworks build.** Delete the package's `Runtime/Facepunch` folder and install **Facepunch.Steamworks 2.5.2**
+   as its wiki describes: download the release (not the source) and extract its `Unity` folder into your project. Doing both
+   would give Unity two copies of the same assemblies. The transport's assembly definition doesn't override references, so it picks up the new DLLs automatically.
+3. **Patch `Shutdown` and `GetCurrentRtt`** as shown below.
+4. Set **Log Level: Developer** on the NetworkManager once, start a host, and check that the `[FacepunchTransport]` messages appear.
+
+</Steps>
+
+<CodeTabs labels={['Shutdown (patched)', 'GetCurrentRtt (patched)']}>
+
+```csharp title="FacepunchTransport.cs (patched)"
+public override void Shutdown()
+{
+    try
+    {
+        connectionManager?.Close();
+        socketManager?.Close();
+
+        // Drop references so a later StartHost/StartClient never polls a closed socket.
+        connectionManager = null;
+        socketManager = null;
+        connectedClients?.Clear();
+
+        // Removed: SteamClient.Shutdown();
+        // SteamBootstrap owns Steam's lifetime. The transport only owns its sockets.
+    }
+    catch (Exception e)
+    {
+        if (LogLevel <= LogLevel.Error)
+            Debug.LogError($"[{nameof(FacepunchTransport)}] - Exception while shutting down: {e}");
+    }
+}
+```
+
+```csharp title="FacepunchTransport.cs (patched)"
+public override ulong GetCurrentRtt(ulong clientId)
+{
+    // Client side: NGO asks for the RTT to the server (ServerClientId = 0).
+    if (clientId == ServerClientId && connectionManager != null)
+        return (ulong)Mathf.Max(0, connectionManager.Connection.QuickStatus().Ping);
+
+    // Host side: clientId is the transport id, which is the Steam connection handle.
+    if (connectedClients != null && connectedClients.TryGetValue(clientId, out Client user))
+        return (ulong)Mathf.Max(0, user.connection.QuickStatus().Ping);
+
+    return 0;
+}
+```
+
+</CodeTabs>
+
+`Connection.QuickStatus()` returns Facepunch's `ConnectionStatus`, whose `Ping` property is Steam's current ping estimate
+in milliseconds. The transport's interfaces (`IConnectionManager`, `ISocketManager`, `Connection.SendMessage(byte[], int, int, SendType)`) have the same
+signatures in Facepunch.Steamworks 2.5.2, so the rest of the file compiles unchanged against the newer DLLs.
+
+## SteamBootstrap: one owner for Steam
+
+With the transport no longer touching Steam's lifetime, someone else has to own it. `SteamBootstrap` lives in your first
+scene, survives scene loads, initializes Steam once and pumps callbacks every frame, whether or not NGO is running.
+
+```csharp title="SteamBootstrap.cs"
+using System;
+using Steamworks;
+using UnityEngine;
+
+namespace Campfire.Net
+{
+    /// <summary>Initializes Steam once, pumps callbacks every frame, shuts Steam down on quit.</summary>
+    [DefaultExecutionOrder(-1000)] // before any script that touches Steam
+    public sealed class SteamBootstrap : MonoBehaviour
+    {
+        [Tooltip("480 (Spacewar) for early prototyping only. Use your own App ID as soon as you have one.")]
+        [SerializeField] private uint appId = 480;
+
+        [Tooltip("In player builds, relaunch through Steam if the exe was started directly.")]
+        [SerializeField] private bool restartThroughSteam = true;
+
+        public static SteamBootstrap Instance { get; private set; }
+        public static bool IsReady => SteamClient.IsValid;
+        public static event Action Ready;
+
+        public uint AppId => appId;
+
+        private void Awake()
+        {
+            if (Instance != null) { Destroy(gameObject); return; } // scene reloads must not create a second one
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+
+#if !UNITY_EDITOR
+            // Returns false when launched by Steam (or when steam_appid.txt is present).
+            if (restartThroughSteam && SteamClient.RestartAppIfNecessary(appId))
+            {
+                Application.Quit();
+                return;
+            }
+#endif
+            try
+            {
+                if (!SteamClient.IsValid)                       // Init throws if called twice
+                    SteamClient.Init(appId, asyncCallbacks: false);
+
+                Dispatch.OnException = Debug.LogException;      // surface exceptions thrown inside callbacks
+                Debug.Log($"[Steam] {SteamClient.Name} ({SteamClient.SteamId}), app {SteamClient.AppId}");
+                Ready?.Invoke();
+            }
+            catch (Exception e)
+            {
+                // Steam not running, missing steam_api library, or no license for this App ID.
+                Debug.LogWarning($"[Steam] Init failed: {e.Message}");
+            }
+        }
+
+        private void Update()
+        {
+            // We pump callbacks ourselves because NGO only pumps them (through the transport) while a session runs.
+            if (SteamClient.IsValid)
+                SteamClient.RunCallbacks();
+        }
+
+        private void OnApplicationQuit() => ShutdownSteam();
+
+        private void OnDestroy()
+        {
+            if (Instance == this) ShutdownSteam();
+        }
+
+        private static void ShutdownSteam()
+        {
+            if (SteamClient.IsValid)
+                SteamClient.Shutdown();
+        }
+    }
+}
+```
+
+What you should notice:
+
+- **`asyncCallbacks: false` plus `RunCallbacks()` in `Update`** keeps every Steam callback on Unity's main thread at a predictable point in the frame.
+  While a session runs, the transport's `OnEarlyUpdate` also calls `RunCallbacks()`, which just means queued callbacks are dispatched a little earlier.
+- **`SteamClient.Init` throws** if Steam is already initialized, hence the `IsValid` guard. The transport has the same guard as of September 2026.
+- **The singleton check** matters because this object usually sits in your menu scene, and going back to the menu loads the scene again.
+
+<Callout type="pitfall" title="Forgetting RunCallbacks when the transport isn't pumping them">
+
+The symptom: `CreateLobbyAsync` never completes, `OnGameLobbyJoinRequested` never fires, avatars never load, but everything starts
+working the moment you host a game. That's because only a **running** NetworkManager makes the transport call `RunCallbacks()`.
+Pump callbacks yourself from boot to quit.
+
+</Callout>
+
+<Callout type="pitfall" title="Two copies of Facepunch.Steamworks">
+
+The transport package ships its own Facepunch.Steamworks DLLs. If the Steam module had you import Facepunch.Steamworks 2.5.2 into
+`Assets/` and you then install the transport from its git URL, the project contains two builds of the same assemblies,
+and the compiler errors that follow are confusing. Keep exactly one copy: embed the transport and delete its `Runtime/Facepunch` folder.
+
+</Callout>
+
+<Callout type="steam" title="The transport's App ID field">
+
+The serialized `steamAppId` on the transport defaults to 480 and is used only when the transport initializes Steam itself.
+With `SteamBootstrap` initializing first, it's ignored, but keep it in sync anyway, so a test scene without the bootstrap doesn't quietly connect to Spacewar.
+
+</Callout>
+
+<KeyTakeaways>
+
+- Install from `…multiplayer-community-contributions.git?path=/Transports/com.community.netcode.transport.facepunch`. The package bundles Facepunch.Steamworks 2.3.2 DLLs and declares no NGO dependency.
+- Despite a stale CHANGELOG, `main` overrides `OnEarlyUpdate` and therefore **requires NGO 2.2.0 or later**.
+- The transport uses relay sockets, accepts every connection, maps reliable deliveries to `SendType.Reliable` and unreliable ones to `SendType.Unreliable`, and hides the peer's SteamId.
+- Out of the box, `GetCurrentRtt` returns 0 and `Shutdown` calls `SteamClient.Shutdown()`. Embed the package, swap in Facepunch.Steamworks 2.5.2 and patch both methods.
+- `SteamBootstrap` owns Steam: initialize once at boot, call `RunCallbacks()` every frame, and shut down on quit.
+
+</KeyTakeaways>
