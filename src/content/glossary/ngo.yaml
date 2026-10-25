@@ -75,14 +75,6 @@ terms:
     short: The client whose id is a NetworkObject's OwnerClientId. Ownership matters wherever a feature is owner-driven, and in distributed authority the owner is the authority.
     lesson: ngo/network-objects
     seeAlso: [ownership, client-id]
-  - id: ownership
-    term: Ownership
-    short: Which client owns a NetworkObject. In client-server only the server changes it (ChangeOwnership, RemoveOwnership). In distributed authority clients transfer it according to its permissions.
-    long: >-
-      Ownership callbacks run in the order `OnLostOwnership`, `OnGainedOwnership`, `OnOwnershipChanged`. In distributed
-      authority, `OwnershipStatus` flags decide whether ownership can be distributed, transferred or requested.
-    lesson: ngo/network-objects
-    seeAlso: [owner, ownership-status, session-owner]
   - id: network-behaviour
     term: NetworkBehaviour
     short: A MonoBehaviour subclass for networked scripts. It adds context such as IsServer, IsOwner and HasAuthority, network lifecycle callbacks, NetworkVariables and RPCs.

@@ -240,8 +240,13 @@ terms:
   - id: ownership
     term: Ownership
     short: Per-object authority. The owner of an object (often the client controlling it) may be allowed to change its state, and ownership can be transferred at runtime.
+    long: >-
+      In Netcode for GameObjects every NetworkObject has an owner client. In client-server mode only the server changes it
+      (`ChangeOwnership`, `RemoveOwnership`), and the callbacks run in the order `OnLostOwnership`, `OnGainedOwnership`,
+      `OnOwnershipChanged`. In distributed authority, clients transfer ownership themselves, and `OwnershipStatus` flags decide
+      whether it can be distributed, transferred or requested.
     lesson: theory/authority-models
-    seeAlso: [authority, distributed-authority]
+    seeAlso: [authority, distributed-authority, owner, ownership-status, session-owner]
 
   # ------------------------------------------------------------------ 05 tick-rate
   - id: tick
