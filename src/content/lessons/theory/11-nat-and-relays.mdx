@@ -139,7 +139,7 @@ Relays also have real benefits beyond connectivity:
 - **Better routes.** Steam Datagram Relay routes traffic over Valve's own backbone, which can be faster than the public internet path. Valve also says its relayed traffic is authenticated, encrypted and rate-limited.
 - **Disconnect detection.** The relay knows when a host goes away, even when the host can't say so.
 
-The common production pattern, recommended in Unity's NGO docs, is **try direct, fall back to a relay**: attempt hole punching, and use
+The common production pattern, which Unity's NGO docs describe as widely used, is **try direct, fall back to a relay**: attempt hole punching, and use
 the relay when it fails. Many games simply relay everything, for the IP privacy alone.
 
 ## Keep the mapping alive

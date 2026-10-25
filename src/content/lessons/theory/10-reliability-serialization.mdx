@@ -234,7 +234,7 @@ messages small enough that they never need this.
   connection by default), `FragmentationPipelineStage` (splits payloads, 4096 bytes by default) and `UnreliableSequencedPipelineStage`. In NGO you choose
   `RpcDelivery.Reliable` or `Unreliable` per RPC, implement `INetworkSerializable` for custom types, and use `FastBufferWriter` and `BitWriter`
   for compact data. `NetworkTransform` offers half-float precision (2 bytes per axis) and quaternion compression (4 bytes per rotation). Steam
-  Networking Sockets has send flags such as `k_nSteamNetworkingSend_Reliable` and `Unreliable`, fragments for you, and accepts reliable messages up to 512 KB.
+  Networking Sockets has send flags such as `k_nSteamNetworkingSend_Reliable` and `Unreliable`, fragments messages for you, and accepts messages up to 512 KB.
 </Callout>
 
 ## Pitfalls
