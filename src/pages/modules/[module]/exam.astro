@@ -3,29 +3,39 @@ import { getEntry } from 'astro:content';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import ExamRunner from '../../../components/quiz/ExamRunner';
 import { certificateUrl, getModules, moduleUrl } from '../../../lib/content/nav';
+import { FIXTURE_MODULE_ID, fixtureExam, fixturesEnabled } from '../../../lib/quiz/fixtures';
 
 export async function getStaticPaths() {
-  return (await getModules()).map((module) => ({ params: { module: module.id }, props: { module } }));
+  const real = (await getModules()).map((module) => ({
+    params: { module: module.id },
+    props: { title: module.data.title, color: module.data.color, fixture: false },
+  }));
+  // Test-only route for tests/e2e/engine.spec.ts (exams have no content yet). Never built by default.
+  const fixture = fixturesEnabled()
+    ? [{ params: { module: FIXTURE_MODULE_ID }, props: { title: 'Fixture module', color: '#7c3aed', fixture: true } }]
+    : [];
+  return [...real, ...fixture];
 }
 
-const { module } = Astro.props;
-const exam = await getEntry('exams', module.id);
+const { title, color, fixture } = Astro.props;
+const moduleId = Astro.params.module;
+const exam = fixture ? { data: fixtureExam } : await getEntry('exams', moduleId);
 ---
 
-<BaseLayout title={`${module.data.title} exam`} accent={module.data.color}>
-  <p class="mb-2 text-sm"><a class="text-accent underline" href={moduleUrl(module.id)}>← {module.data.title}</a></p>
-  <h1 class="mb-6 text-3xl font-extrabold tracking-tight">{exam?.data.title ?? `${module.data.title} exam`}</h1>
+<BaseLayout title={`${title} exam`} accent={color}>
+  <p class="mb-2 text-sm"><a class="text-accent underline" href={moduleUrl(moduleId)}>← {title}</a></p>
+  <h1 class="mb-6 text-3xl font-extrabold tracking-tight">{exam?.data.title ?? `${title} exam`}</h1>
   {
     exam ? (
       <ExamRunner
         client:load
-        moduleId={module.id}
+        moduleId={moduleId}
         title={exam.data.title}
         questions={exam.data.questions}
         drawCount={exam.data.drawCount}
         passPct={exam.data.passPct}
         timeLimitMin={exam.data.timeLimitMin}
-        certificateUrl={certificateUrl(module.id)}
+        certificateUrl={certificateUrl(moduleId)}
       />
     ) : (
       <p class="text-muted">This module's exam hasn't been written yet.</p>
