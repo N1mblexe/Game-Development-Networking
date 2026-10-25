@@ -147,7 +147,7 @@ public static class EntityDelta
     public static void Write(BitWriter w, in EntityState baseline, in EntityState current)
     {
         Changed mask = Compare(baseline, current);
-        w.WriteBits((uint)mask, 4);                       // 4 bits even when nothing changed
+        w.WriteBits((uint)mask, 4);   // 4 bits; an outer per-entity "changed" bit can skip idle entities entirely
         if ((mask & Changed.Position) != 0) w.WriteQuantizedVec3(current.Position);
         if ((mask & Changed.Rotation) != 0) w.WriteSmallestThree(current.Rotation);
         if ((mask & Changed.Velocity) != 0) w.WriteQuantizedVec3(current.Velocity);
@@ -181,8 +181,8 @@ The rule of thumb:
 - If it only matters **at the moment it happens**, it's an **event**. A late joiner doesn't need to see an explosion from ten minutes ago.
 
 <Callout type="unity" title="Preview: state sync in NGO">
-  In Netcode for GameObjects, a `NetworkVariable` is state. When the authority changes it, it is marked dirty and sent as a delta
-  during the next network tick. Late joiners receive the current value when the object spawns for them, and `OnValueChanged` fires on
+  In Netcode for GameObjects, a `NetworkVariable` is state. When the authority changes it, it is marked dirty, and only dirty
+  variables are sent during the next network tick (collection types can send just their changes). Late joiners receive the current value when the object spawns for them, and `OnValueChanged` fires on
   receivers. RPCs are events. `NetworkTransform` is a specialised state synchronizer with change thresholds, half-precision and
   quaternion compression options. Unity's Netcode for Entities uses full snapshot-and-delta "ghost" replication like the one in this
   lesson. Steam Networking Sockets just carries your bytes, so you'd implement snapshots yourself.
