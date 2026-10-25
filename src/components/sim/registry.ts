@@ -107,11 +107,19 @@ export const sims = {
     title: 'Authority & Cheating',
     description: 'Try to cheat (speed hack, teleport) against client- and server-authoritative rules.',
     lessons: ['theory/authority-models', 'theory/security'],
-    load: stub,
+    load: () => import('./AuthorityCheat'),
     defaultPreset: 'client-authority',
     presets: {
-      'client-authority': { label: 'Client authoritative', props: {} },
-      'server-authority': { label: 'Server authoritative', props: {} },
+      'client-authority': {
+        label: 'Client authoritative',
+        description: 'The server believes whatever the client reports, so every cheat reaches the other players.',
+        props: { authority: 'client', rttMs: 100 },
+      },
+      'server-authority': {
+        label: 'Server authoritative',
+        description: 'The client only sends inputs; the server simulates, validates and rejects the cheats.',
+        props: { authority: 'server', rttMs: 100 },
+      },
     },
   },
   'snapshot-delta': {
