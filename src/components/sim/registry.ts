@@ -14,14 +14,34 @@ export const sims = {
     title: 'Link Playground',
     description: 'Send packets over a link with adjustable latency, jitter, loss and bandwidth.',
     lessons: ['theory/latency-jitter-loss'],
-    load: stub,
+    load: () => import('./LinkPlayground'),
     defaultPreset: 'broadband',
     presets: {
-      lan: { label: 'LAN', description: 'Under 1 ms, no loss: what most people develop on.', props: {} },
-      broadband: { label: 'Home broadband', props: {} },
-      'mobile-4g': { label: 'Mobile 4G', description: 'Higher latency and noticeable jitter.', props: {} },
-      'bad-wifi': { label: 'Bad Wi-Fi', description: 'Bursty loss and big jitter spikes.', props: {} },
-      intercontinental: { label: 'Intercontinental', description: '150 ms+ one way: physics wins.', props: {} },
+      lan: {
+        label: 'LAN',
+        description: 'Under 1 ms, no loss: what most people develop on.',
+        props: { latencyMs: 0.5, jitterMs: 0, lossPct: 0, bandwidthKbps: 0 },
+      },
+      broadband: {
+        label: 'Home broadband',
+        description: 'Low, steady latency with the occasional lost packet.',
+        props: { latencyMs: 15, jitterMs: 3, lossPct: 0.5, bandwidthKbps: 10000 },
+      },
+      'mobile-4g': {
+        label: 'Mobile 4G',
+        description: 'Higher latency and noticeable jitter.',
+        props: { latencyMs: 45, jitterMs: 15, lossPct: 1, burstLength: 2, bandwidthKbps: 5000 },
+      },
+      'bad-wifi': {
+        label: 'Bad Wi-Fi',
+        description: 'Bursty loss and big jitter spikes.',
+        props: { latencyMs: 8, jitterMs: 35, lossPct: 6, burstLength: 4, bandwidthKbps: 2000, duplicatePct: 1 },
+      },
+      intercontinental: {
+        label: 'Intercontinental',
+        description: '150 ms+ one way: physics wins.',
+        props: { latencyMs: 150, jitterMs: 5, lossPct: 0.5, bandwidthKbps: 10000 },
+      },
     },
   },
   'tcp-vs-udp': {
