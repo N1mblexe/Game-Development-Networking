@@ -1,0 +1,307 @@
+---
+title: Distributed Authority
+order: 11
+summary: Run a session with no game server, where each client is the authority for the objects it owns, using NGO's distributed authority topology, ownership permissions and the session owner.
+durationMin: 30
+objectives:
+  - Explain how the distributed authority topology differs from client-server and when it fits
+  - Switch NetworkTopology and connect through the distributed authority service with the Sessions API
+  - Control who may own an object with OwnershipStatus flags, ChangeOwnership and RequestOwnership
+  - Use the session owner for global state, and rewrite server-only code to work without a server
+prerequisites: [ngo/network-objects, ngo/connection-and-scenes, ngo/prediction-anticipation, theory/topologies, theory/authority-models]
+tags: [ngo, distributed-authority, ownership, topology]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+    - { name: com.unity.services.multiplayer, version: '2.4.1' }
+sources:
+  - title: 'NGO 2.13 manual: Distributed authority topologies'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/terms-concepts/distributed-authority.html
+  - title: 'NGO 2.13 manual: Distributed authority quickstart'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/learn/distributed-authority-quick-start.html
+  - title: 'NGO 2.13 manual: NetworkObject ownership'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkobject-ownership.html
+  - title: 'NGO 2.13 API: NetworkObject'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkObject.html
+  - title: 'Multiplayer Services SDK: Create a session'
+    url: https://docs.unity.com/en-us/mps-sdk/create-session
+  - title: 'Multiplayer Services 2.4 API: SessionOptions'
+    url: https://docs.unity3d.com/Packages/com.unity.services.multiplayer@2.4/api/Unity.Services.Multiplayer.SessionOptions.html
+  - title: 'Multiplayer Services 2.4 API: ISession'
+    url: https://docs.unity3d.com/Packages/com.unity.services.multiplayer@2.4/api/Unity.Services.Multiplayer.ISession.html
+  - title: 'NGO source v2.13.3: NetworkVariableBase.cs (DA write permission), ServerRpcTarget.cs (DA routing)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/tree/v2.13.3/com.unity.netcode.gameobjects/Runtime
+---
+
+Everything so far assumed one machine in charge: the server (or the host). That's the right default for competitive
+games, but it has costs: someone pays for servers, or one player's machine and upload bandwidth carry the whole session,
+and the session ends when the host quits. NGO 2.x adds a third option, the
+<Term id="distributed-authority">distributed authority</Term> topology. There's no game server at all. Each client is the
+authority for the objects it owns, and a hosted Unity service, the
+<Term id="distributed-authority-service">distributed authority service</Term>, relays messages and keeps the session
+state. It's the [authority-models](../../theory/authority-models/) idea of splitting authority by object, built into NGO.
+
+## Client-server vs distributed authority
+
+<Diagram name="topology" variant="distributed-authority" caption="Distributed authority: clients connect to a hosted service. Each client simulates the objects it owns and sends their state through the service to everyone else." />
+
+What you should notice:
+
+- Every client is connected to the **service**, never directly to other clients, so there's no NAT problem and no host to lose.
+- Authority isn't in one place. Client A simulates its player and the crates it owns, and client B simulates its own.
+  Each object has exactly one authority at a time.
+- One client is the **session owner** and looks after global state, but it isn't a server. It doesn't validate other
+  clients' objects.
+
+| | Client-server (host or dedicated) | Distributed authority |
+|---|---|---|
+| Who simulates an object | The server | Its owner |
+| Who may spawn | The server | Any client, which then owns the object |
+| Latency for your own objects | Up to one RTT (unless anticipated) | None |
+| Who loads scenes | The server | The session owner |
+| If the host or session owner leaves | Session over (host) | Another client is promoted, and its objects are redistributed |
+| Cheating resistance | Strong | Weak: clients are trusted with what they own |
+| Physics | One simulation on the server | Split across clients |
+
+The docs are clear about the limits: distributed authority isn't a good fit for competitive games that need an accurate
+prediction model, physics needs a different design because there's no single simulation, and cheating is easier. It
+shines for co-op, social and casual games, where cheap hosting and no host migration problems matter more.
+
+## Switching the topology
+
+<Steps>
+
+1. Install the **Multiplayer Services** package (`com.unity.services.multiplayer`) and link the project to a Unity Cloud project (**Edit > Project Settings > Services**).
+2. On the NetworkManager, set **Network Topology** to **Distributed Authority** (in code, set `NetworkConfig.NetworkTopology` to `DistributedAuthority`). The field appears once the Multiplayer Services package is installed.
+3. Set **Network Transport** as the NGO quickstart describes, selecting **DistributedAuthorityTransport** from the transport list.
+4. Don't call `StartHost`/`StartClient` yourself. Create or join a session, and the Multiplayer Services integration starts NGO for you.
+
+</Steps>
+
+```csharp title="DistributedSessionStarter.cs"
+using System.Threading.Tasks;
+using Unity.Netcode;
+using Unity.Services.Authentication;
+using Unity.Services.Core;
+using Unity.Services.Multiplayer;
+using UnityEngine;
+
+/// On the NetworkManager GameObject in Bootstrap (replaces ArenaConnection for the co-op mode).
+public class DistributedSessionStarter : MonoBehaviour
+{
+    [SerializeField] string m_SessionName = "arena-coop";
+    ISession m_Session;
+    string m_Status = "Offline";
+
+    async Task JoinAsync()
+    {
+        m_Status = "Signing in…";
+        await UnityServices.InitializeAsync();
+        if (!AuthenticationService.Instance.IsSignedIn)
+            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+
+        var options = new SessionOptions { MaxPlayers = 4 }.WithDistributedAuthorityNetwork();
+
+        // The first client creates the session (and becomes session owner); later ones join it.
+        m_Session = await MultiplayerService.Instance.CreateOrJoinSessionAsync(m_SessionName, options);
+        m_Status = $"In session {m_Session.Id}";
+    }
+
+    async void OnDestroy()
+    {
+        if (m_Session != null) await m_Session.LeaveAsync();
+    }
+
+    void OnGUI()
+    {
+        GUILayout.BeginArea(new Rect(10, 10, 300, 120));
+        GUILayout.Label(m_Status);
+        if (m_Session == null && GUILayout.Button("Join co-op")) _ = JoinAsync();
+        GUILayout.EndArea();
+    }
+}
+```
+
+Connection approval isn't supported in distributed authority, so lesson 8's `ArenaApproval` doesn't apply. The session
+itself (its `MaxPlayers`, and the password and privacy options in `SessionOptions`) is the gate.
+
+## What changes in your scripts
+
+This is where porting gets real. Code that asks "am I the server?" now has no server to ask.
+
+| Client-server code | In distributed authority |
+|---|---|
+| `if (!IsServer) return;` before gameplay | Nobody runs it. Use `if (!HasAuthority) return;` |
+| Server spawns pickups and projectiles | The client that needs the object spawns it and becomes its owner |
+| NetworkVariable with **Server** write permission | Treated as **Owner** write: only the owner can write, everyone can read |
+| `[Rpc(SendTo.Server)]` | Routed to the object's **owner**. Prefer `SendTo.Authority` to say what you mean |
+| NetworkTransform **Authority Mode** | Forced to **Owner** |
+| `NetworkSceneManager.LoadScene` on the server | Only the session owner loads and unloads scenes |
+
+That's why lesson 4 recommended `HasAuthority` for authority checks: in client-server it equals `IsServer`, and in
+distributed authority it means "I own this". Code written that way often runs unchanged. Lesson 6's shooting, for
+example, becomes:
+
+```csharp title="PlayerShooting.cs"
+// Works in both topologies: in client-server the server runs it, in DA the owner runs it locally.
+[Rpc(SendTo.Authority)]
+void FireRpc(Vector3 aimDirection, RpcParams rpcParams = default)
+{
+    if (Time.time < m_NextFireTime) return;
+    m_NextFireTime = Time.time + m_Cooldown;
+
+    // In DA, the shooter spawns its own projectile and owns it.
+    var projectile = NetworkManager.SpawnManager.InstantiateAndSpawn(
+        m_ProjectilePrefab,
+        ownerClientId: NetworkManager.LocalClientId,
+        position: m_Muzzle.position,
+        rotation: Quaternion.LookRotation(Vector3.ProjectOnPlane(aimDirection, Vector3.up)));
+    projectile.GetComponent<Projectile>().Init(OwnerClientId, this);
+
+    PlayMuzzleFlashRpc();
+}
+```
+
+And `Projectile` replaces its `IsServer` checks with `HasAuthority`. One consequence is worth saying out loud: the
+shooter's machine now decides whether its own projectile hit, and it calls `ApplyDamage` on a **player it doesn't own**.
+In distributed authority, that player's owner must apply the damage, so `ApplyDamage` becomes an RPC to
+`SendTo.Owner` on the target. The shooter's client is trusted to report hits honestly. That's the cheating trade-off
+in one line of code.
+
+## Ownership permissions
+
+In client-server, only the server changes ownership. In distributed authority, clients transfer ownership among
+themselves, so each NetworkObject declares how that's allowed with `OwnershipStatus` flags (the **Ownership** dropdown on
+the NetworkObject, or `SetOwnershipStatus` from the owner):
+
+| Flag | Meaning | Arena example |
+|---|---|---|
+| `None` | Never redistributed, requested or transferred | Player objects |
+| `Distributable` | Spread across clients automatically as they join and leave | AI enemies, pickups |
+| `Transferable` | Any client may take it with `ChangeOwnership` | A ball anyone can kick |
+| `RequestRequired` | Must be requested with `RequestOwnership`, and the owner may refuse | A crate someone is carrying |
+| `SessionOwner` | Always owned by the current session owner | Scoreboard, match timer |
+
+`Distributable`, `Transferable` and `RequestRequired` can be combined. `None` and `SessionOwner` can't. On top of the
+flags, `SetOwnershipLock(true)` freezes ownership temporarily, and `IsOwnershipLocked` reports it.
+
+Picking up a crate shows the request flow:
+
+```csharp title="CarryableCrate.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+/// Crate prefab with Ownership set to Distributable + RequestRequired.
+public class CarryableCrate : NetworkBehaviour
+{
+    bool m_Carried; // only meaningful on the owner
+
+    public override void OnNetworkSpawn()
+    {
+        NetworkObject.OnOwnershipRequested = OnOwnershipRequested;
+        NetworkObject.OnOwnershipRequestResponse = OnOwnershipRequestResponse;
+        base.OnNetworkSpawn();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        NetworkObject.OnOwnershipRequested = null;
+        NetworkObject.OnOwnershipRequestResponse = null;
+        base.OnNetworkDespawn();
+    }
+
+    // Called by the local player's interaction script.
+    public void TryPickUp()
+    {
+        if (IsOwner) { m_Carried = true; return; }
+
+        var status = NetworkObject.RequestOwnership();
+        if (status != NetworkObject.OwnershipRequestStatus.RequestSent)
+            Debug.Log($"Can't request the crate: {status}"); // e.g. Locked, RequestInProgress
+    }
+
+    // Runs on the current owner when another client asks. Return false to refuse.
+    bool OnOwnershipRequested(ulong requestingClientId) => !m_Carried;
+
+    // Runs on the requesting client with the outcome.
+    void OnOwnershipRequestResponse(NetworkObject.OwnershipRequestResponseStatus response)
+    {
+        if (response == NetworkObject.OwnershipRequestResponseStatus.Approved) m_Carried = true;
+        else Debug.Log($"Crate request refused: {response}");
+    }
+
+    public void Drop() { if (IsOwner) m_Carried = false; }
+}
+```
+
+By default, requests are approved automatically. Assigning `OnOwnershipRequested` lets the current owner refuse, here
+while it's still carrying the crate. For a `Transferable` object you skip the request and call
+`ChangeOwnership` with `NetworkManager.LocalClientId`. If the flags don't allow it,
+`OnOwnershipPermissionsFailure` reports why.
+
+## The session owner
+
+The first client in a session is the **session owner**. If it leaves, the service promotes another client automatically
+and raises `NetworkManager.OnSessionOwnerPromoted`, which receives the new session owner's id. Its responsibilities:
+
+- Loading and unloading scenes for everyone.
+- Synchronizing late-joining clients with the current game state.
+- Owning every object flagged `SessionOwner`.
+- Whatever global logic you assign it, which you gate with `IsSessionOwner` (on any `NetworkBehaviour`) or
+  `IsSessionOwner` on `NetworkManager.LocalClient`.
+
+Lesson 3's `PickupSpawner` used `IsServer`. In co-op it becomes a session-owner object: set its NetworkObject's
+**Ownership** to **Session Owner** and gate on authority, which for that object is always the session owner.
+
+```csharp title="PickupSpawner.cs"
+public override void OnNetworkSpawn()
+{
+    // SessionOwner-flagged object: HasAuthority is true only on the current session owner.
+    // In client-server this is still the server, so the same check works in both topologies.
+    if (!HasAuthority) { enabled = false; return; }
+    // ... spawn pickups as before ...
+}
+
+protected override void OnOwnershipChanged(ulong previous, ulong current)
+{
+    // The session owner left and a new one was promoted: it takes over spawning.
+    enabled = HasAuthority;
+    base.OnOwnershipChanged(previous, current);
+}
+```
+
+<Callout type="pitfall" title="Gameplay that silently stops running">
+
+The most common porting bug: everything connects, players move, but pickups never respawn, health never changes and the
+scoreboard is empty. In a distributed-authority session there's no server, so `IsServer` is false on every client and
+every `if (!IsServer) return;` returns. Search your project for `IsServer` and decide, line by line, whether it means
+"the authority for this object" (`HasAuthority`) or "the one client in charge of global state" (`IsSessionOwner`).
+
+</Callout>
+
+<Callout type="pitfall" title="Spawning before you're connected">
+
+The quickstart warns to wait for the client-connected callback before spawning objects. Until the service has
+connected and synchronized you, spawns have nowhere to go. Spawn from `OnNetworkSpawn` of your player or after
+`OnConnectionEvent` reports `ClientConnected` for the local client.
+
+</Callout>
+
+<Callout type="pitfall" title="Distributed authority is not peer-to-peer trust-free">
+
+Every client is the authority for what it owns, so a modified client can teleport its player, give its projectiles any
+damage, or claim any `Transferable` object. Use distributed authority where that's acceptable (friends, co-op, casual),
+and keep competitive modes on client-server, where lesson 10's anticipation keeps them responsive.
+
+</Callout>
+
+<KeyTakeaways>
+
+- **Distributed authority**: no game server. Each client simulates the objects it owns, and a hosted service relays state and keeps the session alive.
+- Set **Network Topology** to Distributed Authority and connect through a Multiplayer Services session with `WithDistributedAuthorityNetwork()`. Connection approval isn't available.
+- Write authority checks with `HasAuthority`, global logic with `IsSessionOwner`, and RPCs with `SendTo.Authority` or `SendTo.Owner` so code works in both topologies.
+- `OwnershipStatus` flags (`None`, `Distributable`, `Transferable`, `RequestRequired`, `SessionOwner`) decide how ownership moves between clients.
+- The session owner loads scenes and owns global objects, and it's replaced automatically when it leaves. The price of the topology is trust: clients can cheat with what they own.
+
+</KeyTakeaways>

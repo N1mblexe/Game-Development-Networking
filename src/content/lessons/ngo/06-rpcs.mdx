@@ -1,0 +1,340 @@
+---
+title: RPCs
+order: 6
+summary: Send events between machines with the universal Rpc attribute, choose SendTo targets and delivery, validate requests on the server, and read legacy ServerRpc and ClientRpc code.
+durationMin: 30
+objectives:
+  - Declare and invoke RPCs with the Rpc attribute and SendTo targets
+  - Use RpcParams to read the sender and to pick targets at runtime
+  - Choose reliable or unreliable delivery and understand per-object ordering
+  - Validate client requests on the server, and restrict who may invoke an RPC
+  - Translate legacy ServerRpc and ClientRpc code to the current API
+prerequisites: [ngo/network-variables, theory/state-sync]
+tags: [ngo, rpc, messaging]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: RPC'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/message-system/rpc.html
+  - title: 'NGO 2.13 manual: RPC params'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/message-system/rpc-params.html
+  - title: 'NGO 2.13 manual: Reliability'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/message-system/reliability.html
+  - title: 'NGO 2.13 manual: RPC migration and compatibility'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/message-system/rpc-compatibility.html
+  - title: 'NGO 2.13 API: RpcAttribute'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.RpcAttribute.html
+  - title: 'NGO 2.13 API: SendTo'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.SendTo.html
+  - title: 'NGO 2.13 API: RpcTarget'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.RpcTarget.html
+  - title: 'NGO 2.13 changelog (2.7.0: RpcInvokePermission, RequireOwnership deprecated)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/changelog/CHANGELOG.html
+---
+
+The arena has health and a scoreboard, but nobody can shoot yet. Firing is the opposite of health: it's a **moment**,
+not state. Nobody joining in thirty seconds needs to know that you pulled the trigger. Moments travel as
+<Term id="rpc">RPCs</Term>, remote procedure calls: you call a method on one machine and NGO runs it on others. Theory
+covered [when to prefer events over state](../../theory/state-sync/). This lesson shows the NGO API and the server
+validation that keeps it honest.
+
+## Declaring an RPC
+
+Since NGO 1.8, one attribute covers every direction: `[Rpc(SendTo.X)]`. Two rules apply to every RPC:
+
+1. It lives in a `NetworkBehaviour` on a **spawned** NetworkObject. NGO routes it using the object's `NetworkObjectId`.
+2. The method name must **end in `Rpc`**. NGO's IL post-processor rewrites every call site so that calling
+   `FireRpc()` sends a message instead of running the method locally, and the suffix makes that visible at the call site.
+   A missing suffix is a compile error.
+
+```csharp title="PingExample.cs"
+using Unity.Netcode;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+public class PingExample : NetworkBehaviour
+{
+    [Rpc(SendTo.Server)]
+    void PingRpc(int count, RpcParams rpcParams = default)
+    {
+        // Runs on the server. rpcParams.Receive tells us who sent it.
+        Debug.Log($"Ping {count} from client {rpcParams.Receive.SenderClientId}");
+        PongRpc(count, RpcTarget.Single(rpcParams.Receive.SenderClientId, RpcTargetUse.Temp));
+    }
+
+    [Rpc(SendTo.SpecifiedInParams)]
+    void PongRpc(int count, RpcParams rpcParams)
+    {
+        Debug.Log($"Pong {count}"); // runs only on the client that pinged
+    }
+
+    void Update()
+    {
+        if (IsClient && Keyboard.current.pKey.wasPressedThisFrame) PingRpc(Time.frameCount);
+    }
+}
+```
+
+Arguments are serialized: primitives, Unity value types, enums, strings, arrays of these, `INetworkSerializable` types
+(lesson 9) and `NetworkObjectReference` all work. An optional final parameter of type `RpcParams` isn't sent. It carries
+**send** options on the caller and **receive** information (`Receive.SenderClientId`) on the receiver.
+
+## Targets
+
+| `SendTo.` | Runs on | Typical use |
+|---|---|---|
+| `Server` | The server (locally if already there) | Client requests: fire, use item, chat |
+| `Owner` / `NotOwner` | The object's owner / everyone else | Private feedback, or "everyone but me" effects |
+| `Everyone` | All observers, including the caller | Effects that should also play locally |
+| `ClientsAndHost` | All clients, plus the host if there is one | The modern equivalent of a legacy ClientRpc |
+| `NotServer` | Clients only, never a host's server side | Client-only work in client-server |
+| `Me` / `NotMe` | Only the caller / everyone else | Testing, or "everyone but me" |
+| `Authority` / `NotAuthority` | The object's authority / everyone else | Code that works in both topologies |
+| `SpecifiedInParams` | Whatever target you pass at runtime | One specific client, or a group |
+
+At runtime you pick custom targets from the `RpcTarget` property every NetworkBehaviour has:
+`RpcTarget.Single(clientId, RpcTargetUse.Temp)`, `RpcTarget.Group(ids, …)` and `RpcTarget.Not(id, …)`. `Temp` reuses a
+cached object to avoid garbage, so don't keep it around. Use `Persistent` for a target you store. You can override a
+fixed target only if the attribute sets `AllowTargetOverride = true`, or the target is `SpecifiedInParams`.
+
+<Callout type="pitfall" title="Client-to-client is never direct">
+
+`SendTo.NotMe` from a client looks peer-to-peer, but in client-server the clients have no connection to each other.
+The message goes to the server, which forwards it. That doubles the latency compared to a direct link, and the server
+can (and should) refuse to forward things a client mustn't do.
+
+</Callout>
+
+## Three flows in the arena
+
+### Client to server: a request
+
+<Diagram name="ngo-rpc-flow" variant="to-server" caption="The owning client calls FireRpc; the call becomes a message to the server, which runs the method body." />
+
+What you should notice:
+
+- The method body **does not run** on the client that called it. The client only sends arguments.
+- The server is free to say no. Calling an RPC is a request, not a command.
+
+### Server to everyone: an effect
+
+<Diagram name="ngo-rpc-flow" variant="to-everyone" caption="The server calls PlayMuzzleFlashRpc; every client (and the host) runs it to play the effect." />
+
+What you should notice:
+
+- One call on the server fans out to every observer. Clients that can't see the object (lesson 3's visibility) don't get it.
+- A late joiner never sees this flash, which is exactly right for an effect.
+
+### Server to owner: private feedback
+
+<Diagram name="ngo-rpc-flow" variant="to-owner" caption="The server calls HitConfirmedRpc; only the shooter's client runs it, to play a hit marker." />
+
+What you should notice:
+
+- `SendTo.Owner` routes by the object's owner. On the shooter's `PlayerAvatar`, that's the shooter.
+- Other players don't receive the hit marker at all, so the traffic doesn't reach them.
+
+## The shooting code
+
+Put `PlayerShooting` on the `PlayerAvatar` prefab, and create a `Projectile` network prefab (a small sphere with a
+trigger collider, a kinematic Rigidbody, a NetworkObject, a NetworkTransform and the `Projectile` script). Register it in
+the NetworkPrefabsList.
+
+```csharp title="PlayerShooting.cs"
+using Unity.Netcode;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+public class PlayerShooting : NetworkBehaviour
+{
+    [SerializeField] NetworkObject m_ProjectilePrefab;
+    [SerializeField] Transform m_Muzzle;
+    [SerializeField] ParticleSystem m_MuzzleFlash;
+    [SerializeField] AudioSource m_HitMarkerSound;
+    [SerializeField] float m_Cooldown = 0.25f;
+
+    float m_NextFireTime; // only meaningful on the server
+
+    void Update()
+    {
+        if (!IsSpawned || !IsOwner) return;
+        if (Mouse.current.leftButton.wasPressedThisFrame)
+        {
+            // Send intent only: an aim direction. The server decides everything else.
+            Vector3 aim = m_Muzzle.forward;
+            FireRpc(aim);
+        }
+    }
+
+    // Only the owner may ask to fire this player's weapon. Anyone else throws on the caller's side.
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+    void FireRpc(Vector3 aimDirection, RpcParams rpcParams = default)
+    {
+        // Validate everything a modified client could lie about.
+        if (Time.time < m_NextFireTime) return;
+        if (TryGetComponent(out PlayerHealth health) && health.IsDead) return;
+        if (aimDirection.sqrMagnitude < 0.01f) return;
+        m_NextFireTime = Time.time + m_Cooldown;
+
+        Vector3 direction = Vector3.ProjectOnPlane(aimDirection, Vector3.up).normalized; // top-down: stay flat
+        var projectileObject = NetworkManager.SpawnManager.InstantiateAndSpawn(
+            m_ProjectilePrefab,
+            position: m_Muzzle.position,
+            rotation: Quaternion.LookRotation(direction));
+
+        projectileObject.GetComponent<Projectile>().Init(shooterClientId: OwnerClientId, shooter: this);
+
+        PlayMuzzleFlashRpc();
+    }
+
+    // Cosmetic and frequent: unreliable is fine. A lost flash is not a bug.
+    [Rpc(SendTo.ClientsAndHost, Delivery = RpcDelivery.Unreliable)]
+    void PlayMuzzleFlashRpc()
+    {
+        m_MuzzleFlash.Play();
+    }
+
+    // Called by the server-side Projectile when it damages someone.
+    public void NotifyHit() => HitConfirmedRpc();
+
+    [Rpc(SendTo.Owner)]
+    void HitConfirmedRpc()
+    {
+        m_HitMarkerSound.Play();
+    }
+}
+```
+
+```csharp title="Projectile.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+public class Projectile : NetworkBehaviour
+{
+    [SerializeField] float m_Speed = 18f;
+    [SerializeField] float m_Lifetime = 2f;
+    [SerializeField] int m_Damage = 20;
+
+    ulong m_ShooterClientId;
+    PlayerShooting m_Shooter;
+    float m_DespawnTime;
+
+    // Server only: called right after spawning.
+    public void Init(ulong shooterClientId, PlayerShooting shooter)
+    {
+        m_ShooterClientId = shooterClientId;
+        m_Shooter = shooter;
+        m_DespawnTime = Time.time + m_Lifetime;
+    }
+
+    void FixedUpdate()
+    {
+        if (!IsSpawned || !IsServer) return;
+
+        // The server moves the projectile; NetworkTransform replicates it (next lesson).
+        transform.position += transform.forward * (m_Speed * Time.fixedDeltaTime);
+        if (Time.time >= m_DespawnTime) NetworkObject.Despawn();
+    }
+
+    void OnTriggerEnter(Collider other)
+    {
+        if (!IsSpawned || !IsServer) return;
+
+        var target = other.GetComponentInParent<PlayerHealth>();
+        if (target == null || target.OwnerClientId == m_ShooterClientId) return;
+
+        target.ApplyDamage(m_Damage, m_ShooterClientId);
+        if (m_Shooter != null) m_Shooter.NotifyHit();
+        NetworkObject.Despawn();
+    }
+}
+```
+
+Notice where each decision lives. The client sends **intent** (an aim direction). The server checks the cooldown, checks
+that the shooter is alive, picks the spawn position from its own copy of the muzzle, spawns the projectile, detects the
+hit, and changes health. Health then reaches everyone as a NetworkVariable, and the flash and the hit marker go out as
+RPCs. That split (requests and effects as RPCs, results as state) is the core pattern of
+[server-authoritative](../../theory/authority-models/) NGO games.
+
+<Callout type="pitfall" title="InvokePermission is not validation">
+
+`InvokePermission = RpcInvokePermission.Owner` (added in 2.7, replacing the deprecated `RequireOwnership`) stops
+non-owners from invoking the RPC. It doesn't stop the **owner** from sending absurd arguments or firing a thousand
+times a second. Always validate arguments, rates and game state in the RPC body on the server.
+
+</Callout>
+
+## Delivery and ordering
+
+RPCs are **reliable** by default: NGO retransmits until they arrive. `Delivery = RpcDelivery.Unreliable` fits
+frequent, disposable messages such as effects. Two ordering facts matter:
+
+- Reliable RPCs arrive in order **per NetworkObject only**. An RPC on the scoreboard and an RPC on a player can execute in
+  a different order than you sent them.
+- There's no ordering between RPCs and NetworkVariable updates. If a client needs "the new health and the reason for the
+  change" together, put both in one RPC, or make the reason part of the state.
+
+An RPC made without an active connection is dropped. A host is the exception: it's both server and client, so it can
+call its own RPCs either way.
+
+## Legacy ServerRpc and ClientRpc
+
+Older tutorials (and much of Boss Room) use separate attributes. They still compile in 2.x, but the docs call them
+legacy and recommend `[Rpc]` for all current projects.
+
+<CodeTabs labels={['Current: Rpc attribute', 'Legacy: ServerRpc / ClientRpc']}>
+
+```csharp title="PlayerShooting.cs"
+// Owner-only request to the server
+[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+void FireRpc(Vector3 aim, RpcParams rpcParams = default)
+{
+    ulong sender = rpcParams.Receive.SenderClientId;
+    // ...
+    PlayMuzzleFlashRpc();
+}
+
+// Server to all clients, including the host
+[Rpc(SendTo.ClientsAndHost)]
+void PlayMuzzleFlashRpc() { m_MuzzleFlash.Play(); }
+```
+
+```csharp title="PlayerShooting.cs"
+// Legacy: suffix ServerRpc, and RequireOwnership defaults to true
+[ServerRpc]
+void FireServerRpc(Vector3 aim, ServerRpcParams serverRpcParams = default)
+{
+    ulong sender = serverRpcParams.Receive.SenderClientId;
+    // ...
+    PlayMuzzleFlashClientRpc();
+}
+
+// Legacy: suffix ClientRpc, sent to all clients including the host
+[ClientRpc]
+void PlayMuzzleFlashClientRpc() { m_MuzzleFlash.Play(); }
+```
+
+</CodeTabs>
+
+When you migrate:
+
+- `[ServerRpc]` (which requires ownership by default) becomes `[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]`.
+- `[ServerRpc(RequireOwnership = false)]` becomes plain `[Rpc(SendTo.Server)]`.
+- `[ClientRpc]` becomes `[Rpc(SendTo.ClientsAndHost)]`.
+- Targeting one client with `ClientRpcParams` and a `TargetClientIds` array becomes `SendTo.SpecifiedInParams` with
+  `RpcTarget.Single`. That also avoids allocating a new array for every send.
+- Rename the methods to the plain `Rpc` suffix. The RPC's identity is an xxHash32 of its assembly, type, method name and
+  parameter types, so **renaming breaks compatibility with older builds**. Ship client and server together.
+
+<KeyTakeaways>
+
+- Use **RPCs** for moments (requests, effects, notifications) and NetworkVariables for state.
+- Declare them with `[Rpc(SendTo.X)]`, give them names ending in `Rpc`, and put them on spawned NetworkObjects.
+- Clients send **intent**. The server validates arguments, rates and state before acting. `InvokePermission` only restricts who may call.
+- Use `RpcParams` to read `Receive.SenderClientId` and to target clients with `RpcTarget.Single` or `Group` at runtime.
+- RPCs are reliable and ordered per object by default. Use unreliable for disposable effects.
+- Legacy `[ServerRpc]` and `[ClientRpc]` still work. Map them to `SendTo.Server` and `SendTo.ClientsAndHost`.
+
+</KeyTakeaways>

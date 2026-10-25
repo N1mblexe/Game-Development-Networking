@@ -1,0 +1,333 @@
+---
+title: Unity Gaming Services - Relay, Lobby and Sessions
+order: 13
+summary: Let players connect over the internet without port forwarding, using Unity Relay and Lobby directly or through the Multiplayer Services Sessions API, and compare the approach with Steam.
+durationMin: 25
+objectives:
+  - Explain what Relay, Lobby and Sessions each solve, and how they relate in the Multiplayer Services package
+  - Host and join through Unity Relay with join codes and UnityTransport.SetRelayServerData
+  - Create and join a session with the Sessions API, and let it start NGO for you
+  - Compare Unity Gaming Services with Steam's lobbies and relay network for your project
+prerequisites: [ngo/network-manager, ngo/connection-and-scenes, ngo/distributed-authority, theory/nat-and-relays]
+tags: [ngo, relay, lobby, sessions, services, steam]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+    - { name: com.unity.services.multiplayer, version: '2.4.1' }
+    - { name: com.unity.transport, version: '2.7.4' }
+sources:
+  - title: 'Unity Relay: Use Relay with Netcode for GameObjects'
+    url: https://docs.unity.com/en-us/relay/relay-and-ngo
+  - title: 'Multiplayer Services SDK: Create a session'
+    url: https://docs.unity.com/en-us/mps-sdk/create-session
+  - title: 'Multiplayer Services SDK: Join a session'
+    url: https://docs.unity.com/en-us/mps-sdk/join-session
+  - title: 'Multiplayer Services SDK: Network connection management'
+    url: https://docs.unity.com/en-us/mps-sdk/manage-session-network-connection
+  - title: 'Unity Lobby: Heartbeat a lobby'
+    url: https://docs.unity.com/en-us/lobby/heartbeat-a-lobby
+  - title: 'Multiplayer Services 2.4 API: SessionOptions'
+    url: https://docs.unity3d.com/Packages/com.unity.services.multiplayer@2.4/api/Unity.Services.Multiplayer.SessionOptions.html
+  - title: 'Multiplayer Services 2.4 API: ISession'
+    url: https://docs.unity3d.com/Packages/com.unity.services.multiplayer@2.4/api/Unity.Services.Multiplayer.ISession.html
+  - title: 'NGO 2.13 API: UnityTransport (SetRelayServerData)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Transports.UTP.UnityTransport.html
+  - title: 'Multiplayer Services 2.4.1 package source: NetworkManagerSession.cs (starts NGO, Shutdown warning)'
+    url: https://packages.unity.com/com.unity.services.multiplayer
+  - title: 'Steamworks: Steam Datagram Relay'
+    url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
+  - title: 'Steamworks: Matchmaking and lobbies'
+    url: https://partner.steamgames.com/doc/features/multiplayer/matchmaking
+---
+
+Lesson 2 connected players by typing an IP address, and its firewall pitfall already hinted at the problem: over the
+internet, the host is almost always behind a home router doing <Term id="nat">NAT</Term>, so a friend's connection
+attempt never reaches it. Theory explained the fix in [NAT and relays](../../theory/nat-and-relays/): instead of
+connecting to each other, both sides connect **out** to a public <Term id="relay">relay</Term> server that forwards
+their traffic. This lesson covers Unity's hosted version of that, <Term id="unity-relay">Unity Relay</Term>, the
+<Term id="unity-lobby">Unity Lobby</Term> service for finding a game, and the
+<Term id="multiplayer-services-sessions">Sessions API</Term> that wraps both, and then compares them with what Steam
+gives you for free if you ship there.
+
+## The pieces
+
+| Service | Solves | You get |
+|---|---|---|
+| **Authentication** | Every UGS call needs a player identity | An anonymous (or platform-linked) player id |
+| **Relay** | NAT: players can't reach the host directly | An allocation on a relay server and a short **join code** |
+| **Lobby** | Finding and gathering players before a match | Rooms with a name, capacity, privacy, password and custom data |
+| **Sessions** | Doing all of the above together | One object: create, list, join and leave, with networking started for you |
+
+In Unity 6, all of them ship in one package, **Multiplayer Services** (`com.unity.services.multiplayer`). The Relay docs
+note that it replaces the standalone Relay package, which is deprecated in Unity 6. You already met sessions in lesson 11,
+where `WithDistributedAuthorityNetwork()` picked the distributed authority service. With `WithRelayNetwork()` the same
+API gives you a classic NGO host behind Relay.
+
+<Diagram name="topology" variant="relay" caption="A relayed listen server: the host and every client connect out to the relay, which forwards packets. Nobody needs an open port." />
+
+What you should notice:
+
+- The host is still the NGO **server**. Everything from lessons 2 to 10 (approval, scenes, RPCs, anticipation) works
+  unchanged. Only the transport's destination changes.
+- Every packet takes a detour through the relay, so latency is usually a little higher than a direct connection, but
+  it works through almost any NAT.
+- Player IP addresses are never exchanged with each other, which also protects the host from being targeted directly.
+
+## Relay directly
+
+Use Relay on its own when you already have your own way of sharing a code, such as a party system or voice chat. Set the
+Unity Transport component's **Protocol Type** to **Relay Unity Transport**, then:
+
+```csharp title="ArenaRelay.cs"
+using System.Threading.Tasks;
+using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
+using Unity.Services.Authentication;
+using Unity.Services.Core;
+using Unity.Services.Relay;
+using Unity.Services.Relay.Models;
+using UnityEngine;
+
+/// On the NetworkManager GameObject. Replaces the direct-IP Host/Join from ArenaConnection.
+public class ArenaRelay : MonoBehaviour
+{
+    const string k_ConnectionType = "dtls"; // "udp", "dtls" (encrypted) or "wss" (web builds)
+
+    static async Task SignInAsync()
+    {
+        if (UnityServices.State != ServicesInitializationState.Initialized)
+            await UnityServices.InitializeAsync();
+        if (!AuthenticationService.Instance.IsSignedIn)
+            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+    }
+
+    /// Host: returns the join code to show on screen, or null on failure.
+    public async Task<string> HostAsync(int maxClients = 3)
+    {
+        await SignInAsync();
+
+        // maxConnections excludes the host itself.
+        Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxClients);
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        transport.SetRelayServerData(allocation.ToRelayServerData(k_ConnectionType));
+
+        string joinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+        return NetworkManager.Singleton.StartHost() ? joinCode : null;
+    }
+
+    /// Client: joins the host's allocation using the code the player typed.
+    public async Task<bool> JoinAsync(string joinCode)
+    {
+        if (string.IsNullOrWhiteSpace(joinCode)) return false;
+        await SignInAsync();
+
+        JoinAllocation allocation = await RelayService.Instance.JoinAllocationAsync(joinCode.Trim());
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        transport.SetRelayServerData(allocation.ToRelayServerData(k_ConnectionType));
+
+        return NetworkManager.Singleton.StartClient();
+    }
+}
+```
+
+`ToRelayServerData` is an extension method from the Multiplayer Services package (in `AllocationUtils`) that turns an
+allocation into the `RelayServerData` Unity Transport expects. Lesson 8's connection approval, `MatchFlow` and
+`MatchAnnouncer` all run on top of this unchanged.
+
+<Callout type="pitfall" title="SetConnectionData after SetRelayServerData">
+
+Lesson 2's `ArenaConnection.Host()` calls `SetConnectionData("127.0.0.1", …)`. If that code still runs after you've set
+the relay data, the transport goes back to a direct connection and joins fail with timeouts. Use one connection path
+per start: either `SetConnectionData` for LAN, or `SetRelayServerData` for Relay.
+
+</Callout>
+
+## Lobby directly
+
+A join code is fine for friends on voice chat. To let strangers find a game, you need a list of open rooms. That's
+Lobby: the host creates a lobby with a name, a capacity and custom data, and players query, quick-join or join by
+code. A common pattern is storing the Relay join code in the lobby data, visible only to members:
+
+```csharp title="ArenaLobby.cs"
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Unity.Services.Lobbies;
+using Unity.Services.Lobbies.Models;
+using UnityEngine;
+
+public class ArenaLobby : MonoBehaviour
+{
+    const string k_RelayCodeKey = "relayCode";
+    Lobby m_Lobby;
+    float m_NextHeartbeat;
+
+    public async Task CreateAsync(string relayJoinCode)
+    {
+        var options = new CreateLobbyOptions
+        {
+            IsPrivate = false,
+            Data = new Dictionary<string, DataObject>
+            {
+                // Member visibility: only players inside the lobby can read the join code.
+                [k_RelayCodeKey] = new DataObject(DataObject.VisibilityOptions.Member, relayJoinCode),
+            },
+        };
+        m_Lobby = await LobbyService.Instance.CreateLobbyAsync("Arena", maxPlayers: 4, options);
+    }
+
+    public async Task<string> QuickJoinAsync()
+    {
+        m_Lobby = await LobbyService.Instance.QuickJoinLobbyAsync();
+        return m_Lobby.Data[k_RelayCodeKey].Value; // pass this to ArenaRelay.JoinAsync
+    }
+
+    async void Update()
+    {
+        // The host must keep its lobby alive: without updates or heartbeats it becomes inactive after 30 s by default.
+        if (m_Lobby == null || m_Lobby.HostId != Unity.Services.Authentication.AuthenticationService.Instance.PlayerId) return;
+        if (Time.realtimeSinceStartup < m_NextHeartbeat) return;
+        m_NextHeartbeat = Time.realtimeSinceStartup + 15f;
+        await LobbyService.Instance.SendHeartbeatPingAsync(m_Lobby.Id);
+    }
+}
+```
+
+Doing Lobby and Relay by hand means you also own the bookkeeping: heartbeats, deleting the lobby when the match starts
+or the host leaves, removing players who disconnect, and keeping the lobby and the NGO session in agreement. That
+bookkeeping is exactly what sessions take over.
+
+## Sessions: the recommended path
+
+A session is a lobby, a network connection and the NGO start call in one object. When you create a session with
+`WithRelayNetwork()`, the package allocates Relay, configures Unity Transport and calls `StartHost()` for you. When a
+player joins by code, it calls `StartClient()`. It also keeps the underlying lobby alive, so you don't send heartbeats.
+
+```csharp title="ArenaSessions.cs"
+using System.Threading.Tasks;
+using Unity.Services.Authentication;
+using Unity.Services.Core;
+using Unity.Services.Multiplayer;
+using UnityEngine;
+
+/// On the NetworkManager GameObject in Bootstrap. The NetworkManager uses UnityTransport.
+public class ArenaSessions : MonoBehaviour
+{
+    ISession m_Session;
+    public string JoinCode => m_Session?.Code;
+
+    static async Task SignInAsync()
+    {
+        if (UnityServices.State != ServicesInitializationState.Initialized)
+            await UnityServices.InitializeAsync();
+        if (!AuthenticationService.Instance.IsSignedIn)
+            await AuthenticationService.Instance.SignInAnonymouslyAsync();
+    }
+
+    public async Task HostAsync()
+    {
+        await SignInAsync();
+        var options = new SessionOptions
+        {
+            Name = "Arena",
+            MaxPlayers = 4,      // includes the host
+            IsPrivate = true,    // join by code only; hidden from QuerySessionsAsync
+        }.WithRelayNetwork();
+
+        m_Session = await MultiplayerService.Instance.CreateSessionAsync(options);
+        Debug.Log($"Hosting session {m_Session.Id}, code {m_Session.Code}"); // NGO host is already starting
+    }
+
+    public async Task JoinAsync(string code)
+    {
+        await SignInAsync();
+        m_Session = await MultiplayerService.Instance.JoinSessionByCodeAsync(code.Trim());
+        m_Session.PlayerJoined += playerId => Debug.Log($"{playerId} joined the session");
+    }
+
+    public async Task LeaveAsync()
+    {
+        if (m_Session == null) return;
+        await m_Session.LeaveAsync(); // also shuts the NGO connection down
+        m_Session = null;
+    }
+}
+```
+
+<Sequence
+  title="Hosting and joining through a Relay session"
+  actors={[
+    { id: 'h', label: 'Host', kind: 'host' },
+    { id: 'u', label: 'Unity services (Lobby + Relay)', kind: 'relay' },
+    { id: 'c', label: 'Client', kind: 'client' },
+  ]}
+  steps={[
+    { from: 'h', to: 'u', label: 'Sign in, create session (Relay)', kind: 'reliable' },
+    { from: 'u', to: 'h', label: 'Session + Relay allocation + join code "K7QX2P"', note: 'The package sets the relay data and calls StartHost().', kind: 'reliable' },
+    { from: 'h', to: 'c', label: 'Share the code (UI, chat, voice)', kind: 'event' },
+    { from: 'c', to: 'u', label: 'Sign in, JoinSessionByCodeAsync("K7QX2P")', kind: 'reliable' },
+    { from: 'u', to: 'c', label: 'Session + relay join data', note: 'The package calls StartClient().', kind: 'reliable' },
+    { from: 'c', to: 'h', label: 'NGO connection request, through the relay', note: 'Approval, synchronization and spawning work exactly as in lesson 8.', kind: 'reliable' },
+  ]}
+/>
+
+Other entry points on `MultiplayerService.Instance`: `QuerySessionsAsync` lists public sessions for a browser,
+`JoinSessionByIdAsync` joins one from that list, `CreateOrJoinSessionAsync(id, options)` avoids duplicates when several
+players race for the same id (lesson 11 used it), and `MatchmakeSessionAsync` joins through Unity's matchmaker.
+`SessionOptions.Password` (8 to 64 characters) protects a session, and `SessionProperties` holds up to 20 custom values,
+such as the map name.
+
+## Unity services or Steam?
+
+If you ship on Steam, its Steamworks API covers the same ground, which the Steam modules of this course teach in depth.
+
+| | Unity Gaming Services | Steam (Steamworks) |
+|---|---|---|
+| Identity | UGS player id (anonymous or linked accounts) | The player's Steam account |
+| Finding games | Lobby / Sessions, with queries and quick join | Steam lobbies (`ISteamMatchmaking`) with metadata and search filters, up to 250 members |
+| Friends and invites | Your own UI, codes | Steam friends, overlay invite dialog, "join game" from the friends list |
+| NAT traversal | Unity Relay | Steam Datagram Relay through `ISteamNetworkingSockets`, which also hides IP addresses |
+| Platforms | Any platform Unity builds for | Steam users. SDR for other stores requires extra arrangements with Valve |
+| NGO integration | Built in: UnityTransport + Multiplayer Services | A community transport (the Facepunch transport), covered in the NGO + Steam module |
+| Cost | Usage-based, with a free tier | Included with a Steam release |
+
+The rule of thumb: **Steam-only PC game?** Use Steam lobbies and its relay, and players get friends and invites for free.
+**Cross-platform, console or mobile?** Use Unity's services (or another platform-agnostic backend), because Steam
+features only exist for Steam users. Some games use both: Steam for friends and invites on PC, and Unity Relay underneath
+so cross-play works.
+
+<Callout type="pitfall" title="Every MPPM instance signs in as the same player">
+
+Anonymous sign-in caches a player per machine profile. Several Multiplayer Play Mode instances on one machine can end
+up with the same player id, so the second one "joins" as the first and the session sees one player. The NGO distributed
+authority quickstart avoids this by giving each instance its own profile with `SwitchProfile(name)` on `AuthenticationService.Instance`
+before signing in. Use the instance's MPPM tag (lesson 12) as the profile name.
+
+</Callout>
+
+<Callout type="pitfall" title="Calling Shutdown on a session's NetworkManager">
+
+Lesson 2's **Leave** button calls `NetworkManager.Shutdown()`. With sessions, the package owns the NetworkManager's
+lifetime: shutting it down behind the session's back makes the package log a warning ("Do not call
+NetworkManager.Shutdown when using a session. Use ISession.LeaveAsync instead.") and leaves the session in an
+inconsistent state. Leave with `ISession.LeaveAsync()`, which stops the network for you.
+
+</Callout>
+
+<Callout type="pitfall" title="Forgetting the lobby when you go direct">
+
+With raw Lobby, a host that crashes leaves a lobby behind until it times out, and a host that forgets heartbeats has
+its lobby go inactive after 30 seconds by default, so nobody can find it. Heartbeat every 15 seconds or so, delete the
+lobby when it's no longer needed, or use sessions, which handle both.
+
+</Callout>
+
+<KeyTakeaways>
+
+- **Relay** solves NAT: host and clients connect out to a relay, using a short join code and `UnityTransport.SetRelayServerData`. The host is still the NGO server.
+- **Lobby** lets players find each other. Raw Lobby means you own heartbeats, cleanup and keeping the lobby in sync with NGO.
+- **Sessions** (Multiplayer Services package) combine both, start NGO for you, and are the recommended path in Unity 6.
+- `WithRelayNetwork()` gives a relayed host, `WithDistributedAuthorityNetwork()` the DA service: same API, different topology.
+- Steam offers lobbies, invites and a relay for Steam users. Unity's services work everywhere. Choose by platform, or combine them.
+
+</KeyTakeaways>

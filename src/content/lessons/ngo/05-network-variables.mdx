@@ -1,0 +1,387 @@
+---
+title: NetworkVariables
+order: 5
+summary: Replicate persistent state with NetworkVariable and NetworkList, choose read and write permissions, and react to changes with OnValueChanged.
+durationMin: 30
+objectives:
+  - Decide when a value should be a NetworkVariable rather than an RPC
+  - Declare NetworkVariables with the right read and write permissions
+  - React to changes with OnValueChanged, including for late-joining clients
+  - Replicate lists with NetworkList and strings with FixedString types
+  - Explain why NetworkVariables are eventually consistent and how that affects game logic
+prerequisites: [ngo/network-behaviour, theory/state-sync]
+tags: [ngo, networkvariable, state]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: NetworkVariables'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/networkvariable.html
+  - title: 'NGO 2.13 manual: RPC vs NetworkVariable'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/learn/rpcvnetvar.html
+  - title: 'NGO 2.13 manual: NetworkBehaviour synchronization (dirty NetworkVariable processing)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkbehaviour-synchronize.html
+  - title: 'NGO 2.13 API: NetworkVariable<T>'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkVariable-1.html
+  - title: 'NGO 2.13 API: NetworkList<T>'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkList-1.html
+  - title: 'NGO 2.13 API: NetworkVariableUpdateTraits'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkVariableUpdateTraits.html
+  - title: 'NGO source: NetworkVariable.cs (Value setter)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/develop-2.0.0/com.unity.netcode.gameobjects/Runtime/NetworkVariable/NetworkVariable.cs
+---
+
+Ask a single question about every piece of data in your game: **"Should a player who joins mid-match know this?"**
+A player's health, the score, whether a door is open: yes. The fact that someone fired a shot two seconds ago: no.
+The first kind is **state**, and in NGO, state lives in a <Term id="network-variable">NetworkVariable</Term>. It's the
+NGO version of the [state synchronization](../../theory/state-sync/) you met in theory: the authority holds the true value,
+and NGO keeps every client's copy up to date, including clients that connect later.
+
+## How a NetworkVariable travels
+
+A NetworkVariable wraps a value of some type. You read and write it through `.Value`. When the authority changes
+`.Value`, NGO marks the variable **dirty**. At the end of the frame, it collects dirty variables and sends their new
+values to every client allowed to read them. Clients apply the value and invoke `OnValueChanged`.
+
+<Diagram name="ngo-netvar-flow" caption="The server writes Value, the variable is marked dirty, NGO sends a delta to readers, and each client applies it and raises OnValueChanged." />
+
+What you should notice:
+
+- You never "send" a NetworkVariable. You change the value and NGO decides when and to whom to send it.
+- Only the **latest** value is sent. If you change health from 50 to 40 to 30 in one frame, clients see 50 then 30.
+  NetworkVariables are **eventually consistent**: they guarantee the final state, not every intermediate step.
+- When a client joins or the object spawns, the **full** current value goes inside the spawn data, and after that NGO
+  sends only changes. That's [delta compression](../../theory/state-sync/) applied for you.
+
+## Declaring one
+
+```csharp title="DoorState.cs"
+using Unity.Netcode;
+
+public class DoorState : NetworkBehaviour
+{
+    // Default permissions: everyone reads, the server writes.
+    public NetworkVariable<bool> IsOpen = new NetworkVariable<bool>();
+
+    // Explicit permissions and an initial value.
+    public NetworkVariable<int> Uses = new NetworkVariable<int>(
+        0,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+}
+```
+
+The rules:
+
+- Declare it as a field of a `NetworkBehaviour` and initialize it at the declaration or in `Awake`.
+- Only set `.Value` while the object is spawned, or during that initialization. The docs specifically warn against
+  setting it on an unspawned object.
+- The constructor is `NetworkVariable(T value = default, readPerm = Everyone, writePerm = Server)`.
+
+### Supported types
+
+Out of the box, a NetworkVariable can hold C# primitives (`int`, `float`, `bool`, `ulong`, …), Unity value types
+(`Vector3`, `Quaternion`, `Color`, …), enums, Unity fixed strings such as `FixedString64Bytes`, and any type that
+implements `INetworkSerializable` or `INetworkSerializeByMemcpy` (custom serialization is lesson 9).
+
+`string` is **not** supported directly, because every update would allocate a new string. Use a fixed string type
+from `Unity.Collections`. Only the used bytes are sent, not the full capacity.
+
+## Permissions
+
+| | Read: **Everyone** (default) | Read: **Owner** |
+|---|---|---|
+| **Write: Server** (default) | Health, score, door state | A secret objective only that player may see |
+| **Write: Owner** | Cosmetic choice, display name | Owner-only settings the server should also know |
+
+"Owner" read means the owner **and the server** can read it. Server-write is the default for a reason: it's
+[server-authoritative](../../theory/authority-models/), so a modified client can't simply set its own health to 1000.
+
+<Callout type="pitfall" title="Writing without permission">
+
+A client that sets `.Value` on a server-write NetworkVariable doesn't change anything. NGO's setter logs a write-permission
+error and returns, and the value stays as it was. The fix is never "give clients write permission" for gameplay values.
+The client sends an RPC asking the server to make the change (next lesson), and the server validates it.
+
+</Callout>
+
+## Reacting to changes
+
+`OnValueChanged` is a delegate with `(previous, current)` parameters. Subscribe in `OnNetworkSpawn`, unsubscribe in
+`OnNetworkDespawn`, and **also apply the current value once in `OnNetworkSpawn`**: a late joiner already has the value
+when it spawns, and that initial value doesn't raise `OnValueChanged` for a subscriber that wasn't there yet.
+
+Here's the arena's health component. Put it on `PlayerAvatar`.
+
+```csharp title="PlayerHealth.cs"
+using System.Collections;
+using Unity.Netcode;
+using UnityEngine;
+
+public class PlayerHealth : NetworkBehaviour
+{
+    public const int MaxHealth = 100;
+
+    // Server writes, everyone reads: health is gameplay-critical.
+    public NetworkVariable<int> Health = new NetworkVariable<int>(MaxHealth);
+
+    [SerializeField] Transform m_HealthBarFill; // a child quad scaled on X
+    [SerializeField] float m_RespawnDelay = 2f;
+
+    public bool IsDead => Health.Value <= 0;
+
+    public override void OnNetworkSpawn()
+    {
+        Health.OnValueChanged += OnHealthChanged;
+        ApplyHealth(Health.Value); // late joiners: show the value we spawned with
+        base.OnNetworkSpawn();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        Health.OnValueChanged -= OnHealthChanged;
+        base.OnNetworkDespawn();
+    }
+
+    void OnHealthChanged(int previous, int current) => ApplyHealth(current);
+
+    void ApplyHealth(int value)
+    {
+        var scale = m_HealthBarFill.localScale;
+        scale.x = Mathf.Clamp01(value / (float)MaxHealth);
+        m_HealthBarFill.localScale = scale;
+    }
+
+    // ---- Server-only API, called by pickups and projectiles ----
+
+    public void Heal(int amount)
+    {
+        if (!IsServer || IsDead) return;
+        Health.Value = Mathf.Min(MaxHealth, Health.Value + amount);
+    }
+
+    public void ApplyDamage(int amount, ulong attackerClientId)
+    {
+        if (!IsServer || IsDead) return;
+
+        Health.Value = Mathf.Max(0, Health.Value - amount);
+        if (IsDead)
+        {
+            Scoreboard.Instance?.AddKill(attackerClientId);
+            StartCoroutine(RespawnAfterDelay());
+        }
+    }
+
+    IEnumerator RespawnAfterDelay()
+    {
+        // Wait before resetting so clients actually receive the "0" state.
+        yield return new WaitForSeconds(m_RespawnDelay);
+        Health.Value = MaxHealth;
+    }
+}
+```
+
+Now the pickup from lesson 3 can heal. Replace its `Debug.Log` line with:
+
+```csharp title="HealthPickup.cs"
+if (player.TryGetComponent(out PlayerHealth health)) health.Heal(25);
+```
+
+<Callout type="pitfall" title="State that changes back within one tick">
+
+If `ApplyDamage` reset health to 100 immediately after reaching 0, clients would never see 0: both writes happen before
+the end-of-frame send, so only 100 goes out. Remember that NetworkVariables sync **state, not history**. If clients need
+to see that something *happened* (a death animation or a kill-feed line), send an event as an RPC, or keep the state long
+enough to be sent, as the respawn delay does here.
+
+</Callout>
+
+On the machine that writes the value, `OnValueChanged` also fires locally right away, so the server-side handler runs
+too. That's handy for a host, which is also a client.
+
+## Owner-written values: the display name
+
+A player's chosen name is set by that player, so give the owner write permission. Use a fixed string, not `string`.
+
+```csharp title="PlayerName.cs"
+using Unity.Collections;
+using Unity.Netcode;
+using UnityEngine;
+
+public class PlayerName : NetworkBehaviour
+{
+    public NetworkVariable<FixedString32Bytes> DisplayName = new NetworkVariable<FixedString32Bytes>(
+        default,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Owner);
+
+    public override void OnNetworkSpawn()
+    {
+        if (IsOwner)
+        {
+            // FixedString32Bytes holds up to 29 bytes of UTF-8. Longer input throws, so trim first.
+            string chosen = PlayerPrefs.GetString("name", $"Player {OwnerClientId}");
+            if (chosen.Length > 20) chosen = chosen.Substring(0, 20);
+            DisplayName.Value = chosen;
+        }
+        base.OnNetworkSpawn();
+    }
+}
+```
+
+Owner write is fine here because a name is cosmetic. The server can still read and moderate it.
+
+## Lists: NetworkList and the scoreboard
+
+For collections, use `NetworkList`. It sends **per-element** changes (add, remove, set) instead of the whole list.
+Its element type must be an unmanaged struct that implements `IEquatable`, and for custom structs, also
+`INetworkSerializable`. Two rules from the docs: **create the list in `Awake`**, not at the declaration (that leaks
+native memory), and only modify it on a writer while spawned.
+
+Place a `Scoreboard` on an in-scene placed NetworkObject in the Arena scene.
+
+```csharp title="Scoreboard.cs"
+using System;
+using Unity.Collections;
+using Unity.Netcode;
+using UnityEngine;
+
+public struct ScoreEntry : INetworkSerializable, IEquatable<ScoreEntry>
+{
+    public ulong ClientId;
+    public int Kills;
+    public FixedString32Bytes Name;
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref ClientId);
+        serializer.SerializeValue(ref Kills);
+        serializer.SerializeValue(ref Name);
+    }
+
+    public bool Equals(ScoreEntry other) =>
+        ClientId == other.ClientId && Kills == other.Kills && Name.Equals(other.Name);
+}
+
+public class Scoreboard : NetworkBehaviour
+{
+    public static Scoreboard Instance { get; private set; }
+
+    NetworkList<ScoreEntry> m_Entries;
+
+    void Awake()
+    {
+        m_Entries = new NetworkList<ScoreEntry>(); // must be created in Awake
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        Instance = this;
+        m_Entries.OnListChanged += OnListChanged;
+
+        if (IsServer)
+        {
+            foreach (ulong id in NetworkManager.ConnectedClientsIds) AddEntry(id);
+            NetworkManager.OnConnectionEvent += OnConnectionEvent;
+        }
+        base.OnNetworkSpawn();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        m_Entries.OnListChanged -= OnListChanged;
+        if (IsServer) NetworkManager.OnConnectionEvent -= OnConnectionEvent;
+        if (Instance == this) Instance = null;
+        base.OnNetworkDespawn();
+    }
+
+    void OnConnectionEvent(NetworkManager manager, ConnectionEventData data)
+    {
+        if (data.EventType == ConnectionEvent.ClientConnected) AddEntry(data.ClientId);
+        else if (data.EventType == ConnectionEvent.ClientDisconnected) RemoveEntry(data.ClientId);
+    }
+
+    void AddEntry(ulong clientId)
+    {
+        if (IndexOf(clientId) >= 0) return;
+        m_Entries.Add(new ScoreEntry { ClientId = clientId, Name = $"Player {clientId}" });
+    }
+
+    void RemoveEntry(ulong clientId)
+    {
+        int index = IndexOf(clientId);
+        if (index >= 0) m_Entries.RemoveAt(index);
+    }
+
+    public void AddKill(ulong clientId) // server only
+    {
+        if (!IsServer) return;
+        int index = IndexOf(clientId);
+        if (index < 0) return;
+        var entry = m_Entries[index];
+        entry.Kills++;
+        m_Entries[index] = entry; // write the modified copy back: structs are values
+    }
+
+    int IndexOf(ulong clientId)
+    {
+        for (int i = 0; i < m_Entries.Count; i++)
+            if (m_Entries[i].ClientId == clientId) return i;
+        return -1;
+    }
+
+    void OnListChanged(NetworkListEvent<ScoreEntry> change)
+    {
+        // change.Type is Add, Insert, Remove, RemoveAt, Value, Clear or Full.
+        Debug.Log($"Scoreboard {change.Type} at {change.Index}: {change.Value.Name} = {change.Value.Kills}");
+    }
+
+    void OnGUI()
+    {
+        if (!IsSpawned) return;
+        GUILayout.BeginArea(new Rect(Screen.width - 210, 10, 200, 300));
+        foreach (var entry in m_Entries) GUILayout.Label($"{entry.Name}: {entry.Kills}");
+        GUILayout.EndArea();
+    }
+}
+```
+
+<Callout type="unity" title="Where everything goes">
+
+`PlayerAvatar` prefab: NetworkObject, `PlayerSetup`, `PlayerHealth`, `PlayerName`. The Arena scene: one empty GameObject
+with a NetworkObject and `Scoreboard`, and another with a NetworkObject and `PickupSpawner`. Scene objects need no prefab
+registration.
+
+</Callout>
+
+## Bandwidth controls
+
+- Plain C# collections inside a `NetworkVariable` are only noticed if you call `CheckDirtyState()` after changing
+  them, and that check walks the whole collection. Prefer `NetworkList`.
+- `SetUpdateTraits(new NetworkVariableUpdateTraits { MinSecondsBetweenUpdates = 0.1f })` limits how often a noisy
+  variable is sent, and `MaxSecondsBetweenUpdates` forces a periodic resend.
+- Changes are collected per object at the end of the frame, so changes to variables on **different** objects can arrive
+  in a different order than you made them. If order matters across objects, use RPCs.
+
+## NetworkVariable or RPC?
+
+| Question | NetworkVariable | RPC |
+|---|---|---|
+| Should a late joiner get it? | Yes | No |
+| Do you need every change, not just the latest? | No | Yes |
+| Must two values arrive together? | Not guaranteed | Put both in one RPC |
+| Example | Health, ammo, score, door open | "Fired", "explosion here", chat line |
+
+The docs' example: an explosion is an RPC (nobody joining later cares), but the **damage it causes** changes health,
+which is a NetworkVariable.
+
+<KeyTakeaways>
+
+- Use **NetworkVariables** for persistent state that late joiners need. Change `.Value` on the writer and NGO sends the latest value to readers.
+- Defaults are **everyone reads, server writes**. A client writing without permission just logs an error, so route requests through RPCs.
+- Subscribe to `OnValueChanged` in `OnNetworkSpawn` and apply the current value there too, for late joiners.
+- Use `FixedString…` types instead of `string`, and `NetworkList` (created in `Awake`) for per-element list sync.
+- NetworkVariables are eventually consistent: intermediate values within a tick are lost, and ordering across objects isn't guaranteed.
+
+</KeyTakeaways>

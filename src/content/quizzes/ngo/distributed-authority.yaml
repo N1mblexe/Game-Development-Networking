@@ -1,0 +1,72 @@
+passPct: 70
+questions:
+  - id: isserver-port
+    type: codeline
+    prompt: After switching to distributed authority, pickups never respawn. Click the line that stops this spawner from ever running.
+    code: |-
+      public override void OnNetworkSpawn()
+      {
+          if (!IsServer) { enabled = false; return; }
+          for (int i = 0; i < m_SpawnPoints.Length; i++) SpawnAt(i);
+          base.OnNetworkSpawn();
+      }
+    answerLines: [3]
+    explanation: >-
+      A distributed-authority session has no server, so `IsServer` is false on every client. Flag the spawner's
+      NetworkObject as `SessionOwner` and check `HasAuthority`, which is the server in client-server and the session owner here.
+  - id: ownership-flags
+    type: single
+    prompt: A match timer must always belong to whichever client currently manages global state, even after that client leaves. Which OwnershipStatus fits?
+    options:
+      - None
+      - Distributable
+      - Transferable
+      - SessionOwner
+    answer: 3
+    explanation: >-
+      `SessionOwner` objects are always owned by the current session owner and move to the newly promoted session owner
+      automatically. `Distributable` objects are spread across all clients instead.
+  - id: what-changes
+    type: multi
+    prompt: Which statements about a distributed-authority session are true? Select all that apply.
+    options:
+      - A NetworkVariable declared with Server write permission can be written by the object's owner
+      - Connection approval callbacks still run on the session owner
+      - An RPC declared with SendTo.Server is routed to the object's owner
+      - NetworkTransform is forced to owner authority
+      - Any client may load scenes for everyone
+    answers: [0, 2, 3]
+    explanation: >-
+      With no server, NGO treats Server write permission as Owner, routes `SendTo.Server` to the owner, and forces owner
+      authority on NetworkTransform. Connection approval isn't supported, and only the session owner loads scenes.
+  - id: request-flow
+    type: order
+    prompt: Put the steps of a RequestRequired ownership request in order.
+    items:
+      - Client B calls NetworkObject.RequestOwnership() and gets RequestSent
+      - The request reaches the current owner, client A
+      - Client A's OnOwnershipRequested returns true
+      - Client B's OnOwnershipRequestResponse receives Approved
+      - Client B now owns the object, and OnOwnershipChanged runs on every instance
+    explanation: >-
+      `RequestOwnership` only sends the request. The current owner decides in `OnOwnershipRequested` (auto-approved when
+      you don't assign it), and the requester learns the outcome in `OnOwnershipRequestResponse`.
+  - id: when-da
+    type: truefalse
+    prompt: Distributed authority is the best choice for a ranked competitive shooter because it removes the server round trip for every player.
+    answer: false
+    explanation: >-
+      Each client is trusted with the objects it owns, so cheating is easier, and the docs say it's typically unsuitable for
+      games that need an accurate prediction model. It suits co-op and casual games. Keep competitive games server-authoritative.
+  - id: rpc-target
+    type: single
+    prompt: Which RPC target keeps a "fire" request working unchanged in both client-server and distributed authority?
+    options:
+      - SendTo.Server
+      - SendTo.Authority
+      - SendTo.NotMe
+      - SendTo.ClientsAndHost
+    answer: 1
+    explanation: >-
+      `SendTo.Authority` targets the object's authority: the server in client-server, the owner in distributed authority.
+      Pair it with `HasAuthority` checks in the method body.

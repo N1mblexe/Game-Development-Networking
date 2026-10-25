@@ -1,0 +1,76 @@
+passPct: 70
+questions:
+  - id: join-order
+    type: order
+    prompt: Put the steps of a client joining an approval-enabled server in order.
+    items:
+      - The client sends a connection request with its ConnectionData payload
+      - The server runs ConnectionApprovalCallback and approves the client
+      - The server sends the Synchronize scene event
+      - The client loads the scenes and spawns the existing NetworkObjects
+      - The client sends SynchronizeComplete
+      - The server raises OnConnectionEvent with ClientConnected
+    explanation: >-
+      Approval comes first, so a rejected client never loads anything. The server treats the client as connected only
+      after it has finished synchronizing, which is when `ClientConnected` fires there.
+  - id: reject-no-reason
+    type: codeline
+    prompt: Rejected players only see "Disconnected", never why. Which line should set something else?
+    code: |-
+      void ApprovalCheck(NetworkManager.ConnectionApprovalRequest request,
+                         NetworkManager.ConnectionApprovalResponse response)
+      {
+          bool full = NetworkManager.Singleton.ConnectedClientsIds.Count >= 4;
+          response.Approved = !full;
+          response.CreatePlayerObject = !full;
+          if (full) Debug.Log("Rejected: the room is full.");
+      }
+    answerLines: [7]
+    explanation: >-
+      The reason is only logged on the server. Setting `response.Reason = "The room is full."` sends it to the rejected
+      client, where it appears in `NetworkManager.DisconnectReason`.
+  - id: unity-scenemanager
+    type: codeline
+    prompt: The host clicks Start match. The host enters the arena, but connected clients stay in the lobby. Click the buggy line.
+    code: |-
+      public void StartMatch()
+      {
+          if (!NetworkManager.Singleton.IsServer) return;
+          UnityEngine.SceneManagement.SceneManager.LoadScene("Arena");
+      }
+    answerLines: [4]
+    explanation: >-
+      Unity's SceneManager loads the scene only on the local machine. Use
+      `NetworkManager.Singleton.SceneManager.LoadScene("Arena", LoadSceneMode.Single)` so NGO loads it on every client.
+  - id: payload-secret
+    type: truefalse
+    prompt: NGO encrypts the connection approval payload, so it's safe to send a reusable account password in it.
+    answer: false
+    explanation: >-
+      The docs say NGO doesn't encrypt or authenticate anything sent during connection approval. Treat the payload as
+      untrusted input, and use short-lived tickets verified with their issuer for real authentication.
+  - id: survives-single-load
+    type: multi
+    prompt: The server loads the Lobby with LoadSceneMode.Single while in the Arena. Which objects still exist afterwards? Select all that apply.
+    options:
+      - Player objects
+      - Pickups spawned with destroyWithScene set to true
+      - A dynamically spawned projectile spawned with the default settings
+      - The Arena's in-scene placed Scoreboard
+    answers: [0, 2]
+    explanation: >-
+      Dynamically spawned objects with `DestroyWithScene` set to false (the default, including player objects) are moved to
+      DontDestroyOnLoad during the load and then into the new scene. Objects spawned with `destroyWithScene: true` are
+      despawned, and in-scene placed objects belong to the scene that's being unloaded.
+  - id: when-to-act
+    type: single
+    prompt: After the server starts loading the Arena, when is it safe to position every player and start the match?
+    options:
+      - Right after LoadScene returns Started
+      - In Unity's SceneManager.sceneLoaded callback on the server
+      - When OnLoadEventCompleted fires, using its list of clients that completed
+      - In each player's Start method
+    answer: 2
+    explanation: >-
+      `LoadEventCompleted` fires once the server and every client have finished loading, or timed out. Unity's `sceneLoaded`
+      fires before NGO finishes processing, and a `Started` status only means the event began.

@@ -1,0 +1,409 @@
+title: Unity Netcode for GameObjects — Module Exam
+drawCount: 15
+passPct: 80
+questions:
+  # ---- setup
+  - id: ex-transport-layer
+    type: single
+    prompt: Which layer actually sends NGO's packets, with reliable and unreliable pipelines and fragmentation?
+    options:
+      - The NetworkManager
+      - Unity Transport
+      - Multiplayer Play Mode
+      - The NetworkSceneManager
+    answer: 1
+    explanation: >-
+      NGO is the high-level library (spawning, state, RPCs). Unity Transport is the transport underneath it that moves the
+      bytes over UDP and implements the delivery pipelines.
+    tags: [setup]
+  - id: ex-build-list
+    type: truefalse
+    prompt: With Enable Scene Management on, a client can join and load a networked scene that isn't in its build's scene list, as long as the server has it.
+    answer: false
+    explanation: >-
+      The server tells the client which scene to load by name, and the client can only load scenes that are in its own build
+      list. Synchronization fails otherwise.
+    tags: [setup]
+  - id: ex-mppm-limit
+    type: numeric
+    prompt: With Multiplayer Play Mode, how many Editor players can you run at once, counting the main Editor?
+    answer: 4
+    tolerance: 0
+    unit: players
+    explanation: >-
+      MPPM supports the main Editor plus up to three additional Editor instances. Local builds can be added on top of that.
+    tags: [setup]
+  # ---- network-manager
+  - id: ex-listen-address
+    type: fill
+    prompt: Which listen address makes a server accept connections on every network interface of the machine?
+    answers: ['0.0.0.0']
+    placeholder: e.g. 127.0.0.1
+    explanation: >-
+      `"0.0.0.0"` means every interface. Listening on `127.0.0.1` only accepts connections from the same machine.
+    tags: [network-manager]
+  - id: ex-disconnect-reason
+    type: single
+    prompt: A client was kicked with DisconnectClient(id, "AFK"). Where does the client read "AFK"?
+    options:
+      - In the ConnectionApprovalResponse
+      - In NetworkManager.DisconnectReason, for example inside OnClientStopped
+      - In an automatic RPC called KickedRpc
+      - Nowhere, because reasons are only logged on the server
+    answer: 1
+    explanation: >-
+      The server sends the reason with the disconnect, and NGO stores it in `NetworkManager.DisconnectReason` on the client.
+    tags: [network-manager]
+  # ---- network-objects
+  - id: ex-spawn-owner-default
+    type: single
+    prompt: In client-server, who owns an object the server creates with plain Spawn()?
+    options:
+      - The client closest to it
+      - The server
+      - The first connected client
+      - Nobody until ChangeOwnership is called
+    answer: 1
+    explanation: >-
+      Objects spawned with `Spawn()` are owned by the server. Use `SpawnWithOwnership` or `ChangeOwnership` to give one to a client.
+    tags: [network-objects]
+  - id: ex-pooling
+    type: single
+    prompt: Which NGO feature lets you pool short-lived projectiles instead of instantiating and destroying them?
+    options:
+      - NetworkManager.PrefabHandler with an INetworkPrefabInstanceHandler
+      - NetworkObject.DontDestroyWithOwner
+      - The Network Prefabs List
+      - NetworkHide and NetworkShow
+    answer: 0
+    explanation: >-
+      `PrefabHandler` lets you register an `INetworkPrefabInstanceHandler` that supplies and takes back instances for a prefab.
+    tags: [network-objects]
+  # ---- network-behaviour
+  - id: ex-session-synchronized
+    type: single
+    prompt: Which callback runs on a joining client once it has loaded all scenes and spawned every object, and never on the server?
+    options:
+      - OnNetworkPostSpawn
+      - OnNetworkSessionSynchronized
+      - OnInSceneObjectsSpawned
+      - OnGainedOwnership
+    answer: 1
+    explanation: >-
+      `OnNetworkSessionSynchronized` runs on a late-joining client after synchronization is complete. It isn't invoked on the
+      server or host.
+    tags: [network-behaviour]
+  - id: ex-owner-only-components
+    type: codeline
+    prompt: Every player's camera follows the most recently spawned avatar. Click the buggy line.
+    code: |-
+      public override void OnNetworkSpawn()
+      {
+          ApplyOwnership();
+          CameraFollow.Target = transform;
+          base.OnNetworkSpawn();
+      }
+    answerLines: [4]
+    explanation: >-
+      `OnNetworkSpawn` runs for every player object on every machine. Only the local player should take the camera:
+      `if (IsLocalPlayer) CameraFollow.Target = transform;`.
+    tags: [network-behaviour]
+  # ---- network-variables
+  - id: ex-owner-read
+    type: single
+    prompt: A NetworkVariable uses ReadPermission.Owner. Who can read it?
+    options:
+      - Only the owner
+      - The owner and the server
+      - Everyone except the owner
+      - Only the server
+    answer: 1
+    explanation: >-
+      Owner read means the owner **and** the server can read it. Other clients don't receive updates.
+    tags: [network-variables]
+  - id: ex-collection-in-netvar
+    type: multi
+    prompt: You keep a List of ints inside a NetworkVariable and add items, but clients never see the changes. Which fixes work? Select all that apply.
+    options:
+      - Call CheckDirtyState() after modifying the list
+      - Use a NetworkList created in Awake instead
+      - Give clients write permission
+      - Raise the tick rate
+    answers: [0, 1]
+    explanation: >-
+      Changes inside a managed collection aren't detected automatically. `CheckDirtyState()` makes NGO compare the whole
+      collection, and a `NetworkList` sends per-element changes, which is usually better.
+    tags: [network-variables]
+  - id: ex-netvar-cross-object-order
+    type: truefalse
+    prompt: If the server changes NetworkVariables on two different objects in the same frame, clients are guaranteed to apply them in that order.
+    answer: false
+    explanation: >-
+      Changes are collected per object, so updates to different objects can arrive in a different order. If order matters,
+      use one RPC or keep the related values on one object.
+    tags: [network-variables]
+  # ---- rpcs
+  - id: ex-sendto-everyone
+    type: single
+    prompt: The server calls a cosmetic RPC that should also play on the server's own machine when it's a host. Which target is the modern equivalent of a legacy ClientRpc?
+    options:
+      - SendTo.NotServer
+      - SendTo.ClientsAndHost
+      - SendTo.Owner
+      - SendTo.Server
+    answer: 1
+    explanation: >-
+      `ClientsAndHost` runs on all clients plus the host's local client. `NotServer` skips the host's server side.
+    tags: [rpcs]
+  - id: ex-rpc-target-temp
+    type: codeline
+    prompt: This stores an RPC target for later use, and sends then go to the wrong clients. Click the buggy line.
+    code: |-
+      BaseRpcTarget m_Team;
+
+      public void SetTeam(ulong[] ids)
+      {
+          m_Team = RpcTarget.Group(ids, RpcTargetUse.Temp);
+      }
+    answerLines: [5]
+    explanation: >-
+      `RpcTargetUse.Temp` reuses a cached object, so it's only valid for the immediate send. A stored target must use
+      `RpcTargetUse.Persistent`.
+    tags: [rpcs]
+  - id: ex-rpc-rename
+    type: truefalse
+    prompt: Renaming an RPC method is safe even when clients and servers from different builds play together.
+    answer: false
+    explanation: >-
+      An RPC's identity is a hash that includes its method name and parameter types, so renaming breaks compatibility with
+      older builds. Ship client and server together.
+    tags: [rpcs]
+  # ---- network-components
+  - id: ex-half-float
+    type: single
+    prompt: What does UseHalfFloatPrecision change on a NetworkTransform?
+    options:
+      - It sends each axis as 2 bytes instead of 4, as deltas from the last full position
+      - It halves the tick rate
+      - It disables interpolation for half of the clients
+      - It compresses rotation to 4 bytes
+    answer: 0
+    explanation: >-
+      Half floats halve the axis size, with position sent relative to the last full position. Rotation compression is the
+      separate `UseQuaternionCompression` setting.
+    tags: [network-components]
+  - id: ex-animator-param-bandwidth
+    type: single
+    prompt: A Speed parameter changes every frame and the profiler shows a NetworkAnimator message per frame per player. What's the recommended fix?
+    options:
+      - Switch the NetworkAnimator to owner authority
+      - Exclude Speed from synchronization and compute it locally from the replicated movement
+      - Set Speed with NetworkAnimator.SetTrigger
+      - Raise the tick rate so messages batch better
+    answer: 1
+    explanation: >-
+      Exclude per-frame parameters with the Animator Parameter Entries list or `EnableParameterSynchronization(name, false)` and
+      derive them on every instance from data that's already replicated.
+    tags: [network-components]
+  - id: ex-unreliable-deltas-rigidbody
+    type: truefalse
+    prompt: The docs recommend combining UseUnreliableDeltas with NetworkRigidbody's Use Rigid Body For Motion for the best results.
+    answer: false
+    explanation: >-
+      The NetworkTransform docs advise against unreliable deltas when the Rigidbody drives motion, because they can
+      desynchronize related Rigidbody objects.
+    tags: [network-components]
+  # ---- connection-and-scenes
+  - id: ex-pending-approval
+    type: order
+    prompt: Order the steps of an asynchronous connection approval that validates a ticket with a web service.
+    items:
+      - The client sets NetworkConfig.ConnectionData and calls StartClient
+      - The server's ConnectionApprovalCallback stores the response and sets Pending to true
+      - The server sends the ticket to the web service
+      - The web service answers and the server sets Approved
+      - The server sets Pending to false so NGO processes the response
+    explanation: >-
+      `Pending` delays the decision. NGO processes the response once it changes back to false, as long as it happens
+      within the client connection buffer timeout.
+    tags: [connection-and-scenes]
+  - id: ex-scene-in-progress
+    type: single
+    prompt: LoadScene returns SceneEventProgressStatus.SceneEventInProgress. What does it mean?
+    options:
+      - The scene isn't in the build list
+      - Another scene load or unload is still running
+      - A client rejected the scene in VerifySceneBeforeLoading
+      - The scene loaded successfully
+    answer: 1
+    explanation: >-
+      Only one scene event can run at a time. Wait for the current one to complete. `InvalidSceneName` means a bad name or
+      missing build entry, and `Started` means success.
+    tags: [connection-and-scenes]
+  - id: ex-unload-rules
+    type: multi
+    prompt: Which scenes can the server unload with NetworkSceneManager.UnloadScene? Select all that apply.
+    options:
+      - An additively loaded scene that isn't the active scene
+      - The active scene
+      - A scene loaded with LoadSceneMode.Single
+      - A second additively loaded scene
+    answers: [0, 3]
+    explanation: >-
+      Only additively loaded scenes can be unloaded, and never the active scene.
+    tags: [connection-and-scenes]
+  # ---- custom-serialization
+  - id: ex-memcpy
+    type: single
+    prompt: When is INetworkSerializeByMemcpy appropriate?
+    options:
+      - For any class, because it's the fastest option
+      - For a small unmanaged struct without pointers or native collections that you fully control
+      - For structs containing a NativeArray
+      - For types that change layout between builds
+    answer: 1
+    explanation: >-
+      Memcpy copies the struct's memory as is, including padding. Pointers and native collections can corrupt memory on the
+      receiving side, so use it only for simple structs you control.
+    tags: [custom-serialization]
+  - id: ex-nested-null
+    type: truefalse
+    prompt: A serializable class containing another serializable class field gets that nested field created automatically when it's deserialized.
+    answer: false
+    explanation: >-
+      The nested field is null on the reading side unless you create it in a default constructor or before calling its
+      `NetworkSerialize` (check `serializer.IsReader`). Structs avoid the problem.
+    tags: [custom-serialization]
+  - id: ex-client-to-client-named
+    type: single
+    prompt: In client-server, a client calls SendNamedMessage with another client's id. What happens?
+    options:
+      - The message goes directly to that client
+      - The server forwards it automatically
+      - NGO logs an error. Clients can only send named messages to the server
+      - It's delivered to every client
+    answer: 2
+    explanation: >-
+      Clients can only send named messages to the server. If one client must reach another, the server has to receive and
+      forward it.
+    tags: [custom-serialization]
+  # ---- prediction-anticipation
+  - id: ex-smooth
+    type: single
+    prompt: In OnReanticipate, the corrected position is only 0.2 units from where the player was drawn. What makes the correction invisible?
+    options:
+      - Snapping with AnticipateMove only
+      - Calling Smooth from PreviousAnticipatedState to the new AnticipatedState over about 0.1 seconds
+      - Setting StaleDataHandling to Ignore at runtime
+      - Disabling the AnticipatedNetworkTransform for one frame
+    answer: 1
+    explanation: >-
+      `Smooth` interpolates from the wrong anticipation to the correct one over a short time. Large errors are better
+      snapped.
+    tags: [prediction-anticipation]
+  - id: ex-anticipated-ignore
+    type: codeline
+    prompt: The ammo counter flickers back to the old value for a moment after every shot, until the server confirms it. Click the line to change.
+    code: |-
+      public AnticipatedNetworkVariable<int> Ammo =
+          new AnticipatedNetworkVariable<int>(12, StaleDataHandling.Reanticipate);
+
+      public bool TrySpend()
+      {
+          if (Ammo.Value <= 0) return false;
+          Ammo.Anticipate(Ammo.Value - 1);
+          return true;
+      }
+    answerLines: [2]
+    explanation: >-
+      With `Reanticipate`, updates sent before the server processed the shot roll the value back, and nothing recomputes
+      it. For a one-off action, use `StaleDataHandling.Ignore` (the default), so stale updates don't undo the anticipation.
+    tags: [prediction-anticipation]
+  # ---- distributed-authority
+  - id: ex-da-spawn
+    type: single
+    prompt: In a distributed-authority session, a client calls InstantiateAndSpawn for a projectile. Who owns it?
+    options:
+      - The session owner
+      - The client that spawned it
+      - The distributed authority service
+      - Nobody until RequestOwnership is called
+    answer: 1
+    explanation: >-
+      In distributed authority any client can spawn, and the spawning client owns and simulates the object.
+    tags: [distributed-authority]
+  - id: ex-da-session-owner-leaves
+    type: single
+    prompt: The session owner's game crashes. What happens to objects flagged SessionOwner?
+    options:
+      - They're destroyed
+      - They stay frozen until the original session owner reconnects
+      - Another client is promoted to session owner and takes ownership of them
+      - The session ends for everyone
+    answer: 2
+    explanation: >-
+      The service promotes a connected client and raises `OnSessionOwnerPromoted`. SessionOwner objects always belong to
+      the current session owner, so they move with the role.
+    tags: [distributed-authority]
+  # ---- debugging-tools
+  - id: ex-simulator-placement
+    type: single
+    prompt: You want to reproduce "one player on bad mobile data" in an MPPM session. Where do you set the Mobile 3G preset?
+    options:
+      - On the host's Network Simulator, which applies it to everyone
+      - On the Network Simulator in that one client's instance
+      - On the Unity Transport component's Debug Simulator
+      - In the NetworkManager's tick rate settings
+    answer: 1
+    explanation: >-
+      Each Network Simulator shapes its own instance's connection. Put the bad preset on the client you're testing. The
+      UnityTransport debug simulator is obsolete and has no effect.
+    tags: [debugging-tools]
+  - id: ex-profiler-grayed
+    type: truefalse
+    prompt: In the network profiler, RPCs a host sends to its own local client appear grayed out because they may never cross the network.
+    answer: true
+    explanation: >-
+      Messages to the local client are shown grayed out. Keep that in mind when you profile as the host, because the real
+      bandwidth to remote clients can be different.
+    tags: [debugging-tools]
+  - id: ex-breakpoint-timeout
+    type: single
+    prompt: You pause a client at a breakpoint for a minute. When you resume, it has been disconnected. Why?
+    options:
+      - Breakpoints corrupt the transport's memory
+      - The paused process stopped answering, so the other side timed the connection out
+      - MPPM shuts down paused instances
+      - The NetworkManager's tick rate dropped to zero permanently
+    answer: 1
+    explanation: >-
+      A paused process doesn't send or acknowledge anything, so the connection times out. Use logging or the profiler for
+      timing-sensitive bugs.
+    tags: [debugging-tools]
+  # ---- unity-services
+  - id: ex-relay-connection-type
+    type: single
+    prompt: Which Relay connection type should a Unity Web (browser) build use?
+    options:
+      - udp
+      - dtls
+      - wss
+      - tcp
+    answer: 2
+    explanation: >-
+      Browsers can't open raw UDP sockets, so web builds use `wss` (secure WebSockets) and set `UseWebSockets` on the
+      transport. Native builds use `dtls` (encrypted) or `udp`.
+    tags: [unity-services]
+  - id: ex-session-vs-raw
+    type: multi
+    prompt: Which jobs do you take on yourself if you use raw Lobby and Relay instead of sessions? Select all that apply.
+    options:
+      - Sending lobby heartbeats while the lobby is in use
+      - Calling StartHost or StartClient after setting the relay data
+      - Deleting the lobby when it's no longer needed
+      - Writing the server-side validation of RPCs
+    answers: [0, 1, 2]
+    explanation: >-
+      Sessions keep the lobby alive, configure the transport and start NGO. Validating gameplay requests is your job either
+      way, because no service does that for you.
+    tags: [unity-services]

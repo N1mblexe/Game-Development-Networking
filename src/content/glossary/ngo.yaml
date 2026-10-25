@@ -1,0 +1,253 @@
+terms:
+  - id: netcode-for-gameobjects
+    term: Netcode for GameObjects
+    aliases: [NGO, com.unity.netcode.gameobjects]
+    short: Unity's official high-level netcode library for GameObject-based games. It provides spawning, NetworkVariables, RPCs, scene sync and ownership on top of a transport.
+    long: >-
+      NGO keeps the familiar GameObject, prefab and MonoBehaviour workflow and adds networking on top of a transport,
+      usually **Unity Transport**. This course targets NGO 2.13 on Unity 6. NGO 3.0 adds Netcode for Entities as a dependency.
+    lesson: ngo/setup
+    seeAlso: [network-manager, unity-transport]
+  - id: unity-transport
+    term: Unity Transport
+    aliases: [UTP, UnityTransport, com.unity.transport]
+    short: Unity's low-level transport package. It moves NGO's bytes over UDP (or WebSockets) with reliable and unreliable pipelines, fragmentation, and Relay support.
+    long: >-
+      The **UnityTransport** component sits next to the NetworkManager and holds the address and port. Use
+      `SetConnectionData` for direct connections and `SetRelayServerData` for Unity Relay.
+    lesson: ngo/setup
+    seeAlso: [network-manager, unity-relay]
+  - id: network-manager
+    term: NetworkManager
+    short: The NGO component that owns the session. It holds the netcode settings, is started as server, host or client, and exposes sub-systems such as SceneManager and SpawnManager.
+    long: >-
+      There is one NetworkManager per process, reachable through `NetworkManager.Singleton`. Its sub-systems
+      (`SceneManager`, `SpawnManager`, `CustomMessagingManager`, …) exist only while it's running.
+    lesson: ngo/network-manager
+    seeAlso: [netcode-for-gameobjects, network-scene-manager, network-topology]
+  - id: client-id
+    term: Client id
+    aliases: [ClientId, OwnerClientId]
+    short: The ulong NGO assigns to each connection. The server (and a host's own client) is 0, NetworkManager.ServerClientId, and clients get new ids as they connect.
+    lesson: ngo/setup
+    seeAlso: [owner, network-manager]
+  - id: network-object
+    term: NetworkObject
+    short: The component that makes a GameObject networked. It links the copies of one object across machines, carries its ids, owner and visibility, and hosts its NetworkBehaviours.
+    long: >-
+      `GlobalObjectIdHash` identifies the prefab or scene object, and `NetworkObjectId` identifies the spawned instance in
+      the session. A network prefab has exactly one NetworkObject.
+    lesson: ngo/network-objects
+    seeAlso: [network-prefab, global-object-id-hash, network-behaviour]
+  - id: global-object-id-hash
+    term: GlobalObjectIdHash
+    short: A hash stored in a NetworkObject in the Editor that identifies which prefab or in-scene object it is, so every machine can find the matching asset.
+    lesson: ngo/network-objects
+    seeAlso: [network-object, network-prefabs-list]
+  - id: network-prefab
+    term: Network prefab
+    short: A prefab with a NetworkObject on its root that can be spawned at runtime. It must be registered in a Network Prefabs List on every build.
+    lesson: ngo/network-objects
+    seeAlso: [network-object, network-prefabs-list]
+  - id: network-prefabs-list
+    term: Network Prefabs List
+    aliases: [NetworkPrefabsList]
+    short: An asset listing the network prefabs that may be spawned dynamically. The NetworkManager references one or more of them.
+    lesson: ngo/network-objects
+    seeAlso: [network-prefab, global-object-id-hash]
+  - id: player-object
+    term: Player object
+    aliases: [PlayerObject]
+    short: The NetworkObject NGO spawns for each approved client from the NetworkManager's player prefab, owned by that client.
+    lesson: ngo/setup
+    seeAlso: [network-object, owner]
+  - id: in-scene-placed-object
+    term: In-scene placed NetworkObject
+    aliases: [In-scene placed object]
+    short: A NetworkObject placed in a scene in the Editor. It needs no prefab registration, spawns when its scene loads in a session, and shouldn't be destroyed.
+    long: >-
+      In-scene placed objects run `Awake`, `Start`, then `OnNetworkSpawn`, unlike dynamically spawned ones. Despawn them with
+      `Despawn(false)` and respawn with `Spawn()`. Use them for managers, spawners, doors and levers.
+    lesson: ngo/network-objects
+    seeAlso: [network-object, network-scene-manager]
+  - id: owner
+    term: Owner
+    short: The client whose id is a NetworkObject's OwnerClientId. Ownership matters wherever a feature is owner-driven, and in distributed authority the owner is the authority.
+    lesson: ngo/network-objects
+    seeAlso: [ownership, client-id]
+  - id: ownership
+    term: Ownership
+    short: Which client owns a NetworkObject. In client-server only the server changes it (ChangeOwnership, RemoveOwnership). In distributed authority clients transfer it according to its permissions.
+    long: >-
+      Ownership callbacks run in the order `OnLostOwnership`, `OnGainedOwnership`, `OnOwnershipChanged`. In distributed
+      authority, `OwnershipStatus` flags decide whether ownership can be distributed, transferred or requested.
+    lesson: ngo/network-objects
+    seeAlso: [owner, ownership-status, session-owner]
+  - id: network-behaviour
+    term: NetworkBehaviour
+    short: A MonoBehaviour subclass for networked scripts. It adds context such as IsServer, IsOwner and HasAuthority, network lifecycle callbacks, NetworkVariables and RPCs.
+    long: >-
+      Do netcode initialization in `OnNetworkSpawn`, not `Start`. Every build must have the same NetworkBehaviours in the
+      same order on a prefab, because messages address behaviours by index.
+    lesson: ngo/network-behaviour
+    seeAlso: [network-object, network-variable]
+  - id: network-variable
+    term: NetworkVariable
+    short: A field on a NetworkBehaviour whose value NGO keeps in sync, including for late joiners. The writer sets .Value, and readers get the latest value and OnValueChanged.
+    long: >-
+      Defaults: everyone reads, the server writes. NetworkVariables are eventually consistent, so values changed several
+      times within a tick only send the last one.
+    lesson: ngo/network-variables
+    seeAlso: [network-list, network-behaviour]
+  - id: network-list
+    term: NetworkList
+    short: An NGO collection that syncs per-element changes. Elements must be unmanaged, IEquatable structs, and the list must be created in Awake.
+    lesson: ngo/network-variables
+    seeAlso: [network-variable, inetworkserializable]
+  - id: send-to
+    term: SendTo
+    short: The enum in [Rpc(SendTo.X)] that chooses who runs an RPC, such as Server, Owner, NotOwner, Everyone, ClientsAndHost, Authority or SpecifiedInParams.
+    lesson: ngo/rpcs
+    seeAlso: [rpc-params]
+  - id: rpc-params
+    term: RpcParams
+    short: An optional last RPC parameter that isn't serialized. It carries send options (such as an RpcTarget) on the caller and receive info, like Receive.SenderClientId, on the receiver.
+    lesson: ngo/rpcs
+    seeAlso: [send-to, client-id]
+  - id: network-transform
+    term: NetworkTransform
+    short: The NGO component that replicates position, rotation and scale. The authority sends changed axes each tick, and other instances interpolate.
+    long: >-
+      **Authority Mode** chooses server (default) or owner authority. Axis toggles, thresholds, half-float precision and
+      quaternion compression reduce bandwidth. `Teleport` and `SetState` move without interpolation.
+    lesson: ngo/network-components
+    seeAlso: [authority-mode, network-rigidbody, network-animator]
+  - id: authority-mode
+    term: Authority Mode
+    aliases: [AuthorityMode]
+    short: The NetworkTransform and NetworkAnimator setting that chooses whether the server or the owner sends state. Distributed authority forces owner.
+    lesson: ngo/network-components
+    seeAlso: [network-transform, network-animator]
+  - id: network-animator
+    term: NetworkAnimator
+    short: The NGO component that syncs an Animator's states, transitions and parameters from its authority. Triggers must be set through NetworkAnimator.SetTrigger.
+    lesson: ngo/network-components
+    seeAlso: [network-transform, authority-mode]
+  - id: network-rigidbody
+    term: NetworkRigidbody
+    aliases: [NetworkRigidbody2D]
+    short: The NGO component that runs a Rigidbody's physics only on the authority and makes other copies kinematic. It requires a Rigidbody and a NetworkTransform.
+    lesson: ngo/network-components
+    seeAlso: [network-transform]
+  - id: connection-approval
+    term: Connection approval
+    short: A server callback that accepts or rejects each joining client from its ConnectionData payload, and can set its player prefab, spawn position and rejection reason.
+    long: >-
+      Enable **Connection Approval** and assign `ConnectionApprovalCallback`. The payload isn't encrypted or authenticated.
+      Set `response.Pending` for asynchronous checks. It isn't supported in distributed authority.
+    lesson: ngo/connection-and-scenes
+    seeAlso: [network-manager, client-id]
+  - id: network-scene-manager
+    term: NetworkSceneManager
+    aliases: [NetworkManager.SceneManager]
+    short: The NGO sub-system that loads and unloads scenes on the server and every client, synchronizes late joiners, and reports scene events.
+    lesson: ngo/connection-and-scenes
+    seeAlso: [scene-event, in-scene-placed-object]
+  - id: scene-event
+    term: Scene event
+    aliases: [SceneEventType]
+    short: One phase of an NGO scene load, unload or synchronization, such as Load, LoadComplete or LoadEventCompleted, reported through OnSceneEvent.
+    lesson: ngo/connection-and-scenes
+    seeAlso: [network-scene-manager]
+  - id: inetworkserializable
+    term: INetworkSerializable
+    short: The NGO interface for custom types. A single NetworkSerialize method runs for both writing and reading, so the field order always matches.
+    lesson: ngo/custom-serialization
+    seeAlso: [fast-buffer-writer, network-list]
+  - id: fast-buffer-writer
+    term: FastBufferWriter / FastBufferReader
+    aliases: [FastBufferWriter, FastBufferReader]
+    short: NGO's native-memory buffers for writing and reading bytes. Dispose them, size them, and use the Safe methods unless you reserve space with TryBeginWrite or TryBeginRead.
+    lesson: ngo/custom-serialization
+    seeAlso: [inetworkserializable, custom-messaging]
+  - id: network-object-reference
+    term: NetworkObjectReference
+    aliases: [NetworkBehaviourReference]
+    short: A small serializable struct that refers to a spawned NetworkObject (or NetworkBehaviour) by id, so you can pass objects in RPCs and NetworkVariables.
+    lesson: ngo/custom-serialization
+    seeAlso: [network-object, inetworkserializable]
+  - id: custom-messaging
+    term: Custom messages
+    aliases: [Named messages, CustomMessagingManager]
+    short: Messages you send through NetworkManager.CustomMessagingManager, identified by a hashed name and not tied to any NetworkObject. You write and read the bytes yourself.
+    lesson: ngo/custom-serialization
+    seeAlso: [fast-buffer-writer]
+  - id: anticipation
+    term: Client anticipation
+    aliases: [AnticipatedNetworkVariable, AnticipatedNetworkTransform]
+    short: NGO's building blocks for hiding latency. A client sets a value or transform early, and NGO corrects it when the server's result arrives, with OnReanticipate and Smooth.
+    long: >-
+      NGO doesn't provide full prediction and rollback. `AnticipatedNetworkVariable` and `AnticipatedNetworkTransform`
+      keep the server authoritative, and `StaleDataHandling` decides whether stale updates roll back the anticipation.
+    lesson: ngo/prediction-anticipation
+    seeAlso: [network-transform, network-variable]
+  - id: network-topology
+    term: Network Topology (NGO setting)
+    aliases: [NetworkTopologyTypes]
+    short: The NetworkConfig setting that chooses ClientServer or DistributedAuthority. It appears once the Multiplayer Services package is installed.
+    lesson: ngo/distributed-authority
+    seeAlso: [network-manager, distributed-authority-service]
+  - id: distributed-authority-service
+    term: Distributed authority service
+    short: Unity's hosted service for NGO's distributed authority topology. Clients connect to it instead of a game server, and it relays state and keeps the session going.
+    lesson: ngo/distributed-authority
+    seeAlso: [session-owner, ownership-status, multiplayer-services-sessions]
+  - id: session-owner
+    term: Session owner
+    short: The client in a distributed-authority session that loads scenes, synchronizes late joiners and owns SessionOwner objects. Another client is promoted if it leaves.
+    lesson: ngo/distributed-authority
+    seeAlso: [distributed-authority-service, ownership-status]
+  - id: ownership-status
+    term: OwnershipStatus
+    short: NetworkObject flags for distributed authority, None, Distributable, Transferable, RequestRequired or SessionOwner, that decide how ownership can move between clients.
+    lesson: ngo/distributed-authority
+    seeAlso: [ownership, session-owner]
+  - id: multiplayer-play-mode
+    term: Multiplayer Play Mode
+    aliases: [MPPM]
+    short: A Unity package (built into the engine from 6.3) that runs extra Editor instances and local builds sharing your project, to test several players without making builds.
+    lesson: ngo/debugging-tools
+    seeAlso: [network-simulator]
+  - id: network-simulator
+    term: Network Simulator
+    short: A Multiplayer Tools component that adds latency, jitter, packet loss, lag spikes and disconnects to an instance's Unity Transport connection, in the Editor and in builds.
+    lesson: ngo/debugging-tools
+    seeAlso: [multiplayer-play-mode, network-profiler]
+  - id: network-profiler
+    term: Network profiler modules
+    aliases: [NGO Messages, NGO Objects]
+    short: The NGO Messages and NGO Objects modules that Multiplayer Tools adds to the Unity Profiler, showing bytes per message type and per NetworkObject.
+    lesson: ngo/debugging-tools
+    seeAlso: [runtime-network-stats-monitor, network-simulator]
+  - id: runtime-network-stats-monitor
+    term: Runtime Network Stats Monitor
+    aliases: [RNSM, RuntimeNetStatsMonitor]
+    short: A Multiplayer Tools component that draws live network stats over the game. It's in Editor and development builds by default, not release builds.
+    lesson: ngo/debugging-tools
+    seeAlso: [network-profiler]
+  - id: unity-relay
+    term: Unity Relay
+    short: Unity's hosted relay service. The host and clients connect out to a relay server using a join code, so players behind NAT can play without port forwarding.
+    lesson: ngo/unity-services
+    seeAlso: [unity-lobby, multiplayer-services-sessions, unity-transport]
+  - id: unity-lobby
+    term: Unity Lobby
+    short: Unity's service for creating, listing and joining rooms with capacity, privacy, passwords and custom data. Raw lobbies need host heartbeats to stay active.
+    lesson: ngo/unity-services
+    seeAlso: [unity-relay, multiplayer-services-sessions]
+  - id: multiplayer-services-sessions
+    term: Multiplayer Services sessions
+    aliases: [Sessions API, ISession, com.unity.services.multiplayer]
+    short: The Multiplayer Services package's high-level API. A session combines a lobby with a Relay, distributed-authority or direct connection, and starts NGO for you.
+    lesson: ngo/unity-services
+    seeAlso: [unity-relay, unity-lobby, distributed-authority-service]

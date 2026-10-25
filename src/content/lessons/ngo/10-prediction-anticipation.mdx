@@ -1,0 +1,340 @@
+---
+title: Prediction and Client Anticipation
+order: 10
+summary: Hide latency in a server-authoritative game with AnticipatedNetworkVariable and AnticipatedNetworkTransform, and build simple input replay on top of OnReanticipate.
+durationMin: 35
+objectives:
+  - Explain what NGO's client anticipation does and what full prediction and reconciliation would add
+  - Anticipate a value with AnticipatedNetworkVariable and correct it with snapping or Smooth
+  - Anticipate server-authoritative movement with AnticipatedNetworkTransform
+  - Replay unconfirmed inputs in OnReanticipate, and choose a StaleDataHandling mode
+prerequisites: [ngo/network-components, ngo/rpcs, theory/prediction-reconciliation]
+tags: [ngo, prediction, anticipation, latency]
+targets:
+  unity: '6000.x'
+  packages:
+    - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
+sources:
+  - title: 'NGO 2.13 manual: Client anticipation'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/client-anticipation.html
+  - title: 'NGO 2.13 API: AnticipatedNetworkVariable<T>'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.AnticipatedNetworkVariable-1.html
+  - title: 'NGO 2.13 API: AnticipatedNetworkTransform'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Components.AnticipatedNetworkTransform.html
+  - title: 'NGO 2.13 API: NetworkTickSystem'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkTickSystem.html
+  - title: 'NGO source v2.13.3: AnticipatedNetworkVariable.cs and AnticipatedNetworkTransform.cs'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/tree/v2.13.3/com.unity.netcode.gameobjects/Runtime
+---
+
+Lesson 7 made player movement feel instant by making it owner-authoritative, and paid for it with trust: the client
+now decides where it is. Competitive games want both, a server that decides everything and controls that respond the
+moment you press a key. Theory calls the technique <Term id="client-side-prediction">client-side prediction</Term> with
+<Term id="server-reconciliation">server reconciliation</Term> (see
+[prediction and reconciliation](../../theory/prediction-reconciliation/)). NGO doesn't ship a full prediction system, but
+it gives you the building blocks under the name <Term id="anticipation">client anticipation</Term>, and this lesson
+shows how far they go.
+
+## What NGO gives you, and what it doesn't
+
+The manual is direct about this: NGO doesn't provide full client-side prediction and reconciliation. A complete
+rollback-and-replay loop is left to you and is recommended for advanced users only. What it does provide:
+
+| Piece | What it does |
+|---|---|
+| `AnticipatedNetworkVariable` | A NetworkVariable whose client copy you may set early with `Anticipate(value)`. The server value lives in `AuthoritativeValue` |
+| `AnticipatedNetworkTransform` | A NetworkTransform whose client copy you may move early with `AnticipateMove`, `AnticipateRotate`, `AnticipateScale` or `AnticipateState` |
+| `OnReanticipate(double lastRoundTripTime)` | A virtual `NetworkBehaviour` method called when server data overwrote an anticipated value, so you can correct or recompute it |
+| `Smooth(...)` | Interpolates from a wrong anticipation to the right value over a duration instead of snapping |
+| `StaleDataHandling` | Decides whether server updates that predate your latest request roll your value back (`Reanticipate`) or not (`Ignore`) |
+
+The idea underneath is an **anticipation counter**. When a client anticipates a change and sends the RPC that causes it
+in the same frame, NGO can tell which server updates were produced *before* the server processed that RPC. Those are
+**stale**: they describe a world that doesn't include your action yet.
+
+<Sim name="prediction" preset="reconciliation" caption="Prediction plus reconciliation: the client moves immediately, and when an older server state arrives it rewinds to it and replays the inputs the server hasn't processed yet." />
+
+What you should notice:
+
+- Without prediction, every key press takes a full round trip to show up. With prediction, the local player moves at once.
+- Server states always arrive **in the past**, about one RTT behind what the client already shows.
+- Reconciliation doesn't throw your movement away. It starts from the server state and **replays** the newer inputs, so a
+  correct prediction produces no visible change, and a wrong one produces a small correction.
+
+## Anticipating a value: ammo
+
+Start with something discrete. Firing spends ammo. With a plain NetworkVariable, the ammo counter would update one round
+trip after the click, which looks broken. With an `AnticipatedNetworkVariable`, the owner shows the new count immediately:
+
+```csharp title="PlayerAmmo.cs"
+using Unity.Netcode;
+using UnityEngine;
+
+/// On PlayerAvatar. PlayerShooting calls TrySpend on the owner right before sending FireRpc,
+/// and ServerSpend from inside FireRpc on the server.
+public class PlayerAmmo : NetworkBehaviour
+{
+    public const int MaxAmmo = 12;
+
+    // Server-written. Ignore: stale server updates (from before our shot was processed) don't undo the anticipation.
+    public AnticipatedNetworkVariable<int> Ammo =
+        new AnticipatedNetworkVariable<int>(MaxAmmo, StaleDataHandling.Ignore);
+
+    // Owner: show the shot immediately. Returns false if we believe we're empty.
+    public bool TrySpend()
+    {
+        if (Ammo.Value <= 0) return false;
+        Ammo.Anticipate(Ammo.Value - 1);
+        return true;
+    }
+
+    // Server: the real decision. Anticipate on the server sets both the anticipated and authoritative value.
+    public bool ServerSpend()
+    {
+        if (!IsServer || Ammo.AuthoritativeValue <= 0) return false;
+        Ammo.Anticipate(Ammo.AuthoritativeValue - 1);
+        return true;
+    }
+
+    public void ServerRefill()
+    {
+        if (IsServer) Ammo.AuthoritativeValue = MaxAmmo;
+    }
+
+    public override void OnReanticipate(double lastRoundTripTime)
+    {
+        // Called after a non-stale server update replaced our anticipated value.
+        // For an integer counter, snapping to the server's answer is right, so there's nothing to do.
+        // (Not overriding this method at all gives the same snap behaviour.)
+        base.OnReanticipate(lastRoundTripTime);
+    }
+
+    void OnGUI()
+    {
+        if (IsOwner) GUI.Label(new Rect(10, Screen.height - 30, 200, 20), $"Ammo: {Ammo.Value}/{MaxAmmo}");
+    }
+}
+```
+
+The two values to keep straight:
+
+- `Ammo.Value` is the **anticipated** value. Display it.
+- `Ammo.AuthoritativeValue` is the **server's** value. It's read-only on clients. Make gameplay decisions with it on the server.
+
+If the server rejects the shot (lesson 6's cooldown check), it never spends ammo. The next authoritative update carries
+the old count, the anticipated value snaps back, and the player sees the counter "refund" the shot. That's the honest
+result: the click didn't count.
+
+<Callout type="unity" title="Same code on server and client">
+
+`Anticipate` on a client changes only the anticipated value. On the server, which may write the variable, it sets both.
+That's what lets `TrySpend` and `ServerSpend` look almost identical, and it's why a host (server and client at once)
+needs no special case.
+
+</Callout>
+
+## Anticipating movement: server-authoritative players
+
+For a competitive mode, switch the player back to server authority, but use **AnticipatedNetworkTransform** (a subclass
+of NetworkTransform) instead of the owner-authoritative NetworkTransform from lesson 7:
+
+<Steps>
+
+1. On `PlayerAvatar`, remove the NetworkTransform and add **Anticipated Network Transform**. Leave **Authority Mode** on **Server**, and keep the same axis settings.
+2. Remove `PlayerMovement` from `PlayerSetup`'s owner-only list and replace it with `PredictedMovement` below, which must run on the server too.
+3. Keep **Stale Data Handling** on its default for this component, **Reanticipate**. Movement changes constantly, so every server update should trigger a recomputation.
+
+</Steps>
+
+The loop on each network <Term id="tick">tick</Term>:
+
+<Sequence
+  title="One tick of anticipated, server-authoritative movement"
+  actors={[
+    { id: 'c', label: 'Owner client', kind: 'client' },
+    { id: 's', label: 'Server', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'c', to: 'c', label: 'Read input, step the position, AnticipateMove(newPos)', note: 'Recorded in the input history with a timestamp.', kind: 'local' },
+    { from: 'c', to: 's', label: 'MoveInputRpc(input)', note: 'Sent in the same frame as the anticipation, so NGO can link them.', kind: 'unreliable' },
+    { from: 's', to: 's', label: 'Validate input, step the same way', note: 'The server is the authority for the transform.', kind: 'local' },
+    { from: 's', to: 'c', label: 'Transform state (one RTT behind the client)', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'Rolled back to the server state, then OnReanticipate(rtt)', note: 'Replay the inputs from the last rtt seconds and AnticipateMove the result.', kind: 'event' },
+  ]}
+/>
+
+What you should notice:
+
+- The client and the server run the **same step function** with the same tick length, so a correct prediction replays to
+  exactly where the client already is.
+- `OnReanticipate` receives roughly how far back the object was rolled, which is about one round trip. That tells you
+  which inputs the server can't have applied yet.
+- If an input RPC is lost, the server's position falls behind, the replay starts from that position, and the client is
+  corrected by a small amount. That's reconciliation doing its job.
+
+## Manual reconciliation with input replay
+
+```csharp title="PredictedMovement.cs"
+using System.Collections.Generic;
+using Unity.Netcode;
+using Unity.Netcode.Components;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+/// Server-authoritative movement with client anticipation and input replay.
+/// Requires an AnticipatedNetworkTransform (Authority Mode: Server) on the same GameObject.
+public class PredictedMovement : NetworkBehaviour
+{
+    [SerializeField] float m_Speed = 6f;
+    [SerializeField] float m_ArenaRadius = 20f;
+    [SerializeField] float m_SmoothSeconds = 0.1f;
+    [SerializeField] float m_SnapDistance = 1.5f;
+
+    struct InputRecord { public double Time; public Vector2 Move; }
+
+    AnticipatedNetworkTransform m_Transform;
+    readonly List<InputRecord> m_History = new List<InputRecord>();
+
+    void Awake() => m_Transform = GetComponent<AnticipatedNetworkTransform>();
+
+    public override void OnNetworkSpawn()
+    {
+        if (IsOwner && !IsServer) NetworkManager.NetworkTickSystem.Tick += OnOwnerTick;
+        if (IsOwner && IsServer) NetworkManager.NetworkTickSystem.Tick += OnHostTick;
+        base.OnNetworkSpawn();
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        if (NetworkManager.NetworkTickSystem != null)
+        {
+            NetworkManager.NetworkTickSystem.Tick -= OnOwnerTick;
+            NetworkManager.NetworkTickSystem.Tick -= OnHostTick;
+        }
+        base.OnNetworkDespawn();
+    }
+
+    // The single step function. Client and server must agree on it exactly.
+    Vector3 Step(Vector3 position, Vector2 move)
+    {
+        float dt = NetworkManager.LocalTime.FixedDeltaTime; // one tick: 1 / TickRate
+        move = Vector2.ClampMagnitude(move, 1f);
+        position += new Vector3(move.x, 0f, move.y) * (m_Speed * dt);
+        return Vector3.ClampMagnitude(position, m_ArenaRadius);
+    }
+
+    static Vector2 ReadInput()
+    {
+        var k = Keyboard.current;
+        if (k == null) return Vector2.zero;
+        return new Vector2((k.dKey.isPressed ? 1 : 0) - (k.aKey.isPressed ? 1 : 0),
+                           (k.wKey.isPressed ? 1 : 0) - (k.sKey.isPressed ? 1 : 0));
+    }
+
+    // ---- Owner on a remote client ----
+
+    void OnOwnerTick()
+    {
+        Vector2 move = ReadInput();
+        double now = NetworkManager.LocalTime.Time;
+
+        // Anticipate first, then send the request in the same frame.
+        m_Transform.AnticipateMove(Step(m_Transform.AnticipatedState.Position, move));
+        m_History.Add(new InputRecord { Time = now, Move = move });
+        MoveInputRpc(move);
+
+        // Keep about one second of history.
+        m_History.RemoveAll(r => r.Time < now - 1.0);
+    }
+
+    public override void OnReanticipate(double lastRoundTripTime)
+    {
+        if (!IsOwner || IsServer || !m_Transform.ShouldReanticipate)
+        {
+            base.OnReanticipate(lastRoundTripTime);
+            return;
+        }
+
+        // We were rolled back to the server's state. Replay what the server hasn't seen yet.
+        var previous = m_Transform.PreviousAnticipatedState;
+        Vector3 position = m_Transform.AuthoritativeState.Position;
+        double since = NetworkManager.LocalTime.Time - lastRoundTripTime;
+        foreach (var record in m_History)
+            if (record.Time > since) position = Step(position, record.Move);
+
+        m_Transform.AnticipateMove(position);
+
+        // Small error: blend from where we were drawn to the corrected position. Large error: snap.
+        if (Vector3.Distance(previous.Position, position) < m_SnapDistance)
+            m_Transform.Smooth(previous, m_Transform.AnticipatedState, m_SmoothSeconds);
+
+        base.OnReanticipate(lastRoundTripTime);
+    }
+
+    // ---- Server ----
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner, Delivery = RpcDelivery.Unreliable)]
+    void MoveInputRpc(Vector2 move)
+    {
+        // Validate: a modified client could send huge vectors. Step clamps the magnitude to 1.
+        // (A cheater could also send several inputs per tick; a real game caps inputs per tick per client.)
+        m_Transform.AnticipateMove(Step(transform.position, move));
+    }
+
+    // A host's own player has no round trip: it simply moves on the server.
+    void OnHostTick() => m_Transform.AnticipateMove(Step(transform.position, ReadInput()));
+}
+```
+
+This is the [reconciliation](../../theory/prediction-reconciliation/) algorithm from theory, with one approximation.
+Theory tags each input with a sequence number, and the server reports "I've processed up to input 1042" together with
+the state, so the client replays exactly the right inputs. Here the replay window comes from `lastRoundTripTime`,
+which is close but not exact. For exact replay, send the state and the last processed input number together in one
+unreliable `SendTo.Owner` RPC from the server (one message keeps them consistent, which separate NetworkVariable and
+transform updates don't guarantee), and replay from your own history by sequence number. That's more code, and it's what
+the docs mean by "left to the user".
+
+## Which StaleDataHandling?
+
+| Mode | Stale server update | Good for |
+|---|---|---|
+| `Ignore` (default for `AnticipatedNetworkVariable`) | Doesn't roll back and doesn't call `OnReanticipate`. `AuthoritativeValue` still updates | One-off actions: ammo, opening a door, buying an item |
+| `Reanticipate` (default for `AnticipatedNetworkTransform`) | Rolls back, sets `ShouldReanticipate`, calls `OnReanticipate` | Values that change constantly and need recomputing, such as movement |
+
+`OnReanticipate` runs once per frame for each NetworkObject that was rolled back, after all its anticipated variables
+and transforms have been processed. Check `ShouldReanticipate` on each one, because only some may have been rolled back.
+`NetworkManager.OnReanticipate` is a global version that runs after all the per-object calls.
+
+<Callout type="pitfall" title="Different step code on client and server">
+
+If the client steps with `Time.deltaTime` and the server with the tick length, or one side clamps the arena and the other
+doesn't, every replay disagrees with the server and the player jitters constantly. Put the step in **one** method used by
+both sides, step per tick, and keep its inputs (speed, radius, colliders) identical.
+
+</Callout>
+
+<Callout type="pitfall" title="Anticipating without sending, or sending without anticipating">
+
+The anticipation counter assumes the anticipation and the RPC that causes it go out in the same frame. If you anticipate
+and send the request later, or send requests without anticipating, NGO can't tell stale updates from fresh ones, and
+`Ignore` either drops a real correction or keeps a wrong value too long.
+
+</Callout>
+
+<Callout type="pitfall" title="Writing the transform directly on the client">
+
+On a client, an `AnticipatedNetworkTransform`'s transform belongs to the anticipation system. Setting `transform.position`
+yourself is overwritten by the next server update. Use the `Anticipate…` methods, which also record
+`PreviousAnticipatedState` for smoothing.
+
+</Callout>
+
+<KeyTakeaways>
+
+- NGO offers **client anticipation**, not a full prediction system: anticipated variables and transforms, `OnReanticipate`, `Smooth` and stale-data detection.
+- `AnticipatedNetworkVariable`: display `Value`, decide with `AuthoritativeValue` on the server, and call `Anticipate` on both sides.
+- `AnticipatedNetworkTransform` keeps the server authoritative while the owner moves immediately with `AnticipateMove`.
+- Reconcile in `OnReanticipate`: start from `AuthoritativeState`, replay unconfirmed inputs, `AnticipateMove` the result, and `Smooth` small corrections.
+- Use `Ignore` for one-off actions and `Reanticipate` for continuously changing values, and anticipate and send each request in the same frame.
+
+</KeyTakeaways>

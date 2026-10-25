@@ -1,0 +1,77 @@
+passPct: 70
+questions:
+  - id: missing-suffix
+    type: codeline
+    prompt: This RPC fails to compile. Click the line responsible.
+    code: |-
+      public class Chat : NetworkBehaviour
+      {
+          [Rpc(SendTo.Server)]
+          void SendChat(FixedString128Bytes text, RpcParams rpcParams = default)
+          {
+              BroadcastChatRpc(text, rpcParams.Receive.SenderClientId);
+          }
+      }
+    answerLines: [4]
+    explanation: >-
+      Every RPC method name must end in `Rpc`. NGO's IL post-processor rewrites call sites so that calling the method
+      sends a message, and the suffix makes that visible. Rename it to `SendChatRpc`.
+  - id: body-runs-where
+    type: single
+    prompt: The owning client calls `FireRpc(aim)`, declared with `[Rpc(SendTo.Server)]`. Where does the method body run?
+    options:
+      - On the calling client, then the result is sent to the server
+      - Only on the server
+      - On the server and on the calling client
+      - On every client, including the caller
+    answer: 1
+    explanation: >-
+      Calling an RPC sends its arguments as a message. With `SendTo.Server` the body runs only on the server, which is why
+      the client can only send **intent** and the server decides what happens.
+  - id: server-validation
+    type: codeline
+    prompt: A modified client can fire a hundred projectiles per second through this RPC. Which line should be replaced by a server-side check?
+    code: |-
+      [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+      void FireRpc(Vector3 aim, float clientTime)
+      {
+          if (clientTime < m_NextFireTime) return;
+          m_NextFireTime = clientTime + m_Cooldown;
+          SpawnProjectile(aim);
+      }
+    answerLines: [4]
+    explanation: >-
+      The cooldown is checked against a time the **client** sent, so a cheater just sends a large value. Use the server's
+      own clock (`Time.time`) for the check. `InvokePermission` only restricts who may call the RPC, not what they send.
+  - id: legacy-mapping
+    type: single
+    prompt: Which current declaration matches legacy `[ServerRpc]` with default settings?
+    options:
+      - '[Rpc(SendTo.Server)]'
+      - '[Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]'
+      - '[Rpc(SendTo.ClientsAndHost)]'
+      - '[Rpc(SendTo.Owner)]'
+    answer: 1
+    explanation: >-
+      Legacy `[ServerRpc]` requires ownership by default. The modern equivalent is `SendTo.Server` with owner invoke
+      permission. `[ServerRpc(RequireOwnership = false)]` maps to plain `[Rpc(SendTo.Server)]`.
+  - id: unreliable-ok
+    type: multi
+    prompt: Which of these are reasonable to send with `Delivery = RpcDelivery.Unreliable`? Select all that apply.
+    options:
+      - A cosmetic muzzle flash
+      - A request to buy an item
+      - A frequently resent aim preview for other players
+      - A chat message
+      - The announcement that the match has ended
+    answers: [0, 2]
+    explanation: >-
+      Unreliable delivery suits frequent, disposable messages where a lost one does no harm. Purchases, chat and match
+      state changes must arrive, so keep the default reliable delivery for them.
+  - id: ordering
+    type: truefalse
+    prompt: Reliable RPCs sent on two different NetworkObjects are guaranteed to execute in the order you sent them.
+    answer: false
+    explanation: >-
+      Reliable RPCs are ordered **per NetworkObject** only. If two messages must arrive in order, send them on the same
+      object, or put both pieces of data in one RPC.

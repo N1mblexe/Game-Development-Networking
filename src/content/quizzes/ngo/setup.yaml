@@ -1,0 +1,76 @@
+passPct: 70
+questions:
+  - id: three-requirements
+    type: multi
+    prompt: Which of these must exist before two players can see each other's spawned player objects? Select all that apply.
+    options:
+      - A NetworkManager in the scene
+      - A player prefab whose root has a NetworkObject component
+      - The networked scene in the build's scene list (with scene management enabled)
+      - A Rigidbody on the player prefab
+      - A dedicated server build
+    answers: [0, 1, 2]
+    explanation: >-
+      NGO needs a NetworkManager to start, a network prefab it can identify on every machine, and (with integrated scene
+      management) a scene that clients can load by name. Physics and dedicated servers are optional.
+  - id: host-client-id
+    type: single
+    prompt: You call `StartHost()`. What client id does the host's own local client get?
+    options:
+      - '1'
+      - '0'
+      - A random 64-bit id
+      - The host has no client id
+    answer: 1
+    explanation: >-
+      A host is a server plus a local client. The server's id, `NetworkManager.ServerClientId`, is `0`, and the host's local
+      client uses it. Remote clients get new ids as they connect.
+  - id: mode-order
+    type: order
+    prompt: Put the events in order for "host starts, then a client joins".
+    items:
+      - The host starts listening and spawns its own player object
+      - The client sends a connection request
+      - The server approves the client and assigns a client id
+      - The server sends scene and object synchronization data
+      - The client reports that synchronization is complete
+      - The server spawns the new client's player object
+    explanation: >-
+      A joining client must be approved and synchronized with the current scene and objects before NGO spawns its
+      player object on every machine.
+  - id: player-in-scene
+    type: truefalse
+    prompt: You should place one copy of the player prefab in the scene so the host has a player before anyone connects.
+    answer: false
+    explanation: >-
+      NGO spawns the player prefab for each approved client, including the host's local client. NGO doesn't support an
+      in-scene placed object as a player object, so a copy in the scene is just an extra, unowned object.
+  - id: bootstrap-bug
+    type: codeline
+    prompt: This bootstrap is on the NetworkManager GameObject, but after you click Client the start buttons are still drawn. Click the buggy line.
+    code: |-
+      void OnGUI()
+      {
+          if (!m_NetworkManager.IsClient || !m_NetworkManager.IsServer)
+          {
+              if (GUILayout.Button("Host")) m_NetworkManager.StartHost();
+              if (GUILayout.Button("Client")) m_NetworkManager.StartClient();
+          }
+      }
+    answerLines: [3]
+    explanation: >-
+      The condition should be "neither client nor server": `!IsClient && !IsServer`. With `||`, a pure client (not a
+      server) or a dedicated server (not a client) still shows the buttons. Only a host hides them. Using `&&` hides them as
+      soon as any mode starts.
+  - id: mppm-purpose
+    type: single
+    prompt: What does Multiplayer Play Mode give you?
+    options:
+      - A cloud server for playtests
+      - Additional Editor instances that share the project's assets, so you can run several players locally
+      - Automatic client-side prediction
+      - A replacement transport for WebGL
+    answer: 1
+    explanation: >-
+      MPPM launches up to three additional Editor instances (plus optional local builds) that use the same project assets,
+      so you can test host and client together without making builds.
