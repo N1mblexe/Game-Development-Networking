@@ -1,0 +1,74 @@
+passPct: 70
+questions:
+  - id: intent-vs-result
+    type: single
+    prompt: Which client message is phrased as an **intent** that a server-authoritative game can safely accept?
+    options:
+      - '"My position is now (10, 0, 4)"'
+      - '"I hit player 3 for 40 damage"'
+      - '"I would like to pick up item 7"'
+      - '"I have 50 gold left after buying the sword"'
+    answer: 2
+    explanation: >-
+      An intent can be refused. The server checks whether the item is in range and still available, and decides. The other three
+      are results that the server can only believe or rebuild itself.
+  - id: speed-hack-server-auth
+    type: truefalse
+    prompt: In a server-authoritative game, a speed hack that edits the client's local position lets the cheater move faster for everyone.
+    answer: false
+    explanation: >-
+      The server never uses the client's position. It applies the client's inputs to its own state, so other players keep seeing the
+      server's version, and the cheater's own client is snapped back on the next update.
+  - id: what-server-authority-stops
+    type: multi
+    prompt: Which cheats does server authority with proper validation stop? Select all that apply.
+    options:
+      - Teleporting
+      - Infinite ammo
+      - Aimbots
+      - Claiming kills that never happened
+      - Wallhacks that draw players the client already knows about
+    answers: [0, 1, 3]
+    explanation: >-
+      Server authority removes any cheat that depends on the server believing a result. Aimbots only produce valid inputs, and
+      wallhacks only read data the client was sent, so they need detection and interest management instead.
+  - id: coop-owner-authority
+    type: single
+    prompt: For a 4-player co-op game among friends, which authority split is the most common pragmatic choice?
+    options:
+      - Everything client-authoritative, including enemies and loot
+      - Each player's own movement owner-authoritative, with enemies, health and pickups server-authoritative
+      - Everything server-authoritative with no prediction
+      - No authority at all; each client keeps its own world
+    answer: 1
+    explanation: >-
+      Owner-authoritative movement feels responsive without writing prediction code, and the only people a cheater can spoil the game
+      for are their friends. Shared state that players compete over or that must be consistent stays with the server.
+  - id: validation-bug
+    type: codeline
+    prompt: This server-side pickup check can be fooled by a hacked client. Which line is the problem?
+    code: |-
+      void OnPickupRequest(Player p, int pickupId, Vec3 claimedPosition)
+      {
+          Pickup item = pickups[pickupId];
+          if (item.IsTaken || !p.IsAlive) return;
+          if ((item.Position - claimedPosition).Length() > 2.5f) return;
+          item.IsTaken = true;
+          p.Give(item);
+      }
+    answerLines: [5]
+    explanation: >-
+      The range check uses a position the client sent, so a cheater can claim to be next to any pickup. Validation must use the
+      server's own state: `p.Position`. (A real server would also check that `pickupId` is in range.)
+  - id: two-authorities
+    type: single
+    prompt: A client sets a door's open state locally for responsiveness and also receives the server's value, with no rule for which wins. What is the likely symptom?
+    options:
+      - Nothing; the values will always agree
+      - The door flickers or stays different between players
+      - The server crashes
+      - TCP head-of-line blocking
+    answer: 1
+    explanation: >-
+      Two machines writing the same state without one being the authority leads to flicker or permanent divergence. Treat local
+      changes as predictions that the authority's next value overwrites.

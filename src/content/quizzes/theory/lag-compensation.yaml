@@ -1,0 +1,67 @@
+passPct: 70
+questions:
+  - id: rewind-amount
+    type: numeric
+    prompt: >-
+      A shooter has 60 ms RTT and an interpolation delay of 100 ms. Approximately how far back, in milliseconds, must the server
+      rewind other players to judge the shot?
+    answer: 160
+    tolerance: 5
+    unit: ms
+    difficulty: 2
+    explanation: >-
+      Rewind ≈ RTT + interpolation delay = 60 + 100 = 160 ms. The shooter's view of the target is half an RTT plus the interpolation
+      delay old, and the shot takes another half RTT to reach the server.
+  - id: lead-distance
+    type: numeric
+    prompt: >-
+      Without lag compensation, a target running at 5 m/s has moved on by the time a shot is judged 200 ms after the shooter saw it.
+      How many metres ahead must the shooter aim?
+    answer: 1
+    tolerance: 0.05
+    unit: m
+    difficulty: 1
+    explanation: >-
+      5 m/s × 0.2 s = 1 m, several times wider than a head hitbox. And the lead changes whenever the shooter's ping does, which is why
+      shooters compensate on the server.
+  - id: rewind-steps
+    type: order
+    prompt: Put the server's handling of a lag-compensated shot in order.
+    items:
+      - Determine the tick the shooter was viewing, and clamp it to the maximum rewind
+      - Move other players' hitboxes to their recorded poses at that tick
+      - Ray-cast the shot against the rewound hitboxes
+      - Restore all hitboxes to the present
+      - Apply damage in the present and broadcast the result
+    explanation: >-
+      The rewind is only for the hit test. Damage and every other effect happen in the present, and the clamp stops clients claiming
+      arbitrary times.
+  - id: behind-cover
+    type: single
+    prompt: A player dies a moment after ducking behind a wall. What is the most likely explanation in a lag-compensated shooter?
+    options:
+      - The server's physics is broken
+      - The shooter saw them in the open, and the server judged the shot against the shooter's view
+      - The victim's client failed to predict the wall
+      - Packet loss made the wall disappear
+    answer: 1
+    explanation: >-
+      Favor-the-shooter means the shot is checked against where the shooter saw the target, which was a moment in the past. Capping
+      the rewind limits how far around a corner this can reach.
+  - id: unclamped-timestamp
+    type: truefalse
+    prompt: It is safe for the server to rewind to whatever tick the client sends with its fire command.
+    answer: false
+    explanation: >-
+      A cheater could claim to have fired seconds ago, when the target stood still in the open. Clamp the rewind (for example to 200 ms)
+      and check the claim against the server's own RTT estimate for that client.
+  - id: history-size
+    type: numeric
+    prompt: The server ticks at 64 Hz and must support rewinds of up to 250 ms. What is the minimum number of ticks the history ring buffer must hold?
+    answer: 16
+    tolerance: 0
+    unit: ticks
+    difficulty: 2
+    explanation: >-
+      0.25 s × 64 ticks/s = 16 ticks. In practice you'd add a small margin, plus one extra tick so you can interpolate between the two ticks
+      around the target moment.

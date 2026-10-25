@@ -1,0 +1,70 @@
+passPct: 70
+questions:
+  - id: snapshot-bandwidth
+    type: numeric
+    prompt: >-
+      A full snapshot is 1,000 bytes and the server sends it to each client 30 times per second. How many kilobytes per second
+      does one client receive?
+    answer: 30
+    tolerance: 0.5
+    unit: KB/s
+    difficulty: 1
+    explanation: >-
+      1,000 bytes × 30 = 30,000 bytes/s = 30 KB/s (240 kbit/s), before headers. Multiply by the player count for the server's upload.
+      This is why real games quantize, delta-compress and prioritize.
+  - id: delta-baseline
+    type: single
+    prompt: Unreliable delta snapshots must be computed against which baseline?
+    options:
+      - The previous snapshot the server sent
+      - The most recent snapshot the client has acknowledged
+      - The first snapshot of the match
+      - A random recent snapshot
+    answer: 1
+    explanation: >-
+      If the previous snapshot was lost, the client can't apply a delta against it. The last **acknowledged** snapshot is one the client
+      definitely has, so loss never corrupts state, and nothing has to be resent.
+  - id: state-or-event
+    type: multi
+    prompt: Which of these should be **state** (for example a NetworkVariable) rather than a one-off event? Select all that apply.
+    options:
+      - Whether a door is open
+      - An explosion particle effect
+      - A player's current team
+      - A hit marker sound
+      - The match score
+    answers: [0, 2, 4]
+    explanation: >-
+      Ask what a player who joins ten minutes later needs to know. Door state, team and score must be correct for them, so they're state.
+      Explosions and hit sounds only matter at the moment they happen, so they're events.
+  - id: delta-loss
+    type: truefalse
+    prompt: When a delta snapshot is lost, the server must resend that exact delta so the client can stay in sync.
+    answer: false
+    explanation: >-
+      Deltas are never resent. The next delta is computed against a baseline the client has acknowledged, so it already contains everything
+      the lost one did. It is just a little bigger.
+  - id: delta-order
+    type: order
+    prompt: Put the delta-compression cycle in order, starting from a full snapshot.
+    items:
+      - The server sends snapshot 100 in full
+      - The client stores snapshot 100 and acks it
+      - The server receives the ack and makes 100 the baseline for that client
+      - The server sends snapshot 105 as a delta against 100
+      - The client applies the delta to its stored copy of 100
+    explanation: >-
+      The server only uses a snapshot as a baseline once the client confirms it has it, and the client keeps received snapshots so it can
+      apply a delta to whichever one the server names.
+  - id: interest-management-benefit
+    type: multi
+    prompt: Sending each client only the entities near or visible to it (interest management) has which effects? Select all that apply.
+    options:
+      - Bandwidth no longer grows with the size of the whole world
+      - Wallhacks can't draw players the client was never sent
+      - It removes the need for an authority
+      - The server spends CPU deciding what is relevant
+    answers: [0, 1, 3]
+    explanation: >-
+      Interest management caps bandwidth per client and limits information leaks, at the cost of relevance checks on the server. It doesn't
+      change who is authoritative.

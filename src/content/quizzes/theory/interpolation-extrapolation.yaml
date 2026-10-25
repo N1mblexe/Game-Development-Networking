@@ -1,0 +1,69 @@
+passPct: 70
+questions:
+  - id: interp-delay-calc
+    type: numeric
+    prompt: >-
+      Snapshots arrive at 30 Hz. You want the interpolation delay to cover two snapshot intervals plus 15 ms of jitter. What delay
+      should you use, in milliseconds?
+    answer: 81.7
+    tolerance: 2
+    unit: ms
+    difficulty: 2
+    explanation: >-
+      One interval is 33.3 ms, so two are 66.7 ms. Adding 15 ms of jitter gives about 82 ms. With that delay, one lost snapshot still
+      leaves a later one to interpolate towards.
+  - id: render-time-lerp
+    type: numeric
+    prompt: >-
+      The client has snapshots at server times 2000 ms and 2050 ms. The estimated server time is 2130 ms and the interpolation delay is
+      100 ms. What blend factor t should it use between the two snapshots?
+    answer: 0.6
+    tolerance: 0.01
+    difficulty: 3
+    explanation: >-
+      Render time = 2130 − 100 = 2030 ms. That's 30 ms into the 50 ms gap between the snapshots, so t = 30 / 50 = 0.6.
+  - id: extrapolation-fit
+    type: single
+    prompt: For which of these is extrapolation (dead reckoning) the best fit?
+    options:
+      - A player character that can reverse direction instantly
+      - A boat with heavy momentum
+      - A chess piece
+      - The local, predicted player
+    answer: 1
+    explanation: >-
+      Extrapolation works when motion is smooth and physical. A heavy boat can't turn on the spot, so continuing its velocity is a good
+      guess. A character that can reverse instantly overshoots and snaps back every time.
+  - id: lerp-smoothing-bug
+    type: codeline
+    prompt: This code is meant to interpolate a remote player. Which line is the problem?
+    code: |-
+      void OnSnapshot(Vector3 pos) => target = pos;
+
+      void Update()
+      {
+          transform.position = Vector3.Lerp(transform.position, target, 0.1f);
+      }
+    answerLines: [5]
+    explanation: >-
+      Lerping 10% of the way each frame is frame-rate-dependent smoothing, not interpolation. It behaves differently at 30 and 144 fps,
+      never reaches the target and still stalls on jitter. Buffer timestamped samples and blend between two of them at a render time.
+  - id: interp-own-player
+    type: truefalse
+    prompt: The local, predicted player should be rendered through the same interpolation buffer as remote players.
+    answer: false
+    explanation: >-
+      That adds the interpolation delay on top of the round trip and undoes prediction. Your own player renders from its predicted state.
+      Only remote entities are rendered in the past.
+  - id: interp-pitfalls
+    type: multi
+    prompt: Which practices does a correct interpolation buffer follow? Select all that apply.
+    options:
+      - Order samples by server time, not arrival time
+      - Slerp rotations as quaternions
+      - Snap instead of blending when a teleport flag changes
+      - Lerp Euler angles component by component
+    answers: [0, 1, 2]
+    explanation: >-
+      Packets can arrive out of order, so sort by server time. Euler lerps spin the long way round across 359° → 1°, so use quaternion
+      slerp. Teleports and respawns should snap rather than glide across the map.

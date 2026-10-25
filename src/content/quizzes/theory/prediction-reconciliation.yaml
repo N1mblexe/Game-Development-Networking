@@ -1,0 +1,75 @@
+passPct: 70
+questions:
+  - id: no-prediction-delay
+    type: numeric
+    prompt: >-
+      Without prediction, a client with 120 ms RTT presses W. The server ticks at 30 Hz and the input waits half a tick on
+      average. Ignoring rendering, about how many milliseconds pass before the player sees their character move?
+    answer: 137
+    tolerance: 5
+    unit: ms
+    difficulty: 2
+    explanation: >-
+      The input travels to the server and the result comes back: 120 ms. On average the input also waits half of the 33.3 ms tick
+      interval, about 17 ms, giving roughly 137 ms. Prediction removes all of this for the local player.
+  - id: reconcile-steps
+    type: order
+    prompt: Put the client's reconciliation steps in order, after a server state arrives with "last processed input #104".
+    items:
+      - Discard stored inputs up to and including #104
+      - Reset the local player to the server's state
+      - Replay the remaining stored inputs (#105 onwards) with the fixed tick dt
+      - Blend any visual difference away over a few frames
+    explanation: >-
+      The server state already includes #104, so those inputs are dropped. The client resets to the truth, replays what the server
+      hasn't seen, and smooths any remaining error instead of snapping.
+  - id: why-not-snap
+    type: single
+    prompt: A predicting client simply snaps its player to every server position it receives. What happens?
+    options:
+      - Movement is perfectly smooth
+      - The player is pulled back in time on every update and rubber-bands
+      - The server rejects the client's inputs
+      - Nothing; prediction makes snapping invisible
+    answer: 1
+    explanation: >-
+      The server's state is about half an RTT old when it arrives, and the client has predicted several ticks beyond it. Snapping
+      throws those ticks away. Reconciliation replays them on top of the server state instead.
+  - id: misprediction-causes
+    type: multi
+    prompt: Which of these commonly cause mispredictions? Select all that apply.
+    options:
+      - Colliding with another player whose real position the client doesn't know
+      - The server applying a stun the client hasn't heard about yet
+      - Using the same movement code and fixed dt on both sides
+      - Using `Time.deltaTime` in the predicted movement code
+      - A lost input packet the server had to guess
+    answers: [0, 1, 3, 4]
+    explanation: >-
+      Anything the client couldn't know, and anything that makes its code path differ from the server's, causes mispredictions.
+      Sharing code and the fixed tick dt is what makes predictions *correct*.
+  - id: replay-side-effects
+    type: codeline
+    prompt: This function is called for new ticks and also during replay. Which line causes a bug during reconciliation?
+    code: |-
+      PlayerState Simulate(PlayerState s, PlayerInput input, float dt)
+      {
+          if (input.Jump && s.Grounded)
+          {
+              s.Velocity.y = jumpSpeed;
+              audio.PlayOneShot(jumpSound);
+          }
+          s.Position += s.Velocity * dt;
+          return s;
+      }
+    answerLines: [6]
+    explanation: >-
+      Replaying five inputs would play the jump sound again every time a correction arrives. Keep the simulation pure and trigger
+      effects only for new ticks, never during replay.
+  - id: predict-kills
+    type: truefalse
+    prompt: It's a good idea to predict kills and show them in the kill feed immediately, then remove them if the server disagrees.
+    answer: false
+    explanation: >-
+      Predict cheap, reversible things such as your own movement, muzzle flashes and recoil. A kill that appears and then disappears
+      is far more confusing than waiting a round trip for the server's decision.
