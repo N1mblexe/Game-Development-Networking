@@ -17,7 +17,10 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "verify": "pnpm validate:content && pnpm check && pnpm test && pnpm build && pnpm check:links",
-    "astro": "astro"
+    "astro": "astro",
+    "i18n:stamp": "tsx scripts/i18n-stamp.ts",
+    "i18n:status": "tsx scripts/i18n-status.ts",
+    "i18n:baseline": "tsx scripts/i18n-en-baseline.ts"
   },
   "dependencies": {
     "@astrojs/mdx": "8.0.3",

@@ -1,0 +1,57 @@
+# Turkish text for glossary/theory.yaml, keyed by term id (ids and #anchors stay English).
+# The English term and aliases are added to `aliases` automatically, so searches for the English word still match.
+terms:
+  # ------------------------------------------------------------------ 01 packets-and-protocols
+  ip-address:
+    term: IP adresi
+    short: Bir ağdaki makineyi (ağ arayüzünü) tanımlayan adres, örneğin 203.0.113.7.
+    long: >-
+      IPv4 adresleri 32 bittir ve tükenmiştir; çoğu ev cihazının bir **NAT** arkasında özel adres kullanmasının nedeni
+      budur. IPv6 adresleri 128 bittir. Bir IP adresi, bir **port** ile birlikte bir uç nokta oluşturur.
+    _src: 5e93240f213d
+  port:
+    term: Port
+    short: Bir makinedeki programı tanımlayan 16 bitlik sayı. IP adresi + port = uç nokta.
+    long: >-
+      0–1023 arası portlar iyi bilinen servislere ayrılmıştır. Bir oyun sunucusu sabit bir portu dinler (Unity Transport
+      örnekleri **7777** kullanır), istemciler ise genellikle rastgele, geçici bir porttan gönderir ve bir **NAT** bu
+      portu yeniden değiştirebilir.
+    _src: a1e8c0412fda
+  endpoint:
+    term: Uç nokta
+    short: Bir IP adresi ile bir portun birleşimi, örneğin 203.0.113.7:7777. Bir makinedeki tek bir programın soketini
+      tanımlar.
+    _src: e90fdfed6615
+  tcp:
+    term: TCP
+    short: Tıkanıklık denetimi olan, güvenilir ve sıralı bir bayt akışı sağlayan, bağlantı tabanlı bir taşıma protokolü.
+    long: >-
+      TCP bağlantıyı üç yollu bir el sıkışmayla açar, kaybolan segmentleri yeniden iletir ve tıkanıklık algıladığında
+      yavaşlar. Tek bir sıralı akış teslim ettiği için tek bir kayıp segment **hat başı engellemesine** yol açar; gerçek
+      zamanlı oyunların oynanış trafiğinde ondan kaçınmasının nedeni budur.
+    _src: 8e34fe827a86
+  udp:
+    term: UDP
+    short: Teslim ya da sıra garantisi vermeden bağımsız datagram'lar gönderen, bağlantısız bir taşıma protokolü. Oyun
+      netcode'unun temelidir.
+    long: >-
+      UDP, IP'ye yalnızca portları ve bir sağlama toplamını ekler. Her datagram ya bütün olarak gelir ya da hiç gelmez,
+      ama kaybolabilir, çoğalabilir ya da sırası karışabilir. Oyun netcode'u bunun üzerine sıra numaraları, onaylar,
+      kanallar ve parçalama kurar; böylece her mesaj kendi garantilerini seçebilir.
+    _src: 07ce8443c7c2
+  head-of-line-blocking:
+    term: Hat başı engellemesi
+    short: Sıralı bir akışta kaybolan tek bir paketin, arkasında bekleyen her paketin teslimini geciktirmesi.
+    long: >-
+      TCP'de veri sırayla teslim edilmek zorundadır; bu yüzden çoktan gelmiş yeni veri, kaybolan bir segment yeniden
+      iletilene kadar bekletilir. Oyunlar için bu, taze durumun eskimiş durumun arkasında beklemesi demektir. Oyun
+      netcode'undaki kanal başına sıralama, engellemeyi tek bir kanalın içinde tutar.
+    _src: 3138e185c939
+  mtu:
+    term: MTU
+    short: Bir bağlantının parçalama yapmadan taşıyabileceği en büyük paket; Ethernet'te genellikle yaklaşık 1500 bayt.
+    long: >-
+      Bir yoldaki en küçük MTU belirleyicidir ve bunu uç noktalardan göremezsin. IP ve UDP başlıklarından sonra,
+      tüneller, VPN'ler ve IPv6'nın 1280 baytlık alt sınırı da hesaba katıldığında yaklaşık **1200 bayt** güvenli bir
+      UDP yüküdür.
+    _src: c20412fd8a66

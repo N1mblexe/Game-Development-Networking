@@ -13,7 +13,7 @@
  * glossary aliases are the translated aliases plus the English term and aliases (so English jargon stays searchable).
  */
 import { readFileSync } from 'node:fs';
-import { getCollection, getEntry, type CollectionEntry } from 'astro:content';
+import { getCollection, type CollectionEntry } from 'astro:content';
 import { DEFAULT_LOCALE, type Locale } from '../../i18n/locales';
 import { hashText, sourceHash, type SourceKind } from '../i18n/hash';
 import type { Exam, Flashcard, GlossaryTerm, ModuleData, Question, QuestionOverlay, Quiz } from './schemas';
@@ -32,8 +32,9 @@ const collectionName = <K extends Kind>(kind: K, locale: Locale) =>
   `${kind}${locale[0]!.toUpperCase()}${locale.slice(1)}` as TrName<K>;
 
 async function translationEntry<K extends Kind>(kind: K, locale: Locale, id: string) {
-  // getEntry with a collection that has no files yet returns undefined (and warns once at build start).
-  return (await getEntry(collectionName(kind, locale), id)) as CollectionEntry<TrName<K>> | undefined;
+  // Not getEntry: it logs a warning for every missing id, and most entries have no translation yet.
+  const all = (await getCollection(collectionName(kind, locale))) as CollectionEntry<TrName<K>>[];
+  return all.find((e) => e.id === id);
 }
 
 const isStale = (kind: SourceKind, english: object, src: string | undefined) => src !== undefined && src !== sourceHash(kind, english);

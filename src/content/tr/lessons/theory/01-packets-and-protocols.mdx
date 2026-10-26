@@ -1,0 +1,151 @@
+---
+title: Paketler, Portlar ve Protokoller
+summary: Oyuncular arasında gerçekte ne dolaştığı ve neredeyse her gerçek zamanlı oyunun neden TCP yerine UDP üzerine kurulduğu.
+objectives:
+  - Paketin ne olduğunu, IP adreslerinin ve portların neyi tanımladığını açıklamak
+  - TCP ve UDP'nin garantilerini ve bunların bedelini karşılaştırmak
+  - Hat başı engellemesini ve gerçek zamanlı oyunlara neden zarar verdiğini anlatmak
+  - Oyun netcode'unun neden kendi güvenilirlik katmanını UDP üzerine kurduğunu açıklamak
+sourceHash: 0e27db0b865c
+---
+
+Tek oyunculu Unity kodunda "düşman nerede?" sorusunun cevabı, bellekten okuduğun bir alandır. Çok oyunculu bir oyunda
+ise cevap başka bir bilgisayarda, belki de başka bir kıtadadır ve onu öğrenmenin tek yolu **bayt gönderip beklemektir**.
+Bu kursta NetworkVariable'lardan Steam lobilerine kadar gördüğün her şey, bu tek gerçeği yönetmenin bir yoludur.
+
+## Ne dolaşıyor: paketler
+
+İnternet oyun durumunu kesintisiz bir akış olarak göndermez. **Paketleri** taşır: her biri bir adres etiketi taşıyan
+küçük, birbirinden bağımsız bayt parçaları. Paketin geçtiği her yönlendirici (router) etikete bakar ve paketi hedefine
+bir atlama daha yaklaştırır. Aynı yolculuktaki paketler farklı rotalardan gidebilir, sırası karışık gelebilir, iki kez
+gelebilir ya da hiç gelmeyebilir.
+
+<Diagram name="packet-journey" />
+
+Bir oyun geliştiricisi olarak etiketteki iki sayı seni ilgilendirir:
+
+- <Term id="ip-address">IP adresi</Term> bir **makineyi** (daha doğrusu bir ağ arayüzünü) tanımlar, örneğin `203.0.113.7`.
+- <Term id="port">Port</Term> o makinedeki bir **programı** tanımlar, örneğin `7777`. Bu sayede özel sunucu (dedicated
+  server) ile bir sesli sohbet istemcisi aynı bilgisayarda, birbirinin paketlerini kapmadan çalışabilir.
+
+IP adresi ve port birlikte bir <Term id="endpoint">uç nokta (endpoint)</Term> oluşturur. Unity Transport, Steam ya da
+başka bir netcode (ağ kodu) kütüphanesi "bağlandığında" aslında bir çift uç nokta ve aralarında değiş tokuş edilecek
+baytlar için bir kurallar dizisi üzerinde anlaşır.
+
+<Callout type="note">
+  Paketlerin bir boyut sınırı vardır: <Term id="mtu">MTU</Term>, Ethernet'te genellikle 1500 bayt civarındadır. Netcode
+  kütüphaneleri büyük mesajları böler (parçalama, fragmentation) ve karşı tarafta yeniden birleştirir; küçük mesajlar
+  istemenin bir nedeni de budur. Bir sonraki derste daha derine ineceğiz.
+</Callout>
+
+## İki taşıma protokolü
+
+IP'nin üzerinde trafiğin neredeyse tamamı iki **taşıma protokolünden** birini kullanır. İkisi çok farklı sözler verir.
+
+| | <Term id="tcp">TCP</Term> | <Term id="udp">UDP</Term> |
+|---|---|---|
+| Bağlantı | Veriden önce el sıkışma (handshake) | Yok, doğrudan gönder |
+| Teslim | Garantili (kaybolanı yeniden iletir) | En iyi çaba (best effort), kaybolabilir |
+| Sıra | Garantili, gönderim sırasıyla | Yok, sırası karışık gelebilir |
+| Birim | Bir bayt **akışı** | Bağımsız **datagram'lar** |
+| Tıkanıklık denetimi | Yerleşik, kayıpta yavaşlar | Yok, uygulama karar verir |
+| Tipik kullanım | Web, dosya aktarımı, sohbet, giriş | Oyunlar, ses, görüntülü arama |
+
+TCP kesinlikle daha iyi görünüyor: garantili ve sıralı teslimi kim istemez? Sorun, bu sözü **nasıl** tuttuğunda.
+
+<Sequence
+  title="TCP: bağlantı el sıkışması ve kaybolan bir segment"
+  actors={[
+    { id: 'c', label: 'İstemci', kind: 'client' },
+    { id: 's', label: 'Sunucu', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'c', to: 's', label: 'SYN', note: 'Bağlanmak istiyorum', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'SYN-ACK', kind: 'reliable' },
+    { from: 'c', to: 's', label: 'ACK', note: 'oyun verisinin ilk baytından önce tam bir gidiş-dönüş', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'Segment 1 (konum @ t=0)', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'Segment 2 (konum @ t=50ms), KAYBOLDU', kind: 'unreliable' },
+    { from: 's', to: 'c', label: 'Segment 3 (konum @ t=100ms), geliyor ama bekletiliyor', kind: 'reliable' },
+    { from: 's', to: 'c', label: 'Segment 2 bir zaman aşımından sonra yeniden iletiliyor', kind: 'reliable' },
+    { from: 'c', to: 'c', label: 'Segment 2 ve 3 sonunda oyuna veriliyor, ikisi de çoktan eskimiş', kind: 'local' },
+  ]}
+/>
+
+## Hat başı engellemesi
+
+TCP tek bir sıralı akış olduğu için, kaybolan bir segment yeniden iletilip alınana kadar **arkasındaki her şeyi**
+bekletir. Buna <Term id="head-of-line-blocking">hat başı engellemesi (head-of-line blocking)</Term> denir.
+
+Dosya indirmek için bu tam olarak doğru davranıştır, çünkü her bayta sırasıyla ihtiyacın vardır. Bir oyun içinse
+felakettir. İstemcinin tamponunda daha yeni konum güncellemesi (segment 3) zaten *duruyor*, ama TCP **eskimiş**
+güncelleme (segment 2) gelene kadar onu teslim etmez. 100 ms'lik bir gidiş-dönüş süresinde tek bir kayıp paket dünyayı
+200 ms ya da daha uzun süre dondurabilir ve oyuncular bunu bir takılma olarak görür.
+
+Dene: kayıp oranını %5 civarına getir ve iki şeridi karşılaştır.
+
+<Sim name="tcp-vs-udp" preset="lossy" />
+
+Dikkat etmen gerekenler:
+
+- **UDP** her güncellemeyi bağımsız olarak teslim eder. Kaybolan bir güncelleme hiç gelmez ve bir an sonra yenisi onun
+  yerini alır. Oyun durumunun çoğu böyledir: yeni olan her zaman eskisinden iyidir.
+- **TCP** *her şeyi* teslim eder, ama bir şey kaybolduğunda durur ve ardından eskimiş verileri tek seferde boşaltır.
+
+## Yani oyunlar UDP kullanır, üstüne de kendi kurallarını koyar
+
+Yine de her mesaj gözden çıkarılabilir değildir. Bir oyuncu son anahtarı alırsa bu olay *mutlaka* ulaşmalı, hem de tam
+bir kez. Bu yüzden oyun netcode'u UDP'nin üzerine, **her mesajın kendi garantilerini seçmesini** sağlayan ince bir
+katman kurar:
+
+<Steps>
+
+1. **Güvenilmez (unreliable)**: gönder ve unut. Konum, rotasyon ve nişan yönü gibi sürekli yeniden gönderilen durum için kullan.
+2. **Güvenilmez sequenced (eskileri atan)**: zaten alınmış olandan daha eski her şeyi at. "Son değer kazanır" akışları için kullan.
+3. **Güvenilir (reliable)**: onay gelene kadar yeniden ilet. "Oyuncu öldü", "eşya alındı" ya da sohbet mesajları gibi olaylar için kullan.
+4. **Güvenilir sıralı**: güvenilir *ve* sıralı, ama yalnızca tek bir kanal içinde; böylece kaybolan bir sohbet mesajı hareketi asla engellemez.
+
+</Steps>
+
+İleride tam olarak bunu yapılandıracaksın. Netcode for GameObjects'te RPC'ler ve NetworkVariable'lar bir **teslim
+türü** seçer, Steam Networking Sockets ise aynı seçimi **gönderim bayrakları (send flags)** olarak sunar:
+
+<CodeTabs labels={['Netcode for GameObjects', 'Facepunch.Steamworks']}>
+
+```csharp title="PlayerShooting.cs"
+// Oynanış olayı: mutlaka ulaşmalı, bu yüzden varsayılan güvenilir teslim doğru seçim.
+[Rpc(SendTo.Server)]
+void FireRpc(Vector3 aimDirection) { /* sunucuda doğrula ve mermiyi spawn et */ }
+
+// Görsel, yüksek frekanslı ve kaybolması sorun değil: güvenilirlikten vazgeç.
+[Rpc(SendTo.NotServer, Delivery = RpcDelivery.Unreliable)]
+void AimPreviewRpc(Vector3 aimDirection) { /* uzak oyuncunun silahını döndür */ }
+```
+
+```csharp title="SteamMessages.cs"
+// Facepunch.Steamworks: aynı seçim, bir bağlantı üzerinde SendType bayrağı olarak ifade edilir.
+connection.SendMessage(fireEventBytes, SendType.Reliable);
+connection.SendMessage(aimPreviewBytes, SendType.Unreliable);
+```
+
+</CodeTabs>
+
+<Callout type="pitfall">
+  "TCP kullanırım, daha basit" yaklaşımı hiçbir şeyin kaybolmadığı yerel ağında çalışır, oyuncuların Wi-Fi'ında ise
+  dağılır. Her zaman simüle edilmiş kayıp ve gecikmeyle test et. Unity'nin Network Simulator'ı ve bu sitedeki
+  simülatörler tam olarak bunun için var.
+</Callout>
+
+<Callout type="unity" title="Unity'de soketlere nadiren dokunursun">
+  NGO'nun **Unity Transport**'u da **Facepunch transport** da UDP üzerinde çalışır ve yukarıdaki teslim türlerini senin
+  için uygular. Ödünleşimleri anlamak, her mesaj için doğru teslim türünü seçmeni sağlar.
+</Callout>
+
+<KeyTakeaways>
+
+- Ağ, gecikebilen, sırası karışabilen, çoğalabilen ya da kaybolabilen bağımsız **paketler** taşır.
+- Bir **IP adresi + port** (bir uç nokta), bir makinedeki bir programı tanımlar.
+- **TCP** sıralı teslimi garanti eder ama **hat başı engellemesinden** muzdariptir: tek bir kayıp arkasındaki her şeyi durdurur.
+- Gerçek zamanlı oyunlar, her mesajın **güvenilmez ya da güvenilir** teslimi seçebilmesi için **UDP**'yi özel bir katmanla kullanır.
+- Sürekli yenilenen durum için güvenilmez, tam bir kez gerçekleşmesi gereken olaylar için güvenilir teslim kullan.
+
+</KeyTakeaways>

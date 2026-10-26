@@ -1,0 +1,64 @@
+# Turkish text for quizzes/theory/packets-and-protocols.yaml, keyed by question id. Text fields only.
+questions:
+  port-purpose:
+    prompt: Bir özel sunucu ve bir sesli sohbet uygulaması aynı bilgisayarda çalışıyor. Gelen paketlerin doğru programa
+      ulaşmasını ne sağlar?
+    options:
+      - IP adresi
+      - Port numarası
+      - MTU
+      - TCP el sıkışması
+    explanation: >-
+      IP adresi paketi makineye ulaştırır; o makinede paketi hangi programın alacağını **port** belirler. İkisi birlikte
+      bir uç nokta oluşturur.
+    _src: 1a56d51b417b
+  hol-blocking:
+    prompt: Daha yeni güncellemeler çoktan gelmiş olsa bile, tek bir kayıp TCP segmenti oyunda neden gözle görülür bir
+      takılmaya yol açar?
+    options:
+      - TCP bir kayıptan sonra bütün paketleri atar
+      - TCP baytları sırayla teslim etmek zorundadır, bu yüzden yeni veri kaybolan segmentin yeniden iletilmesini bekler
+      - Yönlendiriciler UDP paketlerini TCP'ye göre önceliklendirir
+      - Her kayıptan sonra TCP el sıkışması tekrarlanmak zorundadır
+    explanation: >-
+      Buna **hat başı engellemesi** denir. TCP tek bir sıralı akıştır; bu yüzden bir boşluğun arkasındaki veri, boşluk
+      doldurulana kadar bekletilir. Oyun eskimiş güncellemeyi ve yenisini geç gelen tek bir yığın hâlinde alır.
+    _src: 59c2baef113c
+  udp-guarantees:
+    prompt: Düz UDP bunlardan hangilerini garanti eder? Uygun olanların hepsini seç.
+    options:
+      - Teslim
+      - Sıra
+      - Her datagram'ın ya bozulmadan gelmesi ya da hiç gelmemesi (checksum)
+      - Çift kopya olmaması
+      - Tıkanıklık denetimi
+    explanation: >-
+      UDP yalnızca *gelen* bir datagram'ın bozulmamış olmasını garanti eder, çünkü bozulmuş bir datagram sağlama toplamı
+      kontrolünden geçemez ve atılır. Teslim, sıra, çift kopyaların ayıklanması ve tıkanıklık denetimi uygulamaya kalır;
+      oyun netcode katmanlarının eklediği de tam olarak budur.
+    _src: 41c0cfb378d6
+  delivery-choice:
+    prompt: Bu teslim modlarını en az garantiden en çok garantiye doğru sırala.
+    items:
+      - Güvenilmez
+      - Güvenilmez sequenced
+      - Güvenilir (sırasız)
+      - Güvenilir sıralı
+    explanation: >-
+      Her adım bir garanti ve bir bedel ekler. Sequenced teslim eskimiş paketleri atar, güvenilir teslim onay gelene
+      kadar yeniden iletir, sıralı teslim ise eksik bir mesajı beklerken sonraki mesajları da bekletebilir.
+    _src: f178c2a8d6a6
+  unreliable-position:
+    prompt: Saniyede 30 kez gönderilen bir oyuncu konumu, **güvenilmez** teslim için iyi bir adaydır.
+    explanation: >-
+      Daha yeni bir konum 33 ms sonra eskisinin yerini alır; kaybolan birini yeniden iletmek yalnızca eskimiş veri
+      getirir. Tam bir kez gerçekleşmesi gereken olaylar için güvenilir teslim kullan.
+    _src: 9e676349129d
+  wrong-delivery-line:
+    prompt: Bu RPC'lerden biri, kayıplı bir bağlantıda oynanış hatalarına yol açacak bir teslim türü kullanıyor. Değişmesi
+      gereken satıra tıkla.
+    explanation: >-
+      Anahtar almak tek seferlik bir oynanış olayıdır. O paket kaybolursa oyuncu anahtarı hiç almaz. Bu RPC'nin
+      güvenilir teslime ihtiyacı var; `Delivery`'yi yazmadığında varsayılan da budur. Nişan önizlemesi ise görseldir ve
+      sürekli yeniden gönderilir, orada güvenilmez teslim sorun değil.
+    _src: 157ca3a4fa8d
