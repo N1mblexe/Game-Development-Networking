@@ -27,7 +27,7 @@ sources:
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/basics/scenemanagement/inscene-placed-networkobjects.html
   - title: 'NGO 2.13 API: NetworkSceneManager'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkSceneManager.html
-  - title: 'NGO source v2.13.3: NetworkManager.cs (host approval), NetworkSceneManager.cs (single-mode loads)'
+  - title: 'NGO source v2.13.3: NetworkManager.cs (host approval, OnServerStarted after HostServerInitialize), NetworkSceneManager.cs (single-mode loads), SceneEventProgress.cs (status values)'
     url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/tree/v2.13.3/com.unity.netcode.gameobjects/Runtime
 ---
 
@@ -217,7 +217,9 @@ Restructure the project into three scenes, and add all three to the build's scen
 2. **Lobby**: a "waiting for players" screen with a **Start match** button that only the host sees.
 3. **Arena**: the floor, the crates, the `Scoreboard` and the `PickupSpawner`, all from earlier lessons.
 
-After `StartHost()` succeeds, the host loads the lobby **through NGO**, and from then on clients follow automatically:
+After `StartHost()` succeeds, the host loads the lobby **through NGO**, and from then on clients follow automatically.
+`OnServerStarted` is a safe place for that first load: NGO raises it at the end of `StartServer` or `StartHost`, after the
+sub-systems exist, the host's own client has been approved and the in-scene objects have been spawned.
 
 ```csharp title="MatchFlow.cs"
 using System.Collections.Generic;
@@ -285,8 +287,8 @@ public class MatchFlow : MonoBehaviour
 
 `LoadScene` returns a `SceneEventProgressStatus` instead of throwing. `Started` means success. The others tell you what
 went wrong: `SceneEventInProgress` (another load or unload is still running), `InvalidSceneName` (misspelled, or not
-in the build list), `SceneFailedVerification` (your `VerifySceneBeforeLoading` handler said no), `SceneNotLoaded` and
-`InternalNetcodeError`.
+in the build list), `SceneFailedVerification` (your `VerifySceneBeforeLoading` handler said no), `ServerOnlyAction` (a
+client called it), `SceneManagementNotEnabled`, `SceneNotLoaded` and `InternalNetcodeError`.
 
 ### What survives a single-mode load
 

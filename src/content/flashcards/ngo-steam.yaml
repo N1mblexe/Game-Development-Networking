@@ -142,7 +142,7 @@ cards:
 - id: pi-name-source
   lesson: ngo-steam/player-identity
   front: Where does the host get a player's display name?
-  back: From `new Friend(steamId).Name`; members of the same lobby are known to each other.
+  back: From `new Friend(steamId).Name`. Lobby members become known to each other, but the name can arrive asynchronously, so fall back to a placeholder and refresh with `RequestInfoAsync()`.
 - id: pi-late-join
   lesson: ngo-steam/player-identity
   front: How should clients read identity values?
@@ -242,7 +242,7 @@ cards:
 - id: dw-mppm-tags
   lesson: ngo-steam/dev-workflow
   front: How do MPPM players auto-start as host or client?
-  back: 'Read player tags: `CurrentPlayer.Tags` on Unity 6.4+, `CurrentPlayer.ReadOnlyTags()` in MPPM 1.x.'
+  back: 'Read player tags: `CurrentPlayer.Tags` on Unity 6.3+, `CurrentPlayer.ReadOnlyTags()` in MPPM 1.x.'
 - id: dw-restart-trap
   lesson: ngo-steam/dev-workflow
   front: Why does a copied dev build sometimes launch Spacewar instead?

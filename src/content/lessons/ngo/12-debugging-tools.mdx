@@ -35,7 +35,9 @@ sources:
     url: https://mp-docs.dl.it.unity3d.com/mppm/1.3.3/player-tags/target-instance
   - title: 'Unity Scripting API: CurrentPlayer.Tags'
     url: https://docs.unity3d.com/ScriptReference/Unity.Multiplayer.PlayMode.CurrentPlayer.Tags.html
-  - title: 'NGO source v2.13.3: UnityTransport.cs (DebugSimulator obsolete)'
+  - title: 'Multiplayer Tools 2.2.12 package source (AddComponentMenu, presets, UTP adapter)'
+    url: https://download.packages.unity.com/com.unity.multiplayer.tools/-/com.unity.multiplayer.tools-2.2.12.tgz
+  - title: 'NGO source v2.13.3: UnityTransport.cs (DebugSimulator obsolete, NETSIM defines)'
     url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Transports/UTP/UnityTransport.cs
 ---
 
@@ -63,8 +65,8 @@ What you should notice:
 ## Multiplayer Play Mode scenarios
 
 Lesson 1 used MPPM to run a host and a client. For daily work, make it repeatable with a **play mode scenario**: open
-the Play Mode Scenarios window (**Window > Multiplayer > Play Mode Scenarios** in MPPM 1.6, or from the Play Mode
-dropdown), add a scenario with **+**, and configure its instances.
+the Play Mode Scenarios window (**Window > Multiplayer > Play Mode Scenarios** in MPPM 1.6, **Window > Play Mode > Scenarios** in MPPM 2.0 on
+Unity 6.3+, or from the Play Mode dropdown), add a scenario with **+**, and configure its instances.
 
 | Instance type | What it is | Use it for |
 |---|---|---|
@@ -115,7 +117,8 @@ exactly the same assets, which avoids lesson 1's "two builds, two projects" mism
 Install `com.unity.multiplayer.tools` and open **Window > Multiplayer > Multiplayer Tools**. Next to **Network
 Simulator**, select **Add to Scene**, or add the **Network Simulator** component yourself to a GameObject that persists
 across scenes. The NetworkManager GameObject in Bootstrap is a good place. It drives Unity Transport's simulator
-pipeline stage, and it works both in the Editor and in builds.
+pipeline stage, and it works in the Editor and in development builds. NGO's Unity Transport only adds that stage to
+release builds if you define <code>UNITY_MP_TOOLS_NETSIM_<wbr />ENABLED_IN_RELEASE</code>.
 
 <Callout type="pitfall" title="The old UnityTransport debug simulator does nothing">
 
@@ -218,7 +221,7 @@ distributed authority.
 ## On-screen stats: the Runtime Network Stats Monitor
 
 The profiler needs the Editor. For playtests on real devices, add the **RuntimeNetStatsMonitor** component
-(**Component > Netcode > RuntimeNetStatsMonitor**, or **Add to Scene** in the Multiplayer Tools window). It draws
+(**Add Component > Netcode > Runtime Network Stats Monitor**, or **Add to Scene** in the Multiplayer Tools window). It draws
 configurable counters and graphs over the game.
 
 - **Configuration** decides what's displayed. The default is `DefaultNetStatsMonitorConfiguration`. Create your own with

@@ -38,7 +38,8 @@ questions:
       }
     answerLines: [6]
     explanation: >-
-      A non-authority client must never `Destroy` a spawned NetworkObject. NGO throws. Despawning is the authority's job,
+      A non-authority client must never `Destroy` a spawned NetworkObject. NGO logs an "Invalid Destroy" error and the object
+      stays spawned on the server and every other client, so this client is now out of sync. Despawning is the authority's job,
       so the client should send an RPC (or, better, let the server detect the trigger itself) and the server calls `Despawn()`.
   - id: spawn-order
     type: order
@@ -57,7 +58,8 @@ questions:
     prompt: A network prefab can contain a child GameObject with its own NetworkObject, as long as the root also has one.
     answer: false
     explanation: >-
-      Nested NetworkObjects aren't permitted in network prefabs, and the Editor prevents it. Split them into separate
+      Nested NetworkObjects aren't supported in network prefabs: NGO warns at spawn that the child NetworkObjects won't be
+      spawned over the network. Split them into separate
       prefabs and combine them at runtime with NetworkObject parenting or `AttachableBehaviour`.
   - id: ownership-change-who
     type: multi

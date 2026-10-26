@@ -46,11 +46,12 @@ questions:
       - Client B calls NetworkObject.RequestOwnership() and gets RequestSent
       - The request reaches the current owner, client A
       - Client A's OnOwnershipRequested returns true
+      - The ownership change is applied, so client B owns the object and its OnOwnershipChanged runs
       - Client B's OnOwnershipRequestResponse receives Approved
-      - Client B now owns the object, and OnOwnershipChanged runs on every instance
     explanation: >-
       `RequestOwnership` only sends the request. The current owner decides in `OnOwnershipRequested` (auto-approved when
-      you don't assign it), and the requester learns the outcome in `OnOwnershipRequestResponse`.
+      you don't assign it). When the approval reaches client B, NGO applies the ownership change first and raises
+      `OnOwnershipRequestResponse` last, so by the time the requester hears "Approved" it already owns the object.
   - id: when-da
     type: truefalse
     prompt: Distributed authority is the best choice for a ranked competitive shooter because it removes the server round trip for every player.

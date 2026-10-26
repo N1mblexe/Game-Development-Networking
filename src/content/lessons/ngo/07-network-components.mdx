@@ -64,8 +64,10 @@ turn off all scale axes, and you've removed two-thirds of the per-update data be
 
 </Callout>
 
-Interpolation is client-side only. The authority always shows its own exact transform, and a server or host gets no
-smoothing for objects it doesn't own unless you add your own.
+Interpolation runs only on **non-authority** instances. The authority always shows its own exact transform, so with
+server authority the server or host gets no smoothing unless you add your own. With owner authority, the server is a
+non-authority instance and interpolates the owner's updates like everyone else (the `OnUpdate` source exits early only
+where `CanCommitToTransform` is true).
 
 ## Server authority or owner authority?
 

@@ -14,7 +14,7 @@ questions:
       callbacks run before `Start`. For in-scene placed objects, `Start` runs before `OnNetworkSpawn`.
   - id: start-bug
     type: codeline
-    prompt: This works for dynamically spawned players but breaks for an in-scene placed object. Click the buggy line.
+    prompt: This works for dynamically spawned players but breaks for an in-scene placed object. Click the line that reads ownership too early.
     code: |-
       public class TurretController : NetworkBehaviour
       {
@@ -25,7 +25,7 @@ questions:
               m_AimInput.enabled = IsOwner;
           }
       }
-    answerLines: [5]
+    answerLines: [7]
     explanation: >-
       `Start` runs **before** `OnNetworkSpawn` for in-scene placed objects, so `IsOwner` isn't valid yet. Move the
       ownership decision to `public override void OnNetworkSpawn()`.

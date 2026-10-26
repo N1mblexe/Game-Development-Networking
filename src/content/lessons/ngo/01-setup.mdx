@@ -15,7 +15,7 @@ targets:
   packages:
     - { name: com.unity.netcode.gameobjects, version: '2.13.3' }
     - { name: com.unity.transport, version: '2.7.4' }
-    - { name: com.unity.multiplayer.playmode, version: '1.6.3 (Unity 6.0 to 6.2) / 3.0.0 (Unity 6.3+)' }
+    - { name: com.unity.multiplayer.playmode, version: '1.6.3 (Unity 6.0 to 6.2) / 2.0.2 (Unity 6.3+)' }
 sources:
   - title: 'NGO 2.13 manual: Install Netcode for GameObjects'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/install.html
@@ -23,12 +23,22 @@ sources:
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/tutorials/get-started-with-ngo.html
   - title: 'NGO 2.13 manual: NetworkManager'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkmanager.html
-  - title: 'NGO changelog (2.13.3 and 3.0.0)'
+  - title: 'NGO changelog (2.13.3, 3.0.0 and 3.1.0)'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@3.0/changelog/CHANGELOG.html
+  - title: 'NGO source NGOv3.1.0: Upgrade from 2.x to 3.x (Documentation~/upgrade-guide.md) and package.json (unity 6000.7)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/NGOv3.1.0/com.unity.netcode.gameobjects/Documentation~/upgrade-guide.md
+  - title: 'NGO source v2.13.3: package.json (unity 6000.0, com.unity.transport 2.6.0)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/package.json
+  - title: 'NGO 2.13 manual: NetworkObject (component order)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/networkobject.html
+  - title: 'NGO 2.13 manual: PlayerObjects and player prefabs'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/components/core/playerobjects.html
   - title: 'Multiplayer Play Mode 1.6 manual'
     url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@1.6/manual/index.html
-  - title: 'Multiplayer Play Mode 3.0 manual'
-    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@3.0/manual/index.html
+  - title: 'Multiplayer Play Mode 2.0 manual (Unity 6.3+; menu Window > Play Mode > Scenarios)'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@2.0/manual/index.html
+  - title: 'Multiplayer Play Mode 2.0 changelog (2.0.0: Unity 6.3 and later only)'
+    url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@2.0/changelog/CHANGELOG.html
   - title: 'Multiplayer Center'
     url: https://docs.unity3d.com/Packages/com.unity.multiplayer.center@1.0/manual/index.html
 ---
@@ -52,15 +62,21 @@ NGO is a high-level library. It sits on top of a **transport**, the layer that a
 | Testing | `com.unity.multiplayer.playmode`, `com.unity.multiplayer.tools` | Extra Editor players, network simulation, profiling |
 
 This course targets **Unity 6 (6000.x) with NGO 2.13.3**, the latest 2.x release, and
-<Term id="unity-transport">Unity Transport</Term> 2.7. NGO pulls in a compatible Unity Transport automatically.
+<Term id="unity-transport">Unity Transport</Term> 2.7. NGO 2.13.3 declares Unity Transport 2.6.0 as its minimum and pulls
+it in automatically. The course was checked against 2.7.4, which you can add by name if you want the newest 2.x transport.
 
-<Callout type="note" title="What about NGO 3.0?">
+<Callout type="note" title="Why 2.13 and not NGO 3.x?">
 
-NGO 3.0.0 shipped in September 2026. According to its changelog, it adds Netcode for Entities (`com.unity.netcode`) as a
-required dependency, which also installs Entities, Burst and Collections. It moves `NetworkTime`, `NetworkTimeSystem` and
-`NetworkTickSystem` into the `Unity.Netcode.GameObjects.Timing` namespace, and APIs that were already marked
-`[Obsolete]` become compile errors. Everything in this module uses non-obsolete 2.13 APIs, so it carries forward,
-but stay on 2.x unless you want those extra dependencies.
+The package registry's latest NGO is 3.1.0 (3.0.0 shipped in September 2026), but 3.x **requires Unity 6.7 or later**.
+On Unity 6.0 to 6.6, including the 6.0 and 6.3 LTS releases, the Package Manager gives you 2.x, and 2.13.3 is the newest 2.x.
+That's why this course targets 2.13.3.
+
+According to the 3.x changelog and upgrade guide, 3.x adds Netcode for Entities (`com.unity.netcode`) as a required
+dependency, which also installs Entities, Burst, Collections and Mathematics. It moves `NetworkTime`, `NetworkTimeSystem`
+and `NetworkTickSystem` into the `Unity.Netcode.GameObjects.Timing` namespace (the API updater rewrites your scripts),
+renames the Editor assemblies to `Unity.Netcode.GameObjects.*`, and turns APIs that 2.x already marks `[Obsolete]` into
+compile errors. `NetworkBehaviour`, `NetworkVariable` and RPC code works the same. The code in this module avoids
+obsolete 2.13 APIs, so it carries forward, apart from adding the new `using` for code that names `NetworkTime` directly.
 
 </Callout>
 
@@ -70,7 +86,7 @@ but stay on 2.x unless you want those extra dependencies.
 
 1. Create a project from a Unity 6 3D template. The templates enable the **Input System** package, which the code in this module uses.
 2. Open **Window > Package Manager**, choose **+ > Add package by name…**, enter `com.unity.netcode.gameobjects`, and select **Add**. Unity Transport comes with it.
-3. Add `com.unity.multiplayer.playmode` the same way. On Unity 6.0 to 6.2 you get **1.6.x**. On Unity 6.3 LTS and later, use **2.0 or 3.0**, which moved most features into the engine's Play Mode framework.
+3. Add `com.unity.multiplayer.playmode` the same way. On Unity 6.0 to 6.2 you get **1.6.x**. On Unity 6.3 LTS and later, you get **2.0.x** (2.0.2 is the latest in the registry), which moved most features into the engine's Play Mode framework.
 4. Optionally, add `com.unity.multiplayer.tools` now. You need it for the Network Simulator and the profiler modules in the debugging lesson.
 
 </Steps>
@@ -211,7 +227,7 @@ instance.
 
 <Steps>
 
-1. Open **Window > Multiplayer > Play Mode Scenarios** (MPPM 1.6) or **Window > Play Mode > Scenarios** (MPPM 2.0/3.0 on Unity 6.3+).
+1. Open **Window > Multiplayer > Play Mode Scenarios** (MPPM 1.6) or **Window > Play Mode > Scenarios** (MPPM 2.0 on Unity 6.3+).
 2. Create a scenario with the **Editor** plus one **additional Editor instance**.
 3. Enter Play Mode. Click **Host** in the main Editor and **Client** in the additional instance.
 4. You see two capsules on top of each other at the origin, because nothing moves them yet. That's the next lessons' job.
@@ -232,9 +248,10 @@ as soon as you create it.
 
 <Callout type="pitfall" title="Placing the player in the scene">
 
-The player prefab is spawned *by NGO* when a client is approved. Don't also drop a `PlayerAvatar` into the scene: NGO
-doesn't support an in-scene placed object as a player object, and you'll end up with an extra, unowned capsule that
-confuses every ownership check.
+The player prefab is spawned *by NGO* for each approved client (with scene management on, once that client finishes its
+initial synchronization). Don't also drop a `PlayerAvatar` into the scene: a copy placed in the scene isn't anyone's
+player object. NGO spawns it as an ordinary in-scene object owned by the server, so you end up with an extra capsule
+that the host "owns", which confuses every ownership check.
 
 </Callout>
 
@@ -260,7 +277,7 @@ Assets/
 
 <KeyTakeaways>
 
-- NGO 2.x (2.13.3 here) runs on Unity 6 on top of **Unity Transport**. NGO 3.0 exists but adds a Netcode for Entities dependency.
+- NGO 2.x (2.13.3 here) runs on Unity 6 on top of **Unity Transport**. NGO 3.x needs Unity 6.7+ and adds a Netcode for Entities dependency.
 - Every project needs a **NetworkManager**, **network prefabs** with a NetworkObject on the root, and networked scenes in the **build list**.
 - `StartServer`, `StartHost` and `StartClient` map to the dedicated-server, listen-server and client roles. The host's local client is client id 0.
 - The server tells joining clients what to load and spawn, so prefabs, scenes and settings must match on every machine.

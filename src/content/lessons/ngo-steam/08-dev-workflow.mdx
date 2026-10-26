@@ -17,7 +17,7 @@ targets:
     - { name: com.unity.netcode.gameobjects, version: '2.13.x' }
     - { name: com.community.netcode.transport.facepunch, version: '2.0.0 (main branch, Sep 2026, patched as in lesson 2)' }
     - { name: Facepunch.Steamworks, version: '2.5.2' }
-    - { name: com.unity.multiplayer.playmode, version: '1.x on Unity 6.0 to 6.2; Unity 6.4+ exposes Unity.Multiplayer.PlayMode.CurrentPlayer.Tags' }
+    - { name: com.unity.multiplayer.playmode, version: '1.x on Unity 6.0 to 6.2; 2.0 on Unity 6.3+, which exposes Unity.Multiplayer.PlayMode.CurrentPlayer.Tags' }
 sources:
   - title: 'NGO 2.13 manual: Testing locally (Multiplayer Play Mode, up to four players)'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/tutorials/testing/testing_locally.html
@@ -27,8 +27,8 @@ sources:
     url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Transports/UTP/UnityTransport.cs
   - title: 'Multiplayer Play Mode 1.6: CurrentPlayer (ReadOnlyTags)'
     url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@1.6/api/Unity.Multiplayer.Playmode.CurrentPlayer.html
-  - title: 'Unity 6 Scripting API: Unity.Multiplayer.PlayMode.CurrentPlayer.Tags'
-    url: https://docs.unity3d.com/ScriptReference/Unity.Multiplayer.PlayMode.CurrentPlayer.Tags.html
+  - title: 'Unity 6.3 LTS Scripting API: Unity.Multiplayer.PlayMode.CurrentPlayer.Tags'
+    url: https://docs.unity3d.com/6000.3/Documentation/ScriptReference/Unity.Multiplayer.PlayMode.CurrentPlayer.Tags.html
   - title: 'Multiplayer Play Mode 2.0 manual (limits: four editor players)'
     url: https://docs.unity3d.com/Packages/com.unity.multiplayer.playmode@2.0/manual/index.html
   - title: 'Steamworks docs: Steamworks API overview (steam_appid.txt, RestartAppIfNecessary)'
@@ -186,7 +186,7 @@ The NGO manual describes Multiplayer Play Mode as a way to "simulate up to four 
 Give the main editor the tag `host` and a virtual player the tag `client` in the Multiplayer Play Mode window, and let a small editor-only
 component start them:
 
-<CodeTabs labels={['Unity 6.4 and later', 'MPPM 1.x (Unity 6.0 to 6.2)']}>
+<CodeTabs labels={['Unity 6.3 and later', 'MPPM 1.x (Unity 6.0 to 6.2)']}>
 
 ```csharp title="MppmAutoStart.cs"
 #if UNITY_EDITOR

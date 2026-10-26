@@ -303,7 +303,7 @@ questions:
   options:
   - It supports up to four editor players
   - Player tags can drive auto-starting a host or a client
-  - The tag API differs between MPPM 1.x (ReadOnlyTags) and Unity 6.4+ (Tags)
+  - The tag API differs between MPPM 1.x (ReadOnlyTags) and Unity 6.3+ (Tags)
   - Each virtual player logs into a separate Steam account automatically
   answers:
   - 0
