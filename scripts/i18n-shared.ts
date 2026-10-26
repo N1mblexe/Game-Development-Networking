@@ -74,4 +74,4 @@ export function overlayItems(type: OverlayType, data: unknown): Map<string, Reco
 export const itemHash = (kind: SourceKind, item: object) => sourceHash(kind, item);
 
 /** Module id a lesson or overlay file belongs to, for per-module reports. */
-export const moduleOf = (type: OverlayType | 'lessons', rel: string) => rel.split('/')[0]!.replace(/\.yaml$/, '');
+export const moduleOf = (_type: OverlayType | 'lessons', rel: string) => rel.split('/')[0]!.replace(/\.yaml$/, '');
