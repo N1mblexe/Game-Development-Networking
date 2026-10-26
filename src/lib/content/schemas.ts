@@ -45,7 +45,17 @@ export const lessonSchema = z.object({
   targets: z
     .object({
       unity: z.string().optional(),
-      packages: z.array(z.object({ name: z.string(), version: z.string() })).default([]),
+      packages: z
+        .array(
+          z.object({
+            name: z.string(),
+            /** Just the version, e.g. '2.13.x' or '1.6.x / 2.0+'. It is shown as a tag in the lesson header. */
+            version: z.string().max(20, 'keep `version` short; put explanations in `note`'),
+            /** Optional caveat shown under the tags, e.g. 'main branch, patched as in lesson 2'. */
+            note: z.string().optional(),
+          }),
+        )
+        .default([]),
     })
     .optional(),
   /** Official sources the technical claims were checked against. */

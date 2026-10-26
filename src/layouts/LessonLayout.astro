@@ -21,6 +21,7 @@ interface Props {
 }
 const { lesson, module, headings } = Astro.props;
 const d = lesson.data;
+const packageNotes = (d.targets?.packages ?? []).filter((p) => p.note);
 const moduleLessons = await getLessons(module.id);
 const { prev, next } = await getPrevNext(lesson);
 const quiz = await getQuiz(lesson.id);
@@ -56,6 +57,17 @@ const index = moduleLessons.findIndex((l) => l.id === lesson.id) + 1;
           {d.targets?.unity && <span class="rounded-full bg-surface-2 px-2.5 py-1">Unity {d.targets.unity}</span>}
           {d.targets?.packages.map((p) => <span class="max-w-full rounded-2xl bg-surface-2 px-2.5 py-1 font-mono [overflow-wrap:anywhere]">{p.name} {p.version}</span>)}
         </div>
+        {
+          packageNotes.length > 0 && (
+            <ul class="mt-2 space-y-0.5 text-xs text-muted [overflow-wrap:anywhere]">
+              {packageNotes.map((p) => (
+                <li>
+                  <span class="font-mono">{p.name}</span>: {p.note}
+                </li>
+              ))}
+            </ul>
+          )
+        }
 
         <div class="mt-6 rounded-xl border border-border bg-surface p-4">
           <h2 class="mb-2 text-sm font-bold uppercase tracking-wider text-muted">You will learn to</h2>

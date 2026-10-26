@@ -57,6 +57,7 @@ targets:                      # REQUIRED for engine/SDK lessons
   unity: '6000.0'
   packages:
     - { name: com.unity.netcode.gameobjects, version: '2.x' }
+    - { name: com.community.netcode.transport.facepunch, version: '2.0.0', note: 'main branch' }  # version ≤ 20 chars; caveats go in note
 sources:                      # REQUIRED for engine/SDK lessons: where every API claim was checked
   - { title: 'NGO docs: NetworkVariable', url: 'https://docs-multiplayer.unity3d.com/...' }
 ---
