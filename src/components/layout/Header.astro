@@ -1,33 +1,38 @@
 ---
-import { withBase } from '../../lib/url';
+import { t } from '../../i18n';
+import { getLocale, localizePath, stripLocale } from '../../lib/i18n/route';
+import LanguageSwitcher from './LanguageSwitcher.astro';
 import ThemeToggle from './ThemeToggle.astro';
 import SearchBox from './SearchBox.astro';
 
+const locale = getLocale(Astro);
+const m = t(locale).ui.nav;
 const links = [
-  { href: '/', label: 'Course' },
-  { href: '/playground/', label: 'Playground' },
-  { href: '/review/', label: 'Review' },
-  { href: '/glossary/', label: 'Glossary' },
-  { href: '/progress/', label: 'Progress' },
+  { href: '/', label: m.course },
+  { href: '/playground/', label: m.playground },
+  { href: '/review/', label: m.review },
+  { href: '/glossary/', label: m.glossary },
+  { href: '/progress/', label: m.progress },
 ];
-const path = Astro.url.pathname.replace(import.meta.env.BASE_URL.replace(/\/$/, ''), '') || '/';
+// Active state compares site paths (no base, no locale prefix), so it works the same in every language.
+const path = stripLocale(Astro.url.pathname);
 const isActive = (href: string) => (href === '/' ? path === '/' || path.startsWith('/modules') : path.startsWith(href));
 ---
 
 <header class="no-print sticky top-0 z-40 border-b border-border bg-surface/90 backdrop-blur">
   <div class="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4 sm:px-6">
-    <a href={withBase('/')} class="flex items-center gap-2 font-bold tracking-tight">
+    <a href={localizePath('/', locale)} class="flex items-center gap-2 font-bold tracking-tight">
       <svg viewBox="0 0 24 24" class="h-6 w-6 text-accent" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <circle cx="5" cy="12" r="2.5"></circle><circle cx="19" cy="5" r="2.5"></circle><circle cx="19" cy="19" r="2.5"></circle>
         <path d="M7.3 11 16.7 6M7.3 13l9.4 5"></path>
       </svg>
       NetLearn
     </a>
-    <nav class="ml-4 hidden items-center gap-1 md:flex" aria-label="Main">
+    <nav class="ml-4 hidden items-center gap-1 md:flex" aria-label={m.main}>
       {
         links.map((l) => (
           <a
-            href={withBase(l.href)}
+            href={localizePath(l.href, locale)}
             class:list={[
               'rounded-md px-3 py-1.5 text-sm font-medium',
               isActive(l.href) ? 'bg-accent-soft text-accent' : 'text-muted hover:text-text',
@@ -41,13 +46,15 @@ const isActive = (href: string) => (href === '/' ? path === '/' || path.startsWi
     </nav>
     <div class="ml-auto flex items-center gap-2">
       <SearchBox />
+      <LanguageSwitcher variant="desktop" />
       <ThemeToggle />
       <details class="relative md:hidden">
-        <summary class="btn list-none px-2.5" aria-label="Menu">
+        <summary class="btn list-none px-2.5" aria-label={m.menu}>
           <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
         </summary>
-        <nav class="card absolute right-0 mt-2 flex w-48 flex-col p-2 shadow-lg" aria-label="Main mobile">
-          {links.map((l) => <a href={withBase(l.href)} class="rounded-md px-3 py-2 hover:bg-surface-2">{l.label}</a>)}
+        <nav class="card absolute right-0 mt-2 flex w-48 flex-col p-2 shadow-lg" aria-label={m.mainMobile}>
+          {links.map((l) => <a href={localizePath(l.href, locale)} class="rounded-md px-3 py-2 hover:bg-surface-2">{l.label}</a>)}
+          <LanguageSwitcher variant="mobile" />
         </nav>
       </details>
     </div>

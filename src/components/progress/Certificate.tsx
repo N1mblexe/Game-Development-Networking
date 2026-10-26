@@ -3,6 +3,8 @@ import { useProgress } from '../../lib/progress/react';
 import { isLessonComplete, setCertName } from '../../lib/progress/store';
 import { hashString } from '../../lib/quiz/random';
 import './certificate.css';
+import { DEFAULT_LOCALE, type Locale } from '../../i18n/locales';
+import { LocaleProvider } from '../../i18n/react';
 
 export interface CertificateProps {
   moduleId: string;
@@ -38,7 +40,7 @@ export const certificateId = (moduleId: string, passedAt: string) =>
  * Locked until the module exam is passed; then a printable certificate with the learner's name.
  * Rendered only after mount (it depends on localStorage).
  */
-export default function Certificate({ moduleId, moduleTitle, moduleColor, lessonKeys, examUrl, moduleBadge }: CertificateProps) {
+function CertificateView({ moduleId, moduleTitle, moduleColor, lessonKeys, examUrl, moduleBadge }: CertificateProps) {
   const progress = useProgress();
   const [name, setName] = useState('');
   const [loadedName, setLoadedName] = useState(false);
@@ -191,5 +193,14 @@ export default function Certificate({ moduleId, moduleTitle, moduleColor, lesson
       </div>
       {!trimmed && <p className="no-print -mt-3 text-sm text-warn">Add your name above before printing.</p>}
     </div>
+  );
+}
+
+/** Root island. Its only locale-related prop is `locale`; children read text with useT() (see src/i18n/react.tsx). */
+export default function Certificate({ locale = DEFAULT_LOCALE, ...props }: CertificateProps & { locale?: Locale }) {
+  return (
+    <LocaleProvider locale={locale}>
+      <CertificateView {...props} />
+    </LocaleProvider>
   );
 }

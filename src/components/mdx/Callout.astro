@@ -2,24 +2,29 @@
 /**
  * <Callout type="tip" title="Optional title">Markdown content</Callout>
  * Types: note | tip | warning | danger | unity | steam | pitfall
+ * The default label of each type comes from the `ui.callout` dictionary of the page's locale.
  */
+import { t } from '../../i18n';
+import { getLocale } from '../../lib/i18n/route';
+
 interface Props {
   type?: 'note' | 'tip' | 'warning' | 'danger' | 'unity' | 'steam' | 'pitfall';
   title?: string;
 }
 const { type = 'note', title } = Astro.props;
-const styles = {
-  note: { label: 'Note', cls: 'border-accent bg-accent-soft', tag: 'text-accent' },
-  tip: { label: 'Tip', cls: 'border-ok bg-ok-soft', tag: 'text-ok' },
-  warning: { label: 'Warning', cls: 'border-warn bg-warn-soft', tag: 'text-warn' },
-  danger: { label: 'Danger', cls: 'border-danger bg-danger-soft', tag: 'text-danger' },
-  pitfall: { label: 'Common pitfall', cls: 'border-warn bg-warn-soft', tag: 'text-warn' },
-  unity: { label: 'In Unity', cls: 'border-text/40 bg-surface-2', tag: 'text-text' },
-  steam: { label: 'Steamworks', cls: 'border-[#1b7fc4] bg-[#1b7fc4]/10', tag: 'text-[#14598a] dark:text-[#66c0f4]' },
+const label = t(getLocale(Astro)).ui.callout[type];
+const cls = {
+  note: { cls: 'border-accent bg-accent-soft', tag: 'text-accent' },
+  tip: { cls: 'border-ok bg-ok-soft', tag: 'text-ok' },
+  warning: { cls: 'border-warn bg-warn-soft', tag: 'text-warn' },
+  danger: { cls: 'border-danger bg-danger-soft', tag: 'text-danger' },
+  pitfall: { cls: 'border-warn bg-warn-soft', tag: 'text-warn' },
+  unity: { cls: 'border-text/40 bg-surface-2', tag: 'text-text' },
+  steam: { cls: 'border-[#1b7fc4] bg-[#1b7fc4]/10', tag: 'text-[#14598a] dark:text-[#66c0f4]' },
 }[type];
 ---
 
-<aside class:list={['not-prose my-6 rounded-r-lg border-l-4 px-4 py-3', styles.cls]} role="note">
-  <p class:list={['mb-1 text-xs font-bold uppercase tracking-wider', styles.tag]}>{title ?? styles.label}</p>
+<aside class:list={['not-prose my-6 rounded-r-lg border-l-4 px-4 py-3', cls.cls]} role="note">
+  <p class:list={['mb-1 text-xs font-bold uppercase tracking-wider', cls.tag]}>{title ?? label}</p>
   <div class="prose max-w-none text-[0.98rem] [&>*:first-child]:mt-0"><slot /></div>
 </aside>

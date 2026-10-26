@@ -1,0 +1,6 @@
+title: Oyunlar için Ağ Programlama
+short: Teori
+summary: >-
+  Motordan bağımsız olarak her çok oyunculu oyunun dayandığı fikirler: paketler ve protokoller, gecikme, yetki, tick
+  hızı, snapshot'lar, tahmin, enterpolasyon, gecikme telafisi, NAT ve hile.
+_src: 4f72cba338d9

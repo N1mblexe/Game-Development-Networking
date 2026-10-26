@@ -1,0 +1,71 @@
+---
+/**
+ * One-time "available in your language" banner on default-locale (English) pages. Never redirects.
+ *
+ * Rendered hidden; a small inline script reveals the offer for the first translated locale in navigator.languages,
+ * unless a language choice is stored in localStorage `netlearn-locale` (the switcher stores one, accepting the offer
+ * stores the offered locale, dismissing stores the default locale). It is plain HTML, not an island, and runs before
+ * first paint, so there is no layout jump and nothing to hydrate. Without storage access it stays hidden (a dismissal
+ * couldn't be remembered).
+ */
+import { t } from '../../i18n';
+import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, LOCALES, TRANSLATED_LOCALES } from '../../i18n/locales';
+import { getLocale, switcherUrls } from '../../lib/i18n/route';
+
+const locale = getLocale(Astro);
+const urls = switcherUrls(Astro.url.pathname);
+const offers = TRANSLATED_LOCALES.map((l) => [l, LOCALES[l].htmlLang.toLowerCase()]);
+---
+
+{
+  locale === DEFAULT_LOCALE && (
+    <>
+      <div class="no-print border-b border-border bg-accent-soft" data-locale-banner hidden>
+        {TRANSLATED_LOCALES.map((l) => {
+          const m = t(l).ui.language;
+          return (
+            <div
+              class="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 text-sm sm:px-6"
+              lang={LOCALES[l].htmlLang}
+              data-locale-offer={l}
+              hidden
+            >
+              <p>{m.bannerText}</p>
+              <a class="font-semibold text-accent underline" href={urls[l]} hreflang={LOCALES[l].htmlLang} data-locale-switch={l}>
+                {m.bannerAction}
+              </a>
+              <button type="button" class="ml-auto rounded-md px-2 py-1 text-muted hover:bg-surface hover:text-text" data-locale-dismiss>
+                {m.bannerDismiss}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <script is:inline define:vars={{ key: LOCALE_STORAGE_KEY, offers, fallback: DEFAULT_LOCALE }}>
+        (function () {
+          var banner = document.querySelector('[data-locale-banner]');
+          try {
+            if (!banner || localStorage.getItem(key)) return;
+          } catch (e) {
+            return;
+          }
+          var langs = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || '']).map(function (l) {
+            return String(l).toLowerCase().split('-')[0];
+          });
+          for (var i = 0; i < offers.length; i++) {
+            if (langs.indexOf(offers[i][1]) < 0) continue;
+            banner.querySelector('[data-locale-offer="' + offers[i][0] + '"]').hidden = false;
+            banner.hidden = false;
+            banner.querySelector('[data-locale-offer="' + offers[i][0] + '"] [data-locale-dismiss]').addEventListener('click', function () {
+              try {
+                localStorage.setItem(key, fallback);
+              } catch (e) {}
+              banner.hidden = true;
+            });
+            return;
+          }
+        })();
+      </script>
+    </>
+  )
+}

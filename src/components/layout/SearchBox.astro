@@ -10,33 +10,38 @@
  * <pagefind-config> itself instead of astro-pagefind's <PagefindConfig>, whose script imports the UI eagerly.
  */
 import '@pagefind/component-ui/css/pagefind-component-ui.css';
+import { t } from '../../i18n';
+import { getLocale, localizePath } from '../../lib/i18n/route';
 import { withBase } from '../../lib/url';
+
+const locale = getLocale(Astro);
+const m = t(locale).ui.search;
 ---
 
-<a href={withBase('/search/')} class="btn search-trigger px-2.5 text-sm text-muted" aria-label="Search" aria-keyshortcuts="Control+K Meta+K" data-search-open>
+<a href={localizePath('/search/', locale)} class="btn search-trigger px-2.5 text-sm text-muted" aria-label={m.button} aria-keyshortcuts="Control+K Meta+K" data-search-open>
   <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
     <circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path>
   </svg>
-  <span class="hidden lg:inline">Search</span>
+  <span class="hidden lg:inline">{m.button}</span>
   <kbd class="ml-1 hidden rounded border border-border bg-surface-2 px-1.5 font-sans text-[0.7rem] leading-5 font-medium text-muted lg:inline" aria-hidden="true" data-search-kbd>Ctrl K</kbd>
 </a>
 
 <pagefind-config instance="modal" excerpt-length="24" bundle-path={withBase('/pagefind/')}></pagefind-config>
 <pagefind-modal instance="modal" reset-on-close="false" class="nl-search-modal" data-search-modal>
   <pagefind-modal-header instance="modal">
-    <pagefind-input instance="modal" placeholder="Search lessons and the glossary…" debounce="150"></pagefind-input>
+    <pagefind-input instance="modal" placeholder={m.placeholder} debounce="150"></pagefind-input>
   </pagefind-modal-header>
   <pagefind-modal-body instance="modal">
     <div class="nl-search-filters">
-      <pagefind-filter-dropdown instance="modal" filter="module" label="Module" sort="alphabetical"></pagefind-filter-dropdown>
+      <pagefind-filter-dropdown instance="modal" filter="module" label={m.moduleFilter} sort="alphabetical"></pagefind-filter-dropdown>
     </div>
-    <pagefind-summary instance="modal" default-message="Type to search lessons and glossary terms."></pagefind-summary>
+    <pagefind-summary instance="modal" default-message={m.modalDefault}></pagefind-summary>
     <pagefind-results instance="modal" max-sub-results="3"></pagefind-results>
   </pagefind-modal-body>
   <pagefind-modal-footer instance="modal">
     <div class="nl-search-footer">
       <pagefind-keyboard-hints instance="modal"></pagefind-keyboard-hints>
-      <a href={withBase('/search/')} class="nl-search-full">Full search page →</a>
+      <a href={localizePath('/search/', locale)} class="nl-search-full">{m.fullPage}</a>
     </div>
   </pagefind-modal-footer>
 </pagefind-modal>

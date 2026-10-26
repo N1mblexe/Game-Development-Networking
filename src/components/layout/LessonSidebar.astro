@@ -1,6 +1,7 @@
 ---
 import { lessonUrl, moduleUrl, examUrl, type LessonEntry, type ModuleEntry } from '../../lib/content/nav';
 import ProgressDot from './ProgressDot.astro';
+import { getLocale } from '../../lib/i18n/route';
 
 interface Props {
   module: ModuleEntry;
@@ -8,10 +9,11 @@ interface Props {
   currentId: string;
 }
 const { module, lessons, currentId } = Astro.props;
+const locale = getLocale(Astro);
 ---
 
 <nav aria-label={`${module.data.title} lessons`} class="text-sm">
-  <a href={moduleUrl(module.id)} class="mb-3 flex items-center gap-2 font-semibold hover:text-accent">
+  <a href={moduleUrl(module.id, locale)} class="mb-3 flex items-center gap-2 font-semibold hover:text-accent">
     <span class="bg-module-solid grid h-7 w-7 place-items-center rounded-md text-xs font-bold" style={`--module:${module.data.color}`}>
       {module.data.badge}
     </span>
@@ -22,7 +24,7 @@ const { module, lessons, currentId } = Astro.props;
       lessons.map((l) => (
         <li>
           <a
-            href={lessonUrl(l)}
+            href={lessonUrl(l, locale)}
             class:list={[
               'flex items-start gap-2 rounded-md px-2 py-1.5',
               l.id === currentId ? 'bg-surface-2 font-semibold text-text' : 'text-muted hover:bg-surface-2 hover:text-text',
@@ -36,7 +38,7 @@ const { module, lessons, currentId } = Astro.props;
       ))
     }
     <li class="mt-2 border-t border-border pt-2">
-      <a href={examUrl(module.id)} class="flex items-center gap-2 rounded-md px-2 py-1.5 text-muted hover:bg-surface-2 hover:text-text">
+      <a href={examUrl(module.id, locale)} class="flex items-center gap-2 rounded-md px-2 py-1.5 text-muted hover:bg-surface-2 hover:text-text">
         <span aria-hidden="true">🎓</span> Module exam
       </a>
     </li>

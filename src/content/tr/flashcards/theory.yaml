@@ -1,0 +1,37 @@
+# Turkish text for flashcards/theory.yaml, keyed by card id. Cards without an entry are shown in English.
+cards:
+  # ------------------------------------------------------------------ 01 packets-and-protocols
+  packet:
+    front: Paket nedir?
+    back: Adres etiketi taşıyan küçük, bağımsız bir bayt parçası. Paketler gecikebilir, sırası karışabilir, çoğalabilir ya
+      da kaybolabilir.
+    _src: 6647d4af68e0
+  endpoint:
+    front: Bir IP adresi + port neyi tanımlar?
+    back: Bir uç noktayı (endpoint). IP adresi makineyi, port ise o makinedeki programı tanımlar.
+    _src: e2f88622818b
+  tcp-guarantees:
+    front: TCP neyi garanti eder?
+    back: Güvenilir ve sıralı teslim yapan bağlantılı bir bayt akışını, üstüne de yerleşik tıkanıklık denetimini.
+    _src: 1c7e5d9302f6
+  udp-guarantees:
+    front: UDP neyi garanti eder?
+    back: Yalnızca gelen bir datagram'ın bozulmamış olmasını. Teslimi, sırayı ve çift kopyaların ayıklanmasını garanti etmez.
+    _src: fd3a034f95c4
+  hol-blocking:
+    front: Hat başı engellemesi (head-of-line blocking) nedir?
+    back: Sıralı bir akışta tek bir kayıp paketin, yeniden iletilene kadar arkasındaki her paketin teslimini durdurması.
+    _src: f9a3db140903
+  why-udp:
+    front: Gerçek zamanlı oyunlar neden UDP kullanır?
+    back: Her mesaj kendi garantilerini seçebilsin diye. Taze durum güvenilmez gönderilir ve asla eskimiş verinin arkasında
+      beklemez; olaylar ise özel bir güvenilir katman kullanır.
+    _src: 2901d2111cc3
+  unreliable-use:
+    front: Ne tür veriler güvenilmez gönderilmeli?
+    back: Konum, rotasyon ve nişan gibi sürekli yenilenen, yüksek frekanslı durum; en yeni değer eskisinin yerini alır.
+    _src: a6cd5795abe7
+  reliable-use:
+    front: Ne tür veriler güvenilir teslime ihtiyaç duyar?
+    back: Eşya alma, ölüm, sohbet mesajları ve maç başlangıcı gibi tam bir kez ulaşması gereken tek seferlik olaylar.
+    _src: 5edcd2d0b66f

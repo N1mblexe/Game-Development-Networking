@@ -11,13 +11,14 @@
  * - Screen readers get the definition through aria-describedby on the link.
  */
 import { getGlossary } from '../../lib/content/nav';
-import { withBase } from '../../lib/url';
+import { getLocale, localizePath } from '../../lib/i18n/route';
 
 interface Props {
   id: string;
 }
 const { id } = Astro.props;
-const term = (await getGlossary()).get(id);
+const locale = getLocale(Astro);
+const term = (await getGlossary(locale)).get(id);
 const slot = await Astro.slots.render('default');
 // Unique per instance: the same term can appear several times on one page.
 const tipId = `term-tip-${id}-${Math.random().toString(36).slice(2, 8)}`;
@@ -26,7 +27,7 @@ const tipId = `term-tip-${id}-${Math.random().toString(36).slice(2, 8)}`;
 {
   term ? (
     <span class="term" data-term-wrap>
-      <a href={withBase(`/glossary/#${id}`)} class="term-link" aria-describedby={tipId} data-term={id}>
+      <a href={localizePath(`/glossary/#${id}`, locale)} class="term-link" aria-describedby={tipId} data-term={id}>
         {slot ? <Fragment set:html={slot} /> : term.term}
       </a>
       <span id={tipId} role="tooltip" class="term-tip" data-term-tip data-pagefind-ignore>

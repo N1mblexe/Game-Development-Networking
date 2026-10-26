@@ -1,0 +1,27 @@
+---
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Certificate from '../../../components/progress/Certificate';
+import { examUrl, getLessons, getModule, getModules } from '../../../lib/content/nav';
+import { getLocale, localeStaticPaths } from '../../../lib/i18n/route';
+
+export async function getStaticPaths() {
+  return localeStaticPaths((await getModules()).map((m) => ({ params: { module: m.id } })));
+}
+
+const locale = getLocale(Astro);
+const module = (await getModule(Astro.params.module!, locale))!;
+const lessons = await getLessons(module.id, locale);
+---
+
+<BaseLayout title={`${module.data.title} certificate`} accent={module.data.color}>
+  <Certificate
+    client:load
+    moduleId={module.id}
+    moduleTitle={module.data.title}
+    moduleColor={module.data.color}
+    moduleBadge={module.data.badge}
+    lessonKeys={lessons.map((l) => l.id)}
+    examUrl={examUrl(module.id, locale)}
+    locale={locale}
+  />
+</BaseLayout>

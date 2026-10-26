@@ -1,0 +1,24 @@
+---
+/**
+ * Shown above the English body of a lesson that has no translation in this page's locale yet (LessonLayout renders
+ * it when `translated` is false). Links to the original so the reader knows where the text comes from.
+ */
+import { t } from '../../i18n';
+import { DEFAULT_LOCALE, LOCALES } from '../../i18n/locales';
+import { getLocale, localizePath } from '../../lib/i18n/route';
+
+const locale = getLocale(Astro);
+const m = t(locale).ui.fallback;
+const original = localizePath(Astro.url.pathname, DEFAULT_LOCALE);
+---
+
+<aside class="not-prose mb-6 flex gap-3 rounded-lg border border-warn bg-warn-soft px-4 py-3 text-sm" role="note" data-fallback-notice>
+  <svg viewBox="0 0 24 24" class="mt-0.5 h-5 w-5 shrink-0 text-warn" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+    <path d="M5 8h14M9 4v4M7 8c1 5 5 8 9 9M14 8c-1 4-4 7-8 9M14 21l4-9 4 9M15.5 18h5"></path>
+  </svg>
+  <p>
+    <strong class="font-semibold">{m.title}.</strong>
+    {m.body}
+    <a class="text-accent underline" href={original} hreflang={LOCALES[DEFAULT_LOCALE].htmlLang} lang={LOCALES[DEFAULT_LOCALE].htmlLang}>{LOCALES[DEFAULT_LOCALE].label}</a>
+  </p>
+</aside>

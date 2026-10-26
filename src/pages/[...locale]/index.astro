@@ -1,0 +1,376 @@
+---
+/**
+ * Dashboard / landing page. Fully static; two tiny scripts add progress:
+ * progress-dom.ts (module bars, exam status; loaded by BaseLayout) and dashboard.ts (continue card, stats).
+ */
+import { getEntry } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { getFlashcards, getLessons, getModules, lessonUrl, moduleUrl, pageUrl } from '../../lib/content/nav';
+import { getLocale, localeStaticPaths } from '../../lib/i18n/route';
+
+export const getStaticPaths = () => localeStaticPaths();
+const locale = getLocale(Astro);
+
+const modules = await getModules(locale);
+const lessons = await getLessons(undefined, locale);
+const cards = await getFlashcards(undefined, locale);
+const byModule = (id: string) => lessons.filter((l) => l.id.startsWith(`${id}/`));
+const moduleById = new Map(modules.map((m) => [m.id, m]));
+const examModules = (await Promise.all(modules.map(async (m) => ((await getEntry('exams', m.id)) ? m.id : null)))).filter(
+  (x): x is string => Boolean(x),
+);
+const totalHours = modules.reduce((s, m) => s + (m.data.estimatedHours ?? 0), 0);
+
+// ------------------------------------------------------------------ course map: group modules by prerequisite depth
+const depthCache = new Map<string, number>();
+function depth(id: string, seen = new Set<string>()): number {
+  if (depthCache.has(id)) return depthCache.get(id)!;
+  if (seen.has(id)) return 0; // cycle guard
+  seen.add(id);
+  const prereqs = moduleById.get(id)?.data.prerequisites.filter((p) => moduleById.has(p)) ?? [];
+  const d = prereqs.length ? 1 + Math.max(...prereqs.map((p) => depth(p, seen))) : 0;
+  depthCache.set(id, d);
+  return d;
+}
+const columns: (typeof modules)[] = [];
+for (const m of modules) (columns[depth(m.id)] ??= []).push(m);
+const cols = columns.filter(Boolean);
+
+/** Connector paths between two adjacent columns, as fractions (0–1) along the shared axis. */
+function links(from: typeof modules, to: typeof modules) {
+  const out: Array<{ a: number; b: number }> = [];
+  to.forEach((t, j) =>
+    from.forEach((f, i) => {
+      if (t.data.prerequisites.includes(f.id)) out.push({ a: (i + 0.5) / from.length, b: (j + 0.5) / to.length });
+    }),
+  );
+  return out;
+}
+
+// ------------------------------------------------------------------ data for the continue card script
+const moduleLessonIndex = new Map<string, number>();
+const dashboardData = {
+  lessons: lessons.map((l) => {
+    const mid = l.id.split('/')[0];
+    const n = (moduleLessonIndex.get(mid) ?? 0) + 1;
+    moduleLessonIndex.set(mid, n);
+    const m = moduleById.get(mid);
+    return {
+      key: l.id,
+      title: l.data.title,
+      summary: l.data.summary,
+      module: mid,
+      moduleTitle: m?.data.short ?? mid,
+      color: m?.data.color ?? 'var(--accent)',
+      url: lessonUrl(l, locale),
+      durationMin: l.data.durationMin,
+      index: n,
+      moduleCount: byModule(mid).length,
+    };
+  }),
+  cardIds: cards.map((c) => c.globalId),
+  examModules,
+  reviewUrl: pageUrl('/review/', locale),
+  progressUrl: pageUrl('/progress/', locale),
+};
+const first = dashboardData.lessons[0];
+
+const features = [
+  {
+    title: 'Simulators',
+    text: 'Change latency, jitter and loss and watch prediction, interpolation and lag compensation react, all in your browser.',
+    href: pageUrl('/playground/', locale),
+    cta: 'Open the playground',
+    icon: 'M3 12h4l3-8 4 16 3-8h4',
+  },
+  {
+    title: 'Quizzes',
+    text: 'Every lesson ends with a short quiz. Pass it (70%) and the lesson is marked complete.',
+    icon: 'M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9',
+  },
+  {
+    title: 'Flashcards',
+    text: 'Spaced repetition brings each card back just before you would forget it. A few minutes a day is enough.',
+    href: pageUrl('/review/', locale),
+    cta: 'Review cards',
+    icon: 'M4 7h12v13H4zM8 7V4h12v13h-4',
+  },
+  {
+    title: 'Exams & certificates',
+    text: 'Each module ends with an exam drawn from a larger pool. Pass it to unlock a printable certificate.',
+    href: pageUrl('/progress/', locale),
+    cta: 'See your progress',
+    icon: 'M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM8.5 14 7 22l5-3 5 3-1.5-8',
+  },
+];
+---
+
+<BaseLayout title="NetLearn" isHome wide>
+  <!-- ============================================================ hero + continue -->
+  <section class="mb-10 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_24rem]">
+    <div class="max-w-3xl">
+      <p class="mb-2 text-sm font-semibold text-accent">Multiplayer for Unity developers</p>
+      <h1 class="text-4xl font-extrabold tracking-tight text-balance sm:text-5xl">Learn game networking by watching it happen.</h1>
+      <p class="mt-4 text-lg text-muted">
+        Start with the theory every multiplayer game relies on, then build with Unity Netcode for GameObjects and
+        Steamworks through Facepunch, and finally combine them into a Steam-lobby game. Change the latency and watch the
+        result, test yourself, and keep what you learn with spaced-repetition flashcards.
+      </p>
+      <div class="mt-6 flex flex-wrap gap-3">
+        <a class="btn" href={pageUrl('/playground/', locale)}>Open the playground</a>
+        <a class="btn" href={pageUrl('/glossary/', locale)}>Browse the glossary</a>
+      </div>
+    </div>
+
+    {
+      first && (
+        <a
+          href={first.url}
+          class="continue card group relative block overflow-hidden p-5 shadow-sm hover:border-[color:var(--module)]"
+          style={`--module:${first.color}`}
+          data-continue
+          data-continue-link
+          data-state="start"
+        >
+          <span class="absolute inset-x-0 top-0 h-1" style="background:var(--module)" aria-hidden="true" />
+          <p class="text-module-ink text-xs font-bold tracking-wider uppercase" data-continue-eyebrow>
+            Start here
+          </p>
+          <h2 class="mt-1.5 text-xl leading-snug font-bold group-hover:underline" data-continue-title>
+            {first.title}
+          </h2>
+          <p class="mt-1 text-sm text-muted" data-continue-meta>
+            {first.moduleTitle} · lesson 1 of {first.moduleCount} · {first.durationMin} min
+          </p>
+          <p class="mt-3 line-clamp-3 text-sm" data-continue-summary>
+            {first.summary}
+          </p>
+          <div class="mt-4">
+            <div class="h-1.5 overflow-hidden rounded-full bg-surface-2">
+              <div class="h-full rounded-full" style="width:0%;background:var(--module)" data-continue-bar />
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-3">
+              <span class="text-xs text-muted" data-continue-pct>
+                0% of the course
+              </span>
+              <span class="btn btn-primary pointer-events-none px-3 py-1.5 text-sm">
+                <span data-continue-label>Start lesson</span>
+                <span aria-hidden="true">→</span>
+              </span>
+            </div>
+          </div>
+        </a>
+      )
+    }
+  </section>
+
+  <!-- ============================================================ stats -->
+  <section aria-label="Your progress" class="mb-14">
+    <dl class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div class="card p-4" data-stat="lessons">
+        <dt class="text-xs font-semibold tracking-wider text-muted uppercase">Lessons</dt>
+        <dd class="mt-1 text-2xl font-extrabold tabular-nums" data-stat-value>0/{lessons.length}</dd>
+        <dd class="text-xs text-muted" data-stat-sub>lessons done</dd>
+      </div>
+      <div class="card relative p-4 hover:border-accent" data-stat="cards">
+        <dt class="text-xs font-semibold tracking-wider text-muted uppercase">
+          <a href={pageUrl('/review/', locale)} class="after:absolute after:inset-0 after:rounded-[0.85rem] hover:text-accent">Flashcards →</a>
+        </dt>
+        <dd class="mt-1 text-2xl font-extrabold tabular-nums" data-stat-value>0</dd>
+        <dd class="text-xs text-muted" data-stat-sub>due today · {cards.length} new</dd>
+      </div>
+      <div class="card p-4" data-stat="exams">
+        <dt class="text-xs font-semibold tracking-wider text-muted uppercase">Exams</dt>
+        <dd class="mt-1 text-2xl font-extrabold tabular-nums" data-stat-value>{examModules.length ? `0/${examModules.length}` : '0'}</dd>
+        <dd class="text-xs text-muted" data-stat-sub>{examModules.length ? 'exams passed' : 'exams coming soon'}</dd>
+      </div>
+      <div class="card p-4">
+        <dt class="text-xs font-semibold tracking-wider text-muted uppercase">Course</dt>
+        <dd class="mt-1 text-2xl font-extrabold tabular-nums">~{totalHours} h</dd>
+        <dd class="text-xs text-muted">{modules.length} modules · {lessons.length} lessons so far</dd>
+      </div>
+    </dl>
+  </section>
+
+  <!-- ============================================================ course map -->
+  <section aria-labelledby="map-heading" class="mb-14">
+    <div class="mb-5 flex flex-wrap items-end justify-between gap-2">
+      <div>
+        <h2 id="map-heading" class="text-2xl font-bold tracking-tight">Course map</h2>
+        <p class="text-sm text-muted">Four modules. Arrows show what to finish first; NGO and Steam can be taken in either order.</p>
+      </div>
+    </div>
+
+    <ol
+      class="course-map grid list-none gap-y-0 pl-0"
+      style={`--cols:${cols.map((_, i) => (i ? '2.75rem minmax(0,1fr)' : 'minmax(0,1fr)')).join(' ')}`}
+    >
+      {
+        cols.map((col, ci) => (
+          <>
+            {ci > 0 && (
+              <li class="map-link" aria-hidden="true">
+                {/* horizontal connector (desktop) */}
+                <svg class="map-link-h" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {links(cols[ci - 1], col).map(({ a, b }) => (
+                    <path d={`M0 ${a * 100} C50 ${a * 100} 50 ${b * 100} 100 ${b * 100}`} />
+                  ))}
+                </svg>
+                {/* vertical connector (mobile) */}
+                <svg class="map-link-v" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {links(cols[ci - 1], col).map(({ a, b }) => (
+                    <path d={`M${a * 100} 0 C${a * 100} 50 ${b * 100} 50 ${b * 100} 100`} />
+                  ))}
+                </svg>
+              </li>
+            )}
+            <li class="map-col" style={`--n:${col.length}`}>
+              {col.map((m) => {
+                const ls = byModule(m.id);
+                const prereqs = m.data.prerequisites.map((p) => moduleById.get(p)?.data.short).filter(Boolean);
+                return (
+                  <a
+                    href={moduleUrl(m.id, locale)}
+                    class="map-node card group flex flex-col p-4"
+                    style={`--module:${m.data.color}`}
+                    {...(ls.length ? { 'data-module-progress': '', 'data-lesson-keys': ls.map((l) => l.id).join(',') } : {})}
+                  >
+                    <div class="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-3">
+                      <span class="bg-module-solid relative grid h-10 w-10 shrink-0 place-items-center rounded-lg text-sm font-bold">
+                        {m.data.badge}
+                        <span class="map-done absolute -right-1.5 -bottom-1.5 hidden h-5 w-5 place-items-center rounded-full border-2 border-surface bg-ok text-[0.65rem] text-white" aria-hidden="true">
+                          ✓
+                        </span>
+                      </span>
+                      <div class="min-w-0">
+                        <p class="text-xs text-muted">
+                          Module {m.data.order}
+                          {m.data.estimatedHours && <> · ~{m.data.estimatedHours} h</>}
+                        </p>
+                        <h3 class="leading-snug font-bold group-hover:text-module-ink">{m.data.title}</h3>
+                      </div>
+                    </div>
+                    <p class="mt-2 hidden text-sm text-muted md:line-clamp-3">{m.data.summary}</p>
+                    <div class="mt-auto pt-3">
+                      <div class="h-1.5 overflow-hidden rounded-full bg-surface-2">
+                        <div class="h-full rounded-full transition-[width]" style="width: var(--pct, 0%); background: var(--module)" />
+                      </div>
+                      <div class="mt-1.5 flex flex-wrap justify-between gap-x-2 text-xs text-muted">
+                        {ls.length ? <span data-progress-text>0/{ls.length} lessons</span> : <span>Lessons in preparation</span>}
+                        <span data-exam-status={m.id}>Not attempted</span>
+                      </div>
+                      {prereqs.length > 0 && <p class="mt-1 text-xs text-muted">After {prereqs.join(' + ')}</p>}
+                    </div>
+                  </a>
+                );
+              })}
+            </li>
+          </>
+        ))
+      }
+    </ol>
+  </section>
+
+  <!-- ============================================================ how it works -->
+  <section aria-labelledby="how-heading" class="mb-6">
+    <h2 id="how-heading" class="mb-1 text-2xl font-bold tracking-tight">How this course works</h2>
+    <p class="mb-5 text-sm text-muted">Read a short lesson, play with it, test yourself, then let spaced repetition keep it.</p>
+    <ol class="grid list-none gap-3 pl-0 sm:grid-cols-2 lg:grid-cols-4">
+      {
+        features.map((f, i) => (
+          <li class="card flex flex-col p-5">
+            <div class="mb-3 flex items-center gap-3">
+              <span class="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-accent">
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d={f.icon} />
+                </svg>
+              </span>
+              <h3 class="font-bold">
+                <span class="sr-only">Step {i + 1}: </span>
+                {f.title}
+              </h3>
+            </div>
+            <p class="flex-1 text-sm text-muted">{f.text}</p>
+            {f.href && (
+              <a href={f.href} class="mt-3 text-sm font-semibold text-accent hover:underline">
+                {f.cta} →
+              </a>
+            )}
+          </li>
+        ))
+      }
+    </ol>
+  </section>
+
+  <script type="application/json" id="dashboard-data" set:html={JSON.stringify(dashboardData).replace(/</g, '\\u003c')} />
+</BaseLayout>
+
+<style>
+  .course-map {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .map-col {
+    display: grid;
+    grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+  .map-link {
+    height: 2.25rem;
+  }
+  .map-link svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .map-link path {
+    fill: none;
+    stroke: color-mix(in srgb, var(--muted) 55%, transparent);
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+    stroke-dasharray: 5 4;
+  }
+  .map-link-h {
+    display: none;
+  }
+  @media (min-width: 768px) {
+    .course-map {
+      grid-template-columns: var(--cols);
+      align-items: stretch;
+    }
+    .map-col {
+      grid-template-columns: minmax(0, 1fr);
+      align-content: center;
+      gap: 1rem;
+    }
+    .map-link {
+      height: auto;
+    }
+    .map-link-h {
+      display: block;
+    }
+    .map-link-v {
+      display: none;
+    }
+  }
+  .map-node {
+    border-top: 3px solid var(--module);
+    transition:
+      border-color 0.15s,
+      transform 0.15s,
+      box-shadow 0.15s;
+  }
+  .map-node:hover {
+    border-color: var(--module);
+    box-shadow: 0 6px 20px -10px color-mix(in srgb, var(--module) 60%, transparent);
+  }
+  .map-node[data-pct='100'] .map-done {
+    display: grid;
+  }
+  .continue[data-state='finished'] {
+    border-color: var(--ok);
+  }
+</style>
+
+<script>
+  import '../../scripts/dashboard';
+</script>

@@ -1,6 +1,7 @@
 ---
 /** <Diagram name="topology" variant="relay" caption="Optional caption" /> (see diagrams/registry.ts) */
 import DiagramHost from '../diagrams/DiagramHost';
+import { getLocale } from '../../lib/i18n/route';
 
 interface Props {
   name: string;
@@ -9,4 +10,4 @@ interface Props {
 }
 ---
 
-<DiagramHost client:visible {...Astro.props} />
+<DiagramHost client:visible {...Astro.props} locale={getLocale(Astro)} />

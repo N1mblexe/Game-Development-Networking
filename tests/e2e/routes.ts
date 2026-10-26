@@ -21,6 +21,9 @@ export const staticPages = ['/', '/playground/', '/review/', '/glossary/', '/pro
 
 export const allRoutes = [...staticPages, ...moduleIndexes, ...lessons, ...exams, ...certificates];
 
+/** Every route again under the Turkish prefix (each exists, translated or as an English fallback page). */
+export const trRoutes = allRoutes.map((r) => `/tr${r}`);
+
 /** The first lesson of a module that embeds a <Sim> or <Diagram> (falls back to its first lesson). */
 export const firstLessonOf = (m: string) => {
   const files = readdirSync(`${CONTENT}/lessons/${m}`).filter((f) => /\.mdx?$/.test(f)).sort();

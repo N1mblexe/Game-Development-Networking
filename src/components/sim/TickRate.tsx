@@ -5,6 +5,13 @@ import { useSim } from './ui/useSim';
 import { ControlBar, ControlGrid, Legend, SimCanvas, SimLayout, Slider, StatGrid, Toggle, type Stat } from './ui/controls';
 import { alpha, circle, fillRound, line, text } from './ui/draw';
 import type { Palette } from './ui/theme';
+import type Msgs from '../../i18n/en/sims/tick-rate';
+import type { Locale } from '../../i18n/locales';
+import { useLazyT, useLocale } from '../../i18n/react';
+import { fixed, pct } from '../../lib/i18n/format';
+
+/** Canvas text, passed to draw() (see src/i18n/<locale>/sims/tick-rate.ts). */
+type Labels = (typeof Msgs)['canvas'];
 
 export interface TickRateProps extends SimBaseProps {
   /** Tick rates to compare side by side, e.g. [10, 30, 60]. */
@@ -125,6 +132,8 @@ class Model {
 
 export default function TickRate(props: TickRateProps) {
   const { seed = 1, compact } = props;
+  const t = useLazyT<typeof Msgs>('sims/tick-rate');
+  const locale = useLocale();
   const [rates, setRates] = useState<number[]>(props.rates ?? [10, 30, 60]);
   const [speed, setSpeed] = useState(props.speed ?? 24);
   const [sweep, setSweep] = useState(props.sweep ?? false);
@@ -136,18 +145,18 @@ export default function TickRate(props: TickRateProps) {
     dt: 1,
     stepMs: 1000 / Math.max(...rates),
     step: (now) => model.current.step(now),
-    draw: (ctx, w, h, p, now) => draw(ctx, w, h, p, now, model.current),
+    draw: (ctx, w, h, p, now) => draw(ctx, w, h, p, now, model.current, t.canvas, locale),
     height: (w) => 44 + model.current.lanes.length * (w < 520 ? 92 : 84),
     onStats: () => {
       const m = model.current;
       setStats(
         m.lanes.flatMap((l) => [
           {
-            label: `${l.rate} Hz caught`,
-            value: l.runs ? `${l.hits}/${l.runs} (${Math.round((100 * l.hits) / l.runs)}%)` : '–',
+            label: t.stats.caught(l.rate),
+            value: l.runs ? t.stats.caughtValue({ hits: l.hits, runs: l.runs, pct: pct(locale, Math.round((100 * l.hits) / l.runs)) }) : '–',
             tone: l.runs && l.hits < l.runs ? ('danger' as const) : l.runs ? ('ok' as const) : undefined,
           },
-          { label: `${l.rate} Hz step`, value: `${((m.speed / l.rate) * 100).toFixed(0)} cm/tick`, secondary: true },
+          { label: t.stats.step(l.rate), value: t.stats.stepValue(fixed(locale, (m.speed / l.rate) * 100, 0)), secondary: true },
         ]),
       );
     },
@@ -167,27 +176,27 @@ export default function TickRate(props: TickRateProps) {
     <SimLayout>
       <SimCanvas
         sim={sim}
-        label={`A ball flies at ${speed} m/s toward a thin wall. Each lane simulates it at a different tick rate and only checks for collisions at tick moments; dots mark where each tick sampled the ball. At low tick rates the ball can jump straight past the wall between two ticks (tunnelling).`}
+        label={t.canvasLabel(String(speed))}
       />
       <ControlBar sim={sim} onReset={() => rebuild()} compact={compact} />
       <ControlGrid>
         <Slider
-          label="Projectile speed"
+          label={t.speed}
           value={speed}
           min={4}
           max={60}
           step={1}
           unit="m/s"
-          hint={compact ? undefined : `Collision needs a tick while the ball overlaps the wall: a ${(catchWindow * 100).toFixed(0)} cm window.`}
+          hint={compact ? undefined : t.speedHint(fixed(locale, catchWindow * 100, 0))}
           onChange={setSpeed}
         />
         {rates.length === 1 && (
-          <Slider label="Tick rate" value={rates[0]!} min={5} max={128} step={1} unit="Hz" onChange={(v) => setRates([v])} />
+          <Slider label={t.tickRate} value={rates[0]!} min={5} max={128} step={1} unit="Hz" onChange={(v) => setRates([v])} />
         )}
         {!compact && (
           <Toggle
-            label="Swept collision (CCD)"
-            hint="Test the whole path between ticks, not just the end point. Fixes tunnelling at any tick rate."
+            label={t.sweep}
+            hint={t.sweepHint}
             checked={sweep}
             onChange={setSweep}
           />
@@ -195,9 +204,9 @@ export default function TickRate(props: TickRateProps) {
       </ControlGrid>
       <Legend
         items={[
-          { label: 'tick sample (what the simulation saw)', color: 'var(--accent)', shape: 'dot' },
-          { label: 'real continuous motion', color: 'var(--muted)', shape: 'ring' },
-          { label: 'wall (30 cm)', color: 'var(--text)', shape: 'square' },
+          { label: t.legend.sample, color: 'var(--accent)', shape: 'dot' },
+          { label: t.legend.truth, color: 'var(--muted)', shape: 'ring' },
+          { label: t.legend.wall, color: 'var(--text)', shape: 'square' },
         ]}
       />
       <StatGrid stats={stats} compact={compact} playing={sim.playing} />
@@ -205,7 +214,7 @@ export default function TickRate(props: TickRateProps) {
   );
 }
 
-function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, now: number, m: Model) {
+function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, now: number, m: Model, labels: Labels, locale: Locale) {
   const narrow = w < 520;
   const pad = 12;
   const laneH = narrow ? 92 : 84;
@@ -215,17 +224,17 @@ function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, 
   const pxPerM = (x1 - x0) / WORLD;
 
   // Scale bar
-  text(ctx, p, '0 m', x0, 14, { size: 9.5, color: p.muted, mono: true });
-  text(ctx, p, `${WORLD} m`, x1, 14, { align: 'right', size: 9.5, color: p.muted, mono: true });
-  text(ctx, p, `ball ${m.speed} m/s →`, (x0 + x1) / 2, 14, { align: 'center', size: 10, color: p.muted, weight: 600 });
+  text(ctx, p, labels.metres(0), x0, 14, { size: 9.5, color: p.muted, mono: true });
+  text(ctx, p, labels.metres(WORLD), x1, 14, { align: 'right', size: 9.5, color: p.muted, mono: true });
+  text(ctx, p, labels.ball(m.speed), (x0 + x1) / 2, 14, { align: 'center', size: 10, color: p.muted, weight: 600 });
 
   m.lanes.forEach((lane, i) => {
     const top = 30 + i * laneH;
     const cy = top + laneH * 0.58;
     fillRound(ctx, pad, top, w - pad * 2, laneH - 8, 8, p.surface2);
     const stepCm = (m.speed / lane.rate) * 100;
-    text(ctx, p, `${lane.rate} Hz`, pad + 10, top + 14, { size: 12, weight: 750, color: p.accent });
-    text(ctx, p, `${(1000 / lane.rate).toFixed(1)} ms/tick · moves ${stepCm.toFixed(0)} cm per tick`, pad + (narrow ? 52 : 62), top + 14, {
+    text(ctx, p, labels.rate(lane.rate), pad + 10, top + 14, { size: 12, weight: 750, color: p.accent });
+    text(ctx, p, labels.lane({ ms: fixed(locale, 1000 / lane.rate, 1), cm: fixed(locale, stepCm, 0) }), pad + (narrow ? 52 : 62), top + 14, {
       size: 10,
       color: p.muted,
     });
@@ -263,8 +272,8 @@ function draw(ctx: CanvasRenderingContext2D, w: number, _h: number, p: Palette, 
     const bx = x1 - 4;
     const by = top + laneH - 22;
     if (lane.status === 'missed')
-      text(ctx, p, narrow ? 'MISSED: tunnelled' : 'MISSED: tunnelled through the wall', bx, by, { align: 'right', size: 10.5, weight: 750, color: p.danger, bg: p.dangerSoft });
+      text(ctx, p, narrow ? labels.missedShort : labels.missedLong, bx, by, { align: 'right', size: 10.5, weight: 750, color: p.danger, bg: p.dangerSoft });
     else if (lane.status === 'returning' || lane.status === 'hit')
-      text(ctx, p, 'HIT: bounced', bx, by, { align: 'right', size: 10.5, weight: 750, color: p.ok, bg: p.okSoft });
+      text(ctx, p, labels.hit, bx, by, { align: 'right', size: 10.5, weight: 750, color: p.ok, bg: p.okSoft });
   });
 }

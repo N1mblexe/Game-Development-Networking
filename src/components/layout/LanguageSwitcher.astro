@@ -1,0 +1,55 @@
+---
+/**
+ * Links to the current page in every other language (same slug, see lib/i18n/route.ts). Clicking one stores the
+ * choice in localStorage `netlearn-locale`, which also stops the LanguageBanner from offering a language again.
+ * Header renders it twice: compact in the desktop bar and as rows in the mobile menu.
+ */
+import { t } from '../../i18n';
+import { LOCALE_CODES, LOCALES } from '../../i18n/locales';
+import { getLocale, switcherUrls } from '../../lib/i18n/route';
+
+interface Props {
+  variant: 'desktop' | 'mobile';
+}
+const { variant } = Astro.props;
+const locale = getLocale(Astro);
+const urls = switcherUrls(Astro.url.pathname);
+const others = LOCALE_CODES.filter((l) => l !== locale);
+---
+
+<div
+  role="group"
+  aria-label={t(locale).ui.language.label}
+  class:list={variant === 'desktop' ? 'hidden items-center gap-1 md:flex' : 'mt-1 flex flex-col border-t border-border pt-1'}
+>
+  {
+    others.map((l) => (
+      <a
+        href={urls[l]}
+        hreflang={LOCALES[l].htmlLang}
+        lang={LOCALES[l].htmlLang}
+        data-locale-switch={l}
+        class={variant === 'desktop' ? 'btn px-2.5 text-sm text-muted' : 'flex items-center gap-2 rounded-md px-3 py-2 hover:bg-surface-2'}
+      >
+        <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"></path>
+        </svg>
+        {LOCALES[l].label}
+      </a>
+    ))
+  }
+</div>
+
+<script>
+  import { LOCALE_STORAGE_KEY } from '../../i18n/locales';
+
+  document.addEventListener('click', (e) => {
+    const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>('[data-locale-switch]') : null;
+    if (!link) return;
+    try {
+      localStorage.setItem(LOCALE_STORAGE_KEY, link.dataset.localeSwitch!);
+    } catch {
+      /* storage unavailable */
+    }
+  });
+</script>

@@ -32,6 +32,8 @@ flashcards and glossary entries. Copy its structure.
 
 Schemas: `src/lib/content/schemas.ts`. URLs: `/modules/<module>/<slug>/`. The slug `exam` is reserved.
 
+Translations live under `src/content/<locale>/` with the same file names (see "Internationalisation" below).
+
 **Ids are permanent.** Learner progress is keyed by lesson keys and card ids, so renaming one resets that progress.
 Renumbering a file's `NN-` prefix is safe.
 
@@ -209,10 +211,10 @@ When an API changed between versions (for example `[ServerRpc]`/`[ClientRpc]` vs
 
 | Area | Paths |
 |---|---|
-| Foundation (layouts, routing, schemas, registries' *names*) | `src/layouts`, `src/pages/modules`, `src/lib/content`, `src/content.config.ts`, `src/components/mdx`, `src/components/layout` |
-| Learning engine | `src/components/quiz`, `src/components/srs`, `src/components/progress`, `src/lib/quiz`, `src/lib/srs`, `src/lib/progress`, `src/pages/{review,progress}.astro`, `src/pages/certificate` |
+| Foundation (layouts, routing, schemas, registries' *names*) | `src/layouts`, `src/pages/[...locale]/modules`, `src/i18n`, `src/lib/i18n`, `src/lib/content`, `src/content.config.ts`, `src/components/mdx`, `src/components/layout` |
+| Learning engine | `src/components/quiz`, `src/components/srs`, `src/components/progress`, `src/lib/quiz`, `src/lib/srs`, `src/lib/progress`, `src/pages/[...locale]/{review,progress}.astro`, `src/pages/[...locale]/certificate` |
 | Simulators | `src/lib/netsim`, `src/components/sim` |
-| Diagrams & discovery | `src/components/diagrams`, `src/components/mdx/Term.astro`, `src/components/layout/SearchBox.astro`, `src/pages/{glossary,search,index}.astro` |
+| Diagrams & discovery | `src/components/diagrams`, `src/components/mdx/Term.astro`, `src/components/layout/SearchBox.astro`, `src/pages/[...locale]/{glossary,search,index}.astro` |
 | Content | `src/content/**` (one module per author) |
 
 Changing a contract (schemas, component props, registry names and presets) requires updating this file and
@@ -275,3 +277,89 @@ These keys are fixed because registries, glossary entries and prerequisites alre
 `steam-auth-approval` · `disconnects` · `dev-workflow` · `shipping-checklist`
 
 The file for lesson N is `NN-<key>.mdx` in that order, for example `lessons/ngo/06-rpcs.mdx`.
+
+---
+
+## 9. Internationalisation (i18n)
+
+English is the default locale and lives at the root (`/modules/…`). Each other locale gets a prefix (`/tr/modules/…`)
+with **the same slugs, ids and progress keys**, so progress carries over when a learner switches language. Every route
+exists in every locale: anything not translated yet is shown in English (lessons with a notice, a canonical link to
+the English page and no search indexing). Locales are defined in `src/i18n/locales.ts`; nothing else hardcodes them.
+
+```bash
+pnpm i18n:status                      # what is translated / stale / unstamped, per module and type, plus UI coverage
+pnpm i18n:status --module theory      # one module
+pnpm i18n:stamp --module theory       # record the English source hash after translating (see below)
+pnpm validate:content --strict-i18n   # translations: structural errors always fail; stale/terminology warnings too
+pnpm i18n:baseline --out before.txt   # dump the visible text of every English page in dist/ (diff before/after a refactor)
+```
+
+### UI text
+
+| Where | API |
+|---|---|
+| Dictionaries | `src/i18n/<locale>/<namespace>.ts`. English files `satisfies Dict`; other locales `satisfies Messages<typeof en>`, so a missing or extra key fails `pnpm check`. Values are strings or functions `(args) => string` |
+| Core namespaces (`ui`, `pages`, `quiz`, `srs`, `progress`, `glossary`, `sim`, `diagram`, `registry-*`) | aggregated in `src/i18n/<locale>/core.ts`; one locale is loaded per page |
+| Lazy namespaces (`sims/<name>`, `diagrams/<name>`) | one file per sim/diagram, loaded with its component chunk by SimHost/DiagramHost |
+| Astro and vanilla `<script>` | `t(locale).ui.nav.course` from `src/i18n`; `const locale = getLocale(Astro)` (frontmatter) or `pageLocale()` (scripts, reads `<html lang>`) |
+| React | the root island takes a `locale` prop and wraps its tree in `<LocaleProvider>`; children use `useT('quiz')`, `useLocale()`, `useLazyT<typeof Msgs>('sims/x')` from `src/i18n/react.tsx` |
+| Numbers, dates, plurals | `src/lib/i18n/format.ts`: `fixed`, `num`, `pct` (`70%` / `%70`), `ms`, `kbps`, `bytes`, `date`, `relative`, `plural` |
+| Case, search, sorting | `src/lib/i18n/text.ts`: `lower`/`upper` (Turkish i/İ, ı/I), `foldForMatch`, `collator`, `alphabet`, `letterOf` |
+| URLs | `src/lib/i18n/route.ts`: `localizePath(path, locale)`; content URLs via `src/lib/content/nav.ts` (`lessonUrl(l, locale)`, `moduleUrl`, `pageUrl`, …) |
+| Registry titles, presets, variants | English stays in the registries; translations in `src/i18n/<locale>/registry-{sims,diagrams}.ts` (partial); read with `simText(name, locale)` / `diagramText(name, locale)` from `src/lib/i18n/registry.ts` |
+
+Rules:
+
+- **Islands get only `locale`.** Never pass dictionaries as props (they would be serialized into every page). Components
+  that are server-rendered as part of an island (quizzes, SequenceFlow, StepperControls) use core namespaces; only
+  sims and diagrams use lazy ones, because only their hosts provide them.
+- Type a lazy namespace with a **type-only** import of the English file (`import type Msgs from '…/en/sims/x'`), so
+  English text is not bundled on other locales' pages.
+- **Keep English output identical** when you extract a string: use `fixed()` instead of `toFixed()`, keep the exact
+  wording and punctuation, and diff `pnpm i18n:baseline` output before and after.
+- Canvas sims pass a `labels` object (from their namespace) into `draw()`; measure text, don't assume English widths.
+- Diagrams keep structure (step ids, from/to, kind, code) in the component and text in the namespace keyed by
+  variant and step id: `withStepText(STEPS, m.steps[variant])`, `withActorText(ACTORS, m.actors)`.
+- No CSS `uppercase` on text that must stay readable in another language: Turkish turns `.uppercase` off globally
+  (`html.no-uppercase`), because CSS cannot uppercase jargon such as "tick" correctly.
+- Sorting and A–Z indexes use `collator(locale)` and `alphabet(locale)`, never `localeCompare` with a fixed locale.
+
+### Content translations
+
+Translations mirror the English tree under `src/content/<locale>/` with **the same file names**:
+
+| What | File | Contains |
+|---|---|---|
+| Lesson | `tr/lessons/<module>/NN-<slug>.mdx` | frontmatter `title`, `summary`, `objectives`, `sourceHash`; the whole translated body |
+| Module | `tr/modules/<module>.yaml` | `title`, `short?`, `summary`, `_src` |
+| Quiz | `tr/quizzes/<module>/<slug>.yaml` | `questions: { <id>: { prompt, explanation, options?, items?, answers?, placeholder?, unit?, _src } }` |
+| Exam | `tr/exams/<module>.yaml` | `title`, `_src`, `questions` as in a quiz |
+| Flashcards | `tr/flashcards/<module>.yaml` | `cards: { <id>: { front, back, _src } }` |
+| Glossary | `tr/glossary/<module>.yaml` | `terms: { <id>: { term, short, long?, aliases?, _src } }` |
+
+Overlays hold **text only**, keyed by the English id; structure (answers, order, lesson links, `seeAlso`, …) always
+comes from English, and the schemas reject anything else. `options`/`items` must have exactly as many entries, in the
+same order, as English. Translated `fill` answers are added to the English ones; translated glossary aliases are added
+to the English term and aliases, so English jargon stays searchable. Anything without an entry is shown in English.
+
+A translated lesson keeps every `<Sim>`, `<Diagram>`, `<Sequence>` and `<Term id>` exactly as in English (same names,
+presets, variants and ids, in the same order). Translate prose, headings and `<Callout title>`; keep code, API names and
+identifiers in English. Translated headings change the `#anchor` slugs, so link to sections of other lessons sparingly.
+Follow `src/i18n/terminology.<locale>.yaml` (style guide and term list); `validate:content` warns about its "avoid" forms.
+
+**Stamping.** After translating (or re-checking) something against the current English, run
+`pnpm i18n:stamp --module <id>` or `pnpm i18n:stamp <files…>`. It writes the English source hash into `sourceHash`
+(lessons) and `_src` (overlay items). When the English changes later, the translation is reported as **stale** by
+`i18n:status` and `validate:content`, and the page still shows the old translation. Only stamp what you actually checked;
+`--all` marks every stale translation as fresh. `--missing` stamps only items without a hash.
+
+### Adding a language
+
+1. Add it to `LOCALES` in `src/i18n/locales.ts` (`htmlLang`, `intl`, `label` in its own language, `prefix`,
+   `pagefindLang`, `uppercase`).
+2. Copy `src/i18n/tr/` to `src/i18n/<code>/` and translate; `pnpm check` lists every missing key.
+3. Add `alphabet` and any case rules to `src/lib/i18n/text.ts`, and `translations('<code>')` collections to
+   `src/content.config.ts`.
+4. Add `terminology.<code>.yaml`, then translate content as above. Routing, the switcher, the banner, search and
+   fallbacks pick the locale up automatically.
