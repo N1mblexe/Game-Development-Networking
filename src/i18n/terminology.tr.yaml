@@ -1,0 +1,238 @@
+# NetLearn: English → Turkish terminology and style guide.
+# Every translator (UI strings, lessons, quizzes, flashcards, glossary) follows this file.
+# scripts/validate-content.ts warns when a Turkish file uses a form listed under `avoid`.
+#
+# ------------------------------------------------------------------------------------------------ style guide
+# Audience: Unity developers new to networking. Tone: friendly, direct, technical; like modern Turkish developer
+# docs, not a textbook.
+#
+# 1. Address the reader as "sen" (informal second person), consistently: "Bunu sunucuda doğrula.", "Göreceğin gibi…".
+#    Never "siz", never impersonal passive chains ("…yapılmalıdır"). Imperatives in UI: "Başla", "Sonraki soru".
+# 2. Hybrid terminology (decided by the course owner):
+#    - Established Turkish words where they exist and developers use them: gecikme, paket kaybı, sunucu, istemci,
+#      bant genişliği, güvenilir/güvenilmez teslim, sahiplik, yetki, serileştirme, enterpolasyon …
+#    - Jargon and every API name stay English: tick, RPC, NetworkVariable, host, snapshot, spawn, jitter, relay …
+#    - On the FIRST use in a lesson, give the other form in parentheses, exactly as in `firstUse` below:
+#      "gecikme (latency)", "tick hızı (tick rate)", "snapshot (anlık durum görüntüsü)". Afterwards use `tr` alone.
+# 3. Never translate code: identifiers, API names, attribute names, log strings, file names, menu paths of English-only
+#    tools (Unity editor menus stay English: Window > Multiplayer > …). Code blocks stay byte-identical except that
+#    comments MAY be translated. Inline `code` stays as is.
+# 4. Keep every id, Term id, Sim/Diagram name, preset and variant, link path and anchor-free URL unchanged. Markdown
+#    links keep their English paths ([güvenlik dersi](/modules/theory/security/)); the site adds /tr itself. In-lesson
+#    #anchor links must use the Turkish heading slugs (check:links catches mistakes).
+# 5. Suffixes on English words and acronyms follow pronunciation and take an apostrophe (Turkish typographic ’ or '):
+#    UDP’de, TCP’nin, RPC’ler, NAT’ın, host’a, tick’ler, snapshot’lar, Unity’nin, Steam’in, NetworkVariable’ı.
+# 6. Numbers: decimal comma (1,5 ms), thousands dot (10.000), percent sign first (%70), a space before units (16 ms).
+#    In UI code use src/lib/i18n/format.ts instead of writing these by hand.
+# 7. Avoid CSS-uppercased jargon (CSS turns "tick" into "TİCK" under lang="tr"); Turkish pages switch the uppercase
+#    utility off automatically. Write all-caps words yourself when needed (e.g. canvas labels "KAÇTI").
+# 8. Prefer short sentences. Don't calque English idioms; say what they mean ("fire and forget" → "gönder ve unut").
+#    Keep **bold** and *italic* on the same ideas as the English text.
+# 9. Fill-in quiz answers: keep the English accepted answers and ADD Turkish ones in the overlay (`answers`); matching
+#    ignores case, Turkish i/ı/İ and diacritics.
+#
+# Entry fields: en, tr (form to use), keepEnglish (true: the English word itself is the Turkish term),
+#               firstUse (form for the first mention in a lesson), avoid (forms not to use), note.
+
+terms:
+  # ------------------------------------------------------------------------------------------- course & UI
+  - { en: course, tr: kurs }
+  - { en: module, tr: modül }
+  - { en: lesson, tr: ders }
+  - { en: quiz, tr: kısa sınav, note: 'Lesson quiz. "Test" is avoided because testing code is a lesson topic.', avoid: [quiz’i, kuiz] }
+  - { en: exam, tr: sınav, note: Module exam }
+  - { en: flashcard, tr: bilgi kartı, avoid: [flaş kart] }
+  - { en: spaced repetition, tr: aralıklı tekrar }
+  - { en: review (flashcards), tr: tekrar }
+  - { en: glossary, tr: sözlük }
+  - { en: playground, tr: deneme alanı, note: The simulator playground page }
+  - { en: progress, tr: ilerleme }
+  - { en: certificate, tr: sertifika }
+  - { en: simulator, tr: simülatör }
+  - { en: diagram, tr: diyagram }
+  - { en: key takeaways, tr: akılda kalacaklar }
+  - { en: common pitfall, tr: sık yapılan hata }
+
+  # ------------------------------------------------------------------------------------------- general
+  - { en: multiplayer, tr: çok oyunculu }
+  - { en: single-player, tr: tek oyunculu }
+  - { en: netcode, tr: netcode, keepEnglish: true, firstUse: netcode (ağ kodu) }
+  - { en: networking, tr: ağ programlama, note: '"networking for games" → "oyunlar için ağ programlama"' }
+  - { en: real-time, tr: gerçek zamanlı }
+  - { en: gameplay, tr: oynanış }
+  - { en: game state, tr: oyun durumu }
+  - { en: state, tr: durum }
+  - { en: frame, tr: kare, note: Render frame. Unity's Update runs once per kare. }
+  - { en: frame rate, tr: kare hızı, firstUse: kare hızı (frame rate) }
+  - { en: simulation, tr: simülasyon }
+  - { en: physics, tr: fizik }
+  - { en: input, tr: girdi, avoid: [giriş verisi] }
+  - { en: hitch, tr: takılma }
+  - { en: stale, tr: eskimiş, note: '"stale data" → "eskimiş veri"', avoid: [bayat] }
+  - { en: fire and forget, tr: gönder ve unut }
+  - { en: best effort, tr: en iyi çaba, firstUse: en iyi çaba (best effort) }
+  - { en: trade-off, tr: ödünleşim, note: '"bir ödünleşim"; or rephrase: "X kazanırsın, Y kaybedersin"' }
+
+  # ------------------------------------------------------------------------------------------- packets & protocols
+  - { en: packet, tr: paket }
+  - { en: datagram, tr: datagram, keepEnglish: true }
+  - { en: segment (TCP), tr: segment, keepEnglish: true }
+  - { en: byte stream, tr: bayt akışı }
+  - { en: stream, tr: akış }
+  - { en: header, tr: başlık, note: '"packet header" → "paket başlığı"' }
+  - { en: payload, tr: yük, firstUse: yük (payload) }
+  - { en: protocol, tr: protokol }
+  - { en: transport protocol, tr: taşıma protokolü }
+  - { en: TCP, tr: TCP, keepEnglish: true }
+  - { en: UDP, tr: UDP, keepEnglish: true }
+  - { en: IP address, tr: IP adresi }
+  - { en: port, tr: port, keepEnglish: true }
+  - { en: endpoint, tr: uç nokta, firstUse: uç nokta (endpoint) }
+  - { en: socket, tr: soket }
+  - { en: router, tr: yönlendirici, firstUse: yönlendirici (router) }
+  - { en: hop, tr: atlama, note: '"one hop closer" → "bir atlama daha yakın"' }
+  - { en: MTU, tr: MTU, keepEnglish: true }
+  - { en: fragmentation, tr: parçalama, firstUse: parçalama (fragmentation) }
+  - { en: checksum, tr: sağlama toplamı, firstUse: sağlama toplamı (checksum) }
+  - { en: handshake, tr: el sıkışma, firstUse: el sıkışma (handshake) }
+  - { en: three-way handshake, tr: üç yollu el sıkışma }
+  - { en: acknowledgement, tr: onay, firstUse: onay (ack), note: 'Packet flag names stay English: ACK, SYN, SYN-ACK.' }
+  - { en: retransmission, tr: yeniden iletim, note: 'verb: "yeniden göndermek"' }
+  - { en: sequence number, tr: sıra numarası }
+  - { en: congestion control, tr: tıkanıklık denetimi, firstUse: tıkanıklık denetimi (congestion control), avoid: [trafik kontrolü] }
+  - { en: head-of-line blocking, tr: hat başı engellemesi, firstUse: hat başı engellemesi (head-of-line blocking) }
+  - { en: connection, tr: bağlantı }
+  - { en: connectionless, tr: bağlantısız }
+  - { en: disconnect, tr: bağlantı kopması, note: 'verb: "bağlantıyı kesmek" / "bağlantı kopmak"' }
+  - { en: timeout, tr: zaman aşımı }
+  - { en: session, tr: oturum }
+
+  # ------------------------------------------------------------------------------------------- delivery
+  - { en: reliable delivery, tr: güvenilir teslim, avoid: [güvenli teslim, emniyetli teslim] }
+  - { en: unreliable delivery, tr: güvenilmez teslim, avoid: [güvensiz teslim] }
+  - { en: reliable, tr: güvenilir, avoid: [güvenli] , note: '"güvenli" means secure, not reliable' }
+  - { en: unreliable, tr: güvenilmez, avoid: [güvensiz] }
+  - { en: ordered, tr: sıralı }
+  - { en: sequenced, tr: sequenced, keepEnglish: true, firstUse: sequenced (eskileri atan), note: '"unreliable sequenced" → "güvenilmez sequenced"' }
+  - { en: delivery type, tr: teslim türü }
+  - { en: channel, tr: kanal }
+  - { en: message, tr: mesaj }
+  - { en: send flags, tr: gönderim bayrakları, firstUse: gönderim bayrakları (send flags) }
+
+  # ------------------------------------------------------------------------------------------- latency & bandwidth
+  - { en: latency, tr: gecikme, firstUse: gecikme (latency), avoid: [latans, gecikim] }
+  - { en: round-trip time, tr: gidiş-dönüş süresi, firstUse: gidiş-dönüş süresi (RTT) }
+  - { en: RTT, tr: RTT, keepEnglish: true }
+  - { en: ping, tr: ping, keepEnglish: true }
+  - { en: jitter, tr: jitter, keepEnglish: true, firstUse: jitter (gecikme dalgalanması) }
+  - { en: packet loss, tr: paket kaybı, avoid: [paket kayıpı] }
+  - { en: bandwidth, tr: bant genişliği, avoid: [bant aralığı, bantgenişliği] }
+  - { en: throughput, tr: aktarım hızı, firstUse: aktarım hızı (throughput) }
+  - { en: propagation delay, tr: yayılım gecikmesi }
+  - { en: queuing delay, tr: kuyruk gecikmesi }
+  - { en: buffer, tr: tampon, firstUse: tampon (buffer) }
+  - { en: jitter buffer, tr: jitter tamponu }
+  - { en: lag, tr: lag, keepEnglish: true, note: Colloquial; prefer "gecikme" in explanations }
+
+  # ------------------------------------------------------------------------------------------- topology & authority
+  - { en: topology, tr: topoloji }
+  - { en: client, tr: istemci, avoid: [müşteri, alıcı bilgisayar] }
+  - { en: server, tr: sunucu, avoid: [servis] }
+  - { en: dedicated server, tr: özel sunucu, firstUse: özel sunucu (dedicated server), avoid: [adanmış sunucu] }
+  - { en: listen server, tr: listen server, keepEnglish: true, firstUse: listen server (oyuncunun barındırdığı sunucu) }
+  - { en: host, tr: host, keepEnglish: true, note: '"host’a", "host’un". The NGO role: server + client in one process.', avoid: [ev sahibi] }
+  - { en: peer, tr: eş, firstUse: eş (peer) }
+  - { en: peer-to-peer, tr: eşler arası, firstUse: eşler arası (P2P) }
+  - { en: relay, tr: relay, keepEnglish: true, firstUse: relay (aktarma sunucusu) }
+  - { en: authority, tr: yetki, firstUse: yetki (authority) }
+  - { en: authoritative server, tr: yetkili sunucu, firstUse: yetkili sunucu (authoritative server) }
+  - { en: server-authoritative, tr: sunucu yetkili }
+  - { en: client-authoritative, tr: istemci yetkili }
+  - { en: distributed authority, tr: dağıtık yetki, firstUse: dağıtık yetki (distributed authority), note: 'NGO mode name "Distributed Authority" stays English in UI/code references' }
+  - { en: ownership, tr: sahiplik }
+  - { en: owner, tr: sahip }
+  - { en: host migration, tr: host taşıma, firstUse: host taşıma (host migration) }
+  - { en: matchmaking, tr: eşleştirme, firstUse: eşleştirme (matchmaking) }
+
+  # ------------------------------------------------------------------------------------------- simulation & sync
+  - { en: tick, tr: tick, keepEnglish: true, firstUse: tick (sabit simülasyon adımı), avoid: [kene, tık] }
+  - { en: tick rate, tr: tick hızı, firstUse: tick hızı (tick rate), avoid: [tık hızı] }
+  - { en: fixed timestep, tr: sabit zaman adımı, firstUse: sabit zaman adımı (fixed timestep) }
+  - { en: send rate, tr: gönderim hızı }
+  - { en: snapshot, tr: snapshot, keepEnglish: true, firstUse: snapshot (anlık durum görüntüsü) }
+  - { en: state synchronization, tr: durum senkronizasyonu }
+  - { en: delta compression, tr: delta sıkıştırma }
+  - { en: baseline, tr: referans durum, firstUse: referans durum (baseline) }
+  - { en: quantization, tr: nicemleme, firstUse: nicemleme (quantization) }
+  - { en: bit packing, tr: bit paketleme }
+  - { en: serialization, tr: serileştirme, avoid: [seri hale getirme, serializasyon] }
+  - { en: deserialization, tr: seriden çıkarma, firstUse: seriden çıkarma (deserialization) }
+  - { en: interest management, tr: ilgi yönetimi, firstUse: ilgi yönetimi (interest management) }
+  - { en: determinism, tr: determinizm }
+  - { en: desync, tr: senkron kaybı, firstUse: senkron kaybı (desync) }
+  - { en: lockstep, tr: lockstep, keepEnglish: true }
+  - { en: rollback, tr: rollback, keepEnglish: true, firstUse: rollback (geri sarma) }
+  - { en: input delay, tr: girdi gecikmesi }
+
+  # ------------------------------------------------------------------------------------------- prediction & smoothing
+  - { en: client-side prediction, tr: istemci tarafı tahmin, firstUse: istemci tarafı tahmin (client-side prediction) }
+  - { en: prediction, tr: tahmin }
+  - { en: reconciliation, tr: uzlaştırma, firstUse: uzlaştırma (reconciliation), avoid: [mutabakat] }
+  - { en: misprediction, tr: hatalı tahmin }
+  - { en: rubber-banding, tr: rubber-banding, keepEnglish: true, firstUse: rubber-banding (lastik bant etkisi) }
+  - { en: interpolation, tr: enterpolasyon, firstUse: enterpolasyon (interpolation), avoid: [interpolasyon, aradeğerleme], note: TDK spelling }
+  - { en: extrapolation, tr: ekstrapolasyon, firstUse: ekstrapolasyon (extrapolation), avoid: [dışdeğerleme] }
+  - { en: dead reckoning, tr: dead reckoning, keepEnglish: true, firstUse: dead reckoning (konum kestirimi) }
+  - { en: render delay, tr: çizim gecikmesi, firstUse: çizim gecikmesi (render delay) }
+  - { en: lag compensation, tr: gecikme telafisi, firstUse: gecikme telafisi (lag compensation) }
+  - { en: hitbox, tr: hitbox, keepEnglish: true }
+  - { en: hit registration, tr: isabet kaydı }
+  - { en: rewind, tr: geri sarma }
+
+  # ------------------------------------------------------------------------------------------- NAT & security
+  - { en: NAT, tr: NAT, keepEnglish: true }
+  - { en: NAT traversal, tr: NAT geçişi, firstUse: NAT geçişi (NAT traversal) }
+  - { en: hole punching, tr: hole punching, keepEnglish: true, firstUse: hole punching (delik açma) }
+  - { en: firewall, tr: güvenlik duvarı }
+  - { en: cheat, tr: hile }
+  - { en: cheater, tr: hileci }
+  - { en: anti-cheat, tr: hile önleme, firstUse: hile önleme (anti-cheat) }
+  - { en: speed hack, tr: hız hilesi }
+  - { en: validation, tr: doğrulama, note: '"validate on the server" → "sunucuda doğrula"' }
+  - { en: authentication, tr: kimlik doğrulama }
+  - { en: encryption, tr: şifreleme }
+
+  # ------------------------------------------------------------------------------------------- Unity & NGO
+  - { en: Netcode for GameObjects, tr: Netcode for GameObjects, keepEnglish: true, note: Abbreviated NGO }
+  - { en: RPC, tr: RPC, keepEnglish: true, firstUse: RPC (uzak yordam çağrısı), note: plural "RPC’ler" }
+  - { en: NetworkVariable, tr: NetworkVariable, keepEnglish: true }
+  - { en: NetworkObject, tr: NetworkObject, keepEnglish: true }
+  - { en: NetworkBehaviour, tr: NetworkBehaviour, keepEnglish: true }
+  - { en: NetworkManager, tr: NetworkManager, keepEnglish: true }
+  - { en: transport (NGO), tr: transport, keepEnglish: true, note: 'The pluggable NGO layer (Unity Transport, FacepunchTransport). The OSI layer is "taşıma katmanı".' }
+  - { en: spawn, tr: spawn, keepEnglish: true, note: '"spawn etmek", "spawn edilir", "spawn mesajı"', avoid: [doğurmak, yumurtlamak] }
+  - { en: despawn, tr: despawn, keepEnglish: true }
+  - { en: prefab, tr: prefab, keepEnglish: true }
+  - { en: GameObject, tr: GameObject, keepEnglish: true }
+  - { en: component, tr: bileşen, note: 'Unity class names stay English: "Rigidbody bileşeni"' }
+  - { en: scene, tr: sahne }
+  - { en: Inspector, tr: Inspector, keepEnglish: true }
+  - { en: Play Mode, tr: Play Mode, keepEnglish: true }
+  - { en: build, tr: build, keepEnglish: true, note: '"iki build başlat"' }
+  - { en: callback, tr: callback, keepEnglish: true, firstUse: callback (geri çağırma) }
+  - { en: event, tr: olay }
+  - { en: dirty flag, tr: dirty bayrağı, firstUse: dirty bayrağı (dirty flag) }
+
+  # ------------------------------------------------------------------------------------------- Steam
+  - { en: Steamworks, tr: Steamworks, keepEnglish: true }
+  - { en: lobby, tr: lobi, firstUse: lobi (lobby), note: 'Steam API type "Lobby" stays English in code references' }
+  - { en: friends list, tr: arkadaş listesi }
+  - { en: invite, tr: davet }
+  - { en: rich presence, tr: rich presence, keepEnglish: true, firstUse: rich presence (zengin durum bilgisi) }
+  - { en: Steam overlay, tr: Steam overlay, keepEnglish: true }
+  - { en: achievement, tr: başarım, note: Steam’s Turkish client uses "Başarımlar" }
+  - { en: stats, tr: istatistikler }
+  - { en: leaderboard, tr: skor tablosu }
+  - { en: auth ticket, tr: auth ticket, keepEnglish: true, firstUse: auth ticket (kimlik doğrulama bileti) }
+  - { en: Steam Datagram Relay, tr: Steam Datagram Relay, keepEnglish: true, note: Abbreviated SDR }
+  - { en: App ID, tr: App ID, keepEnglish: true }
