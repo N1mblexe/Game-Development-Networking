@@ -12,7 +12,7 @@ const { module, lessons, currentId } = Astro.props;
 
 <nav aria-label={`${module.data.title} lessons`} class="text-sm">
   <a href={moduleUrl(module.id)} class="mb-3 flex items-center gap-2 font-semibold hover:text-accent">
-    <span class="grid h-7 w-7 place-items-center rounded-md text-xs font-bold text-white" style={`background:${module.data.color}`}>
+    <span class="bg-module-solid grid h-7 w-7 place-items-center rounded-md text-xs font-bold" style={`--module:${module.data.color}`}>
       {module.data.badge}
     </span>
     {module.data.title}

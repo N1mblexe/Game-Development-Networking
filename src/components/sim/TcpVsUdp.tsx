@@ -264,7 +264,8 @@ function drawLane(ctx: CanvasRenderingContext2D, p: Palette, now: number, m: Mod
       const x = x1 - (x1 - x0) * Math.min(1, f);
       circle(ctx, x, wy + 13, 3, alpha(p.muted, 0.8));
     }
-    text(ctx, p, narrow ? 'ACKs ←' : '← cumulative ACKs', x0, wy + 13, { size: 9, color: p.muted });
+    // Right end of the wire (where ACKs start), so it never collides with the receive-buffer caption on the left.
+    text(ctx, p, narrow ? '← ACKs' : '← cumulative ACKs', x1, wy + 13, { size: 9, color: p.muted, align: 'right' });
     // Retransmission flashes
     for (const e of m.tcp.events) {
       const age = now - e.time;
@@ -294,7 +295,7 @@ function drawLane(ctx: CanvasRenderingContext2D, p: Palette, now: number, m: Mod
       }
       const after = startX + (Math.min(buf.length, maxBoxes) + 1) * (bw + 3) + 2;
       text(ctx, p, narrow ? `${buf.length} held` : `${buf.length} arrived, held back`, after, by, { size: 9.5, color: p.warn, weight: 600 });
-      text(ctx, p, 'receive buffer: waiting for', startX, by - 15, { size: 9.5, color: p.muted });
+      text(ctx, p, narrow ? 'waiting for' : 'receive buffer: waiting for', startX, by - 15, { size: 9.5, color: p.muted });
     } else {
       text(ctx, p, 'receive buffer empty: delivering in order', startX, by, { size: 9.5, color: p.muted });
     }

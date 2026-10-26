@@ -13,15 +13,17 @@
     "preview": "astro preview",
     "check": "astro check",
     "validate:content": "tsx scripts/validate-content.ts",
+    "check:links": "tsx scripts/check-links.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "verify": "pnpm validate:content && pnpm check && pnpm test && pnpm build",
+    "verify": "pnpm validate:content && pnpm check && pnpm test && pnpm build && pnpm check:links",
     "astro": "astro"
   },
   "dependencies": {
     "@astrojs/mdx": "8.0.3",
     "@astrojs/react": "7.0.1",
     "@nanostores/react": "2.0.1",
+    "@pagefind/component-ui": "1.5.2",
     "@tailwindcss/vite": "4.3.3",
     "astro": "7.3.8",
     "astro-expressive-code": "0.44.2",

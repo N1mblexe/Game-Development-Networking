@@ -50,7 +50,12 @@ function Btn({
 export default function StepperControls({ s, label = 'Step' }: { s: Stepper; label?: string }) {
   const atEnd = s.index >= s.count - 1;
   return (
-    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Playback controls">
+    <div
+      className="flex flex-wrap items-center gap-2"
+      role="group"
+      aria-label="Playback controls"
+      data-stepper-ready={s.hydrated ? 'true' : undefined}
+    >
       <Btn label="Reset" onClick={s.reset} disabled={s.index <= s.min && !s.playing} testId="dg-reset">
         {icon.reset}
       </Btn>

@@ -9,8 +9,9 @@ pnpm validate:content   # cross-reference checks (run after every content change
 pnpm check              # TypeScript / Astro diagnostics
 pnpm test               # Vitest unit tests
 pnpm build              # production build + Pagefind index
-pnpm test:e2e           # Playwright (needs `pnpm build` first)
-pnpm verify             # validate + check + test + build
+pnpm check:links        # every internal href/src in dist/ resolves (needs a build)
+CI=1 pnpm test:e2e      # Playwright against the build (see "Testing" below)
+pnpm verify             # validate + check + test + build + check:links
 ```
 
 The golden reference lesson is `src/content/lessons/theory/01-packets-and-protocols.mdx`, together with its quiz,
@@ -87,10 +88,38 @@ Writing style: second person, concrete, no filler. Explain *why* before *how*. T
 | `<CodeTabs labels={['A', 'B']}>` + one fenced block per label | Tabbed code |
 | `<Sim name="..." preset="..." caption="..." />` | Simulator from `src/components/sim/registry.ts` |
 | `<Diagram name="..." variant="..." caption="..." />` | Diagram from `src/components/diagrams/registry.ts` |
-| `<Sequence title actors={[{id,label,kind}]} steps={[{from,to,label,note,kind}]} />` | One-off animated sequence diagram. `kind` is `reliable\|unreliable\|rpc\|event\|local` |
+| `<Sequence title actors={[{id,label,kind}]} steps={[{from,to,label,note,kind,code,tone}]} />` | One-off animated sequence diagram (see below) |
+
+**`<Sequence>` fields** (types in `src/components/diagrams/types.ts`):
+
+| Field | Required | Meaning |
+|---|---|---|
+| `actors[].id`, `actors[].label` | yes | Column id (used by steps) and its visible name |
+| `actors[].kind` | no | Icon and color: `client` (default) \| `server` \| `host` \| `steam` \| `relay` \| `service` |
+| `steps[].from`, `steps[].to`, `steps[].label` | yes | Arrow between two actor ids. `from === to` draws a self-loop |
+| `steps[].kind` | no | Line style: `reliable` (solid, default) \| `unreliable` (dashed) \| `rpc` (solid + RPC tag) \| `event` (dotted) \| `local` (self-loop) |
+| `steps[].note` | no | Extra sentence shown in the caption while the step is active |
+| `steps[].code` | no | API call shown in monospace under the label (and in the caption). On diagrams narrower than 520 px it only appears in the caption, so keep it to one call |
+| `steps[].tone` | no | Emphasis: `warn` / `danger` mark a failure point (⚠ and colored label), `ok` a success, `muted` a non-event (italic) |
+
+```mdx
+<Sequence
+  title="Joining through a lobby"
+  actors={[{ id: 'c', label: 'Client', kind: 'client' }, { id: 's', label: 'Steam', kind: 'steam' }]}
+  steps={[
+    { from: 'c', to: 's', label: 'Join the lobby', code: 'await lobby.Join()' },
+    { from: 's', to: 'c', label: 'Lobby is full', kind: 'event', tone: 'danger', note: 'RoomEnter.Full: show a message, do not retry.' },
+  ]}
+/>
+```
 
 MDX gotchas: leave a blank line after an opening component tag and before its closing tag when the content is
 Markdown. Write `{'{'}` or use code spans for literal braces in prose.
+
+**Links and tables.** Write internal links root-relative, for example `[the security lesson](/modules/theory/security/)`.
+Markdown links are rendered by `src/components/mdx/Link.astro`, which adds the deploy base path (GitHub Pages serves
+the site under `/<repo>/`), so never hardcode the base. Markdown tables are wrapped in a focusable, horizontally
+scrollable region (`Table.astro`), so wide tables are fine on phones.
 
 ### Available simulators and presets
 | name | presets |
@@ -139,7 +168,7 @@ For anything else, use `<Sequence>` inline instead of requesting a new diagram.
 - **Lesson quiz:** 4–6 questions mixing at least 3 types, with `passPct` 70 by default. Test understanding, not trivia.
 - **Module exam:** `title`, `drawCount` (15), `passPct` (80), and a pool of **25 or more** questions spread across all lessons. Use different questions from the lesson quizzes.
 - **Flashcards:** **8 or more per lesson**, each with `lesson:` set. The front is a question and the back is a short answer (≤ 2 sentences), with optional `code`.
-- **Glossary:** every `<Term>` needs an entry. `short` is limited to 240 characters (it's the tooltip), with an optional `long`, plus `lesson` (where the term is taught) and `seeAlso`. **Term ids are global**: check other modules' files before adding one, and reuse existing terms rather than duplicating them.
+- **Glossary:** every `<Term>` needs an entry. `short` is limited to 240 characters (it's the tooltip), with an optional `long`, plus `lesson` (where the term is taught) and `seeAlso`. **Term ids are global** across all glossary files, and defining the same id twice is a validation error. General networking terms (latency, host, ownership, host migration, …) live in `glossary/theory.yaml` even when an engine module uses them first; a module's own file only holds terms specific to that engine or SDK. Search all four files before adding a term, and link to the existing one instead of redefining it.
 
 ---
 
@@ -154,6 +183,11 @@ For anything else, use `<Sequence>` inline instead of requesting a new diagram.
    (start paused); provide an accessible text summary (`aria-live` stats or a description).
 
 The playground page lists every registered sim automatically. Once you register it, `validate-content` accepts its name and presets.
+
+Also check `<Sim name="..." compact />` at 390 px: compact mode hides secondary controls and stats, and must still read
+well. Use the shared controls in `sim/ui/controls.tsx` (the stat grid sizes its columns from the sim's own width with
+container queries). For text in a module's color, use the `text-module-ink` / `bg-module-solid` utilities from
+`global.css` rather than the raw `--module` color, which isn't guaranteed to meet contrast.
 
 ---
 
@@ -185,7 +219,43 @@ Changing a contract (schemas, component props, registry names and presets) requi
 
 ---
 
-## 7. Curriculum: lesson keys
+## 7. Testing
+
+**Unit tests** (`tests/unit`, Vitest) cover the pure logic: netsim, grading, seeded draws, SRS.
+
+**End-to-end tests** (`tests/e2e`, Playwright) run against the production build in a desktop and a mobile project:
+
+```bash
+pnpm build
+CI=1 pnpm test:e2e                       # always set CI=1
+CI=1 E2E_PORT=4361 pnpm test:e2e         # if port 4322 is taken (another worktree or agent)
+CI=1 pnpm test:e2e discovery.spec.ts --repeat-each=10   # prove a fix for a flaky test
+```
+
+- `CI=1` makes Playwright start its own `astro preview` instead of reusing whatever is already listening on the
+  port, which may be another worktree's (stale) build. It also enables one retry.
+- Several agents or worktrees may run at once, so give every server its own port: `E2E_PORT` for the test server,
+  and a unique port for manual previews, for example `pnpm astro preview --port 4350 --ignore-lock`.
+- `site.spec.ts` derives every route from `src/content` (no hardcoded lesson lists) and checks that each renders without
+  console errors, nothing scrolls sideways at 360 px, axe finds no WCAG A/AA violations on a representative set in both
+  themes, and lessons only download the sim chunks they embed. New lessons and modules are covered automatically.
+- `engine.spec.ts` answers the real exams from `src/content/exams/*.yaml`, including every question's answer key. The
+  draw is reproducible through a test hook: set `window.__NETLEARN_EXAM_SEED__` before pressing Start, and
+  `drawExam(questions, drawCount, seed)` from `src/lib/quiz/random.ts` gives the same questions in the same order.
+- Islands are server-rendered with live-looking buttons, so a click before hydration is lost. Wait for the hydration
+  markers before interacting: `data-ready="true"` on quizzes, exams, decks, review, progress, certificates and
+  `[data-sequence]` (plus `data-stepper-ready` on stepper controls). Use `page.clock` for autoplay timers instead of
+  long timeouts.
+
+**Links.** `pnpm check:links` scans `dist/` for internal `href`/`src` values (plus astro-island chunks, Pagefind's
+bundle path, JS chunk imports and CSS `url()`s) and checks each resolves to a file, with or without a trailing slash,
+and that `#fragments` exist as ids on the target page. Check a project-site build with
+`BASE_PATH=/netlearn SITE_URL=https://example.github.io pnpm build && BASE_PATH=/netlearn pnpm check:links`, which
+also flags any link that skips the base. The deploy workflow runs it on every build.
+
+---
+
+## 8. Curriculum: lesson keys
 
 These keys are fixed because registries, glossary entries and prerequisites already point to them.
 

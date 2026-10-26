@@ -249,7 +249,7 @@ export default function LagCompensation(props: LagCompensationProps) {
         )}
         <Toggle label="Auto-fire" checked={autoFire} onChange={setAutoFire} hint={compact ? undefined : 'A bot aims exactly at what it sees.'} />
       </ControlGrid>
-      <div className="relative overflow-x-auto">
+      <div className="relative overflow-x-auto" tabIndex={0} role="region" aria-label="Recent shots (scrollable)">
         <table className="w-full min-w-[300px] text-left text-sm">
           <caption className="sr-only">Recent shots and the verdict under each hit-detection mode</caption>
           <thead className="text-xs text-muted">

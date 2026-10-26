@@ -32,7 +32,8 @@
     display: grid;
     place-items: center;
     border-radius: 999px;
-    background: var(--module);
+    /* Same mix as the bg-module-solid utility: white text stays AA on any module color. */
+    background: color-mix(in oklab, var(--module) 68%, #000);
     color: #fff;
     font-weight: 700;
     font-size: 0.85rem;

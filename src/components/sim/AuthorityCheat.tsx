@@ -501,7 +501,8 @@ export default function AuthorityCheat(props: AuthorityCheatProps) {
       )}
       <div className="rounded-lg border border-border bg-surface-2 p-2.5">
         <div className="mb-1 text-[0.7rem] font-medium uppercase tracking-wide text-muted">Message log (newest first)</div>
-        <ol role="log" aria-live="polite" aria-relevant="additions" className="space-y-1 text-sm">
+        <div role="log" aria-live="polite" aria-relevant="additions">
+        <ol className="space-y-1 text-sm">
           {shown.length === 0 && <li className="text-muted">Nothing yet. Press a cheat button.</li>}
           {shown.map((e) => (
             <li key={e.id} className="flex gap-2">
@@ -513,6 +514,7 @@ export default function AuthorityCheat(props: AuthorityCheatProps) {
             </li>
           ))}
         </ol>
+        </div>
       </div>
       <Legend
         items={[

@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { parse } from 'yaml';
-import { fixtureExam } from '../../src/lib/quiz/fixtures';
+import { examSchema } from '../../src/lib/content/schemas';
+import { drawExam } from '../../src/lib/quiz/random';
 
 type Q = {
   id: string;
@@ -19,35 +20,43 @@ const golden: { passPct: number; questions: Q[] } = parse(
 );
 const LESSON = '/modules/theory/packets-and-protocols/';
 
-/** Answer one rendered question correctly (or deliberately wrong for single choice). */
+/**
+ * Answer one rendered question correctly, or deliberately wrong. Choices are located by their input value
+ * (the original option index), not by label, because labels may contain inline markup.
+ * A "wrong" order/codeline question is left unanswered, which also grades as wrong.
+ */
 async function answer(scope: Locator, q: Q, wrong = false) {
   switch (q.type) {
     case 'single': {
       const idx = wrong ? ((q.answer as number) + 1) % q.options!.length : (q.answer as number);
-      await scope.getByRole('radio', { name: q.options![idx], exact: true }).check();
+      await scope.locator(`input[type="radio"][value="${idx}"]`).check();
       break;
     }
-    case 'multi':
-      for (const i of q.answers as number[]) await scope.getByRole('checkbox', { name: q.options![i], exact: true }).check();
+    case 'multi': {
+      const keys = wrong ? [q.options!.findIndex((_, i) => !(q.answers as number[]).includes(i))] : (q.answers as number[]);
+      for (const i of keys) await scope.locator(`input[type="checkbox"][value="${i}"]`).check();
       break;
+    }
     case 'truefalse':
-      await scope.getByRole('radio', { name: q.answer ? 'True' : 'False', exact: true }).check();
+      await scope.getByRole('radio', { name: (wrong ? !q.answer : q.answer) ? 'True' : 'False', exact: true }).check();
       break;
     case 'order':
+      if (wrong) break;
       for (let target = 0; target < q.items!.length; target++) {
         const current = await scope.locator('[data-item]').evaluateAll((els) => els.map((e) => Number((e as HTMLElement).dataset.item)));
         for (let pos = current.indexOf(target); pos > target; pos--)
-          await scope.getByRole('button', { name: `Move "${q.items![target]}" up` }).click();
+          await scope.locator(`[data-item="${target}"] button`).first().click(); // "Move up"
       }
       break;
     case 'codeline':
+      if (wrong) break;
       for (const line of q.answerLines!) await scope.getByRole('button', { name: new RegExp(`^Line ${line}:`) }).click();
       break;
     case 'fill':
-      await scope.getByRole('textbox').fill(String(q.answers![0]));
+      await scope.getByRole('textbox').fill(wrong ? 'definitely not it' : String(q.answers![0]));
       break;
     case 'numeric':
-      await scope.getByRole('textbox').fill(String(q.answer));
+      await scope.getByRole('textbox').fill(String(wrong ? Number(q.answer) * 10 + 999 : q.answer));
       break;
   }
 }
@@ -238,43 +247,125 @@ test.describe('certificate and progress', () => {
   });
 });
 
-test.describe('module exam (fixture)', () => {
-  // Exams have no content yet, so this runs against a test-only fixture route that exists only when
-  // the site is built with NETLEARN_FIXTURES=1 (see src/lib/quiz/fixtures.ts).
-  // TODO: once a real exam exists in src/content/exams, point this at it and drop the fixture gate.
-  test('draw, navigate, review, submit and unlock', async ({ page }) => {
-    const res = await page.goto('/modules/__fixture/exam/');
-    test.skip(res?.status() === 404, 'Fixture route not built: run `NETLEARN_FIXTURES=1 pnpm build` to include it.');
+test.describe('module exam', () => {
+  // Runs against the real exams in src/content/exams. The draw is made reproducible with the
+  // window.__NETLEARN_EXAM_SEED__ test hook, and the expected draw is computed here with the same drawExam().
+  const SEED = 20261025;
+  const loadExam = (moduleId: string) => examSchema.parse(parse(readFileSync(`src/content/exams/${moduleId}.yaml`, 'utf8')));
+  const stored = (page: Page, moduleId: string) =>
+    page.evaluate((m) => JSON.parse(localStorage.getItem('netlearn-progress') ?? '{"exams":{}}').exams[m], moduleId);
 
-    const fixtureAnswers = Object.fromEntries(fixtureExam.questions.map((q) => [q.id, q as unknown as Q]));
-    const exam = page.locator('[data-exam][data-ready="true"]');
-    await expect(exam).toContainText('drawn from 5');
-    await exam.getByRole('button', { name: /Start the exam/ }).click();
-    await expect(exam.getByRole('timer')).toBeVisible();
+  async function startExam(page: Page, moduleId: string, seed = SEED) {
+    const exam = loadExam(moduleId);
+    const drawn = drawExam(exam.questions, exam.drawCount, seed);
+    await page.goto(`/modules/${moduleId}/exam/`);
+    const start = page.locator('[data-exam][data-ready="true"]');
+    await expect(start).toContainText(`drawn from ${exam.questions.length}`);
+    // ExamRunner reads the hook when an attempt starts.
+    await page.evaluate((v) => (window.__NETLEARN_EXAM_SEED__ = v), seed);
+    await start.getByRole('button', { name: /Start the exam|Start a new attempt/ }).click();
+    await expect(page.locator('[data-exam][data-phase="running"]')).toHaveAttribute('data-seed', String(seed));
+    return { exam, drawn, runner: page.locator('[data-exam]') };
+  }
 
-    for (let i = 0; i < 4; i++) {
-      const scope = exam.locator('[data-question]');
-      const id = await scope.getAttribute('data-question');
-      await answer(scope, fixtureAnswers[id!]);
-      if (i === 0) {
-        // Go forward and back: the answer is kept.
-        await exam.getByRole('button', { name: /^Next/ }).click();
-        await exam.getByRole('button', { name: /Previous/ }).click();
-        await expect(exam.locator(`[data-question="${id}"]`)).toBeVisible();
-      }
-      await exam.getByRole('button', { name: i < 3 ? /^Next/ : 'Review and submit' }).click();
+  /** Answer every drawn question in order (checking the seeded draw), then open the review screen. */
+  async function answerAll(page: Page, moduleId: string, isWrong: (i: number) => boolean = () => false, seed = SEED) {
+    const { exam, drawn, runner } = await startExam(page, moduleId, seed);
+    for (const [i, q] of drawn.entries()) {
+      const scope = runner.locator('[data-question]');
+      await expect(scope).toHaveAttribute('data-question', q.id); // the seeded draw matches drawExam()
+      await answer(scope, q as unknown as Q, isWrong(i));
+      await runner.getByRole('button', { name: i < drawn.length - 1 ? /^Next/ : 'Review and submit' }).click();
     }
-    await expect(exam).toContainText('4 of 4 answered');
-    await exam.getByRole('button', { name: 'Submit exam' }).click();
+    return { exam, drawn, runner };
+  }
+
+  test('passing the theory exam: navigate, flag, review, submit and unlock the certificate', async ({ page }) => {
+    const { exam, drawn, runner } = await startExam(page, 'theory');
+    if (exam.timeLimitMin) await expect(runner.getByRole('timer')).toBeVisible();
+
+    for (const [i, q] of drawn.entries()) {
+      const scope = runner.locator('[data-question]');
+      await expect(scope).toHaveAttribute('data-question', q.id);
+      await answer(scope, q as unknown as Q);
+      if (i === 0) {
+        // Go forward and back: the answer is kept. Flag it to revisit.
+        await runner.getByRole('button', { name: /^Next/ }).click();
+        await runner.getByRole('button', { name: /Previous/ }).click();
+        await expect(runner.locator(`[data-question="${q.id}"]`)).toBeVisible();
+        await runner.getByRole('button', { name: 'Flag', exact: true }).click();
+        await expect(runner.getByRole('button', { name: 'Flagged', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      }
+      await runner.getByRole('button', { name: i < drawn.length - 1 ? /^Next/ : 'Review and submit' }).click();
+    }
+    const review = page.locator('[data-exam][data-phase="review"]');
+    await expect(review).toContainText(`${drawn.length} of ${drawn.length} answered`);
+    await expect(review).toContainText('1 flagged');
+    await review.getByRole('button', { name: 'Submit exam' }).click();
 
     const results = page.locator('[data-exam][data-phase="results"]');
     await expect(results.getByRole('heading', { name: 'You passed the exam' })).toBeVisible();
-    await expect(results.getByRole('link', { name: 'Get your certificate' })).toHaveAttribute('href', /\/certificate\/__fixture\/?$/);
-    await expect(results.locator('[data-feedback="correct"]')).toHaveCount(4);
-    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('netlearn-progress')!).exams.__fixture);
-    expect(stored.passedAt).toBeTruthy();
-    expect(stored.bestPct).toBe(100);
+    await expect(results).toContainText(`${drawn.length} of ${drawn.length} correct`);
+    await expect(results.locator('[data-feedback="correct"]')).toHaveCount(drawn.length);
+    const cert = results.getByRole('link', { name: 'Get your certificate' });
+    await expect(cert).toHaveAttribute('href', /\/certificate\/theory\/?$/);
+    const rec = await stored(page, 'theory');
+    expect(rec.passedAt).toBeTruthy();
+    expect(rec.bestPct).toBe(100);
+
+    await cert.click();
+    await expect(page.locator('[data-certificate="unlocked"]')).toBeVisible();
+    await expect(page.locator('[data-certificate="unlocked"] .cert')).toContainText('100%');
   });
+
+  test('a failing attempt is recorded but keeps the certificate locked', async ({ page }) => {
+    // Get the first three right and everything else wrong (or unanswered): well under the pass mark.
+    const { exam, drawn } = await answerAll(page, 'theory', (i) => i >= 3);
+    const review = page.locator('[data-exam][data-phase="review"]');
+    await review.getByRole('button', { name: 'Submit exam' }).click();
+
+    const results = page.locator('[data-exam][data-phase="results"]');
+    await expect(results.getByRole('heading', { name: 'Not passed this time' })).toBeVisible();
+    await expect(results).toContainText(`3 of ${drawn.length} correct · pass mark ${exam.passPct}%`);
+    await expect(results.getByRole('link', { name: 'Get your certificate' })).toHaveCount(0);
+    const rec = await stored(page, 'theory');
+    expect(rec.passedAt).toBeFalsy();
+    expect(rec.attempts).toBe(1);
+
+    await results.getByRole('button', { name: 'Back to exam overview' }).click();
+    await expect(page.locator('[data-exam][data-phase="start"]')).toContainText(`Best so far: ${rec.bestPct}%`);
+    await page.goto('/certificate/theory/');
+    await expect(page.locator('[data-certificate="locked"]')).toContainText('Certificate locked');
+  });
+
+  // Every question's answer key must be accepted by the UI (catches keys the inputs can't express).
+  // Picks just enough seeds for the attempts to cover the whole pool.
+  for (const moduleId of readdirSync('src/content/exams').map((f) => f.replace(/\.ya?ml$/, ''))) {
+    test(`every ${moduleId} exam question accepts its answer key`, async ({ page }) => {
+      test.slow();
+      const exam = loadExam(moduleId);
+      const left = new Set(exam.questions.map((q) => q.id));
+      const seeds: number[] = [];
+      for (let s = 1; left.size && s < 500; s++) {
+        const ids = drawExam(exam.questions, exam.drawCount, s).map((q) => q.id);
+        if (ids.some((id) => left.has(id))) {
+          seeds.push(s);
+          ids.forEach((id) => left.delete(id));
+        }
+      }
+      expect([...left], 'questions no seed draws').toEqual([]);
+      for (const s of seeds) {
+        const { drawn } = await answerAll(page, moduleId, () => false, s);
+        await page.locator('[data-exam][data-phase="review"]').getByRole('button', { name: 'Submit exam' }).click();
+        const results = page.locator('[data-exam][data-phase="results"]');
+        const wrong = await results.locator('li:has([data-feedback]:not([data-feedback="correct"])) [data-question]').evaluateAll((els) =>
+          els.map((e) => (e as HTMLElement).dataset.question),
+        );
+        expect(wrong, `seed ${s}: questions graded wrong with their own answer key`).toEqual([]);
+        await expect(results.locator('[data-feedback="correct"]')).toHaveCount(drawn.length);
+      }
+    });
+  }
 });
 
 test.describe('accessibility', () => {

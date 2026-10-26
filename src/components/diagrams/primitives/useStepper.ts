@@ -22,6 +22,8 @@ export interface Stepper {
   min: number;
   playing: boolean;
   reducedMotion: boolean;
+  /** False during SSR and until the island has hydrated (the buttons do nothing before that). */
+  hydrated: boolean;
   play: () => void;
   pause: () => void;
   toggle: () => void;
@@ -39,6 +41,8 @@ export function useStepper(count: number, { stepMs = 2000, initial = -1 } = {}):
   const reducedMotion = usePrefersReducedMotion();
   const [index, setIndex] = useState(initial);
   const [playing, setPlaying] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
 
   // Reset when the step list changes (for example a variant switch).
   useEffect(() => {
@@ -87,6 +91,7 @@ export function useStepper(count: number, { stepMs = 2000, initial = -1 } = {}):
     min: initial,
     playing,
     reducedMotion,
+    hydrated,
     play,
     pause,
     toggle: playing ? pause : play,

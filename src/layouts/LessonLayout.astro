@@ -46,7 +46,7 @@ const index = moduleLessons.findIndex((l) => l.id === lesson.id) + 1;
 
     <article class="min-w-0">
       <header class="mb-8 border-b border-border pb-6">
-        <p class="mb-2 text-sm font-semibold" style={`color:${module.data.color}`}>
+        <p class="text-module-ink mb-2 text-sm font-semibold" style={`--module:${module.data.color}`}>
           {module.data.short} · Lesson {index}
         </p>
         <h1 class="text-3xl font-extrabold tracking-tight sm:text-4xl" data-pagefind-meta="title">{d.title}</h1>
@@ -54,7 +54,7 @@ const index = moduleLessons.findIndex((l) => l.id === lesson.id) + 1;
         <div class="mt-4 flex flex-wrap gap-2 text-xs">
           <span class="rounded-full bg-surface-2 px-2.5 py-1">⏱ {d.durationMin} min</span>
           {d.targets?.unity && <span class="rounded-full bg-surface-2 px-2.5 py-1">Unity {d.targets.unity}</span>}
-          {d.targets?.packages.map((p) => <span class="rounded-full bg-surface-2 px-2.5 py-1 font-mono">{p.name} {p.version}</span>)}
+          {d.targets?.packages.map((p) => <span class="max-w-full rounded-2xl bg-surface-2 px-2.5 py-1 font-mono [overflow-wrap:anywhere]">{p.name} {p.version}</span>)}
         </div>
 
         <div class="mt-6 rounded-xl border border-border bg-surface p-4">

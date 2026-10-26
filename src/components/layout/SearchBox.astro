@@ -4,8 +4,12 @@
  * Uses @pagefind/component-ui (via astro-pagefind) with its own instance ("modal") so it never
  * shares state with the full /search/ page. Without JavaScript the button is a link to /search/.
  * The index only exists after `pnpm build`.
+ *
+ * The Pagefind UI (~150 KB of JS) is imported on first use (click, Ctrl/⌘+K, "/") and prefetched when the
+ * pointer or focus reaches the search button, so ordinary page loads don't pay for it. That's why this renders
+ * <pagefind-config> itself instead of astro-pagefind's <PagefindConfig>, whose script imports the UI eagerly.
  */
-import PagefindConfig from 'astro-pagefind/components/PagefindConfig.astro';
+import '@pagefind/component-ui/css/pagefind-component-ui.css';
 import { withBase } from '../../lib/url';
 ---
 
@@ -17,7 +21,7 @@ import { withBase } from '../../lib/url';
   <kbd class="ml-1 hidden rounded border border-border bg-surface-2 px-1.5 font-sans text-[0.7rem] leading-5 font-medium text-muted lg:inline" aria-hidden="true" data-search-kbd>Ctrl K</kbd>
 </a>
 
-<PagefindConfig instance="modal" excerpt-length="24" />
+<pagefind-config instance="modal" excerpt-length="24" bundle-path={withBase('/pagefind/')}></pagefind-config>
 <pagefind-modal instance="modal" reset-on-close="false" class="nl-search-modal" data-search-modal>
   <pagefind-modal-header instance="modal">
     <pagefind-input instance="modal" placeholder="Search lessons and the glossary…" debounce="150"></pagefind-input>
@@ -69,6 +73,11 @@ import { withBase } from '../../lib/url';
     --pf-modal-backdrop: rgb(0 0 0 / 0.7);
     --pf-scroll-shadow: rgb(255 255 255 / 0.08);
   }
+  /* The UI is imported on first use. Until then <pagefind-modal> is an unknown element and would render its
+     light-DOM children (footer link, input) inline in the header. */
+  pagefind-modal:not(:defined) {
+    display: none;
+  }
   /* Search-term highlights inside excerpts. */
   pagefind-results mark,
   pagefind-modal mark {
@@ -116,7 +125,16 @@ import { withBase } from '../../lib/url';
   const modal = () => document.querySelector<PagefindModalEl>('[data-search-modal]');
   let returnFocus: HTMLElement | null = null;
 
+  let ui: Promise<unknown> | null = null;
+  const loadUi = () => (ui ??= import('@pagefind/component-ui'));
+
   async function openSearch() {
+    try {
+      await loadUi();
+    } catch {
+      ui = null;
+      return false;
+    }
     await customElements.whenDefined('pagefind-modal');
     const m = modal();
     if (!m?.open) return false;
@@ -126,6 +144,10 @@ import { withBase } from '../../lib/url';
     m.querySelector('dialog')?.addEventListener('close', () => returnFocus?.focus?.(), { once: true });
     return true;
   }
+
+  // Warm the import as soon as someone heads for the search button.
+  for (const ev of ['pointerenter', 'focusin', 'touchstart'] as const)
+    document.querySelectorAll('[data-search-open]').forEach((el) => el.addEventListener(ev, () => void loadUi(), { once: true, passive: true }));
 
   // Show ⌘ on Apple platforms.
   if (/Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)) {

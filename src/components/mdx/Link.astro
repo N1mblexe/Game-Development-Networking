@@ -1,0 +1,19 @@
+---
+/**
+ * Replaces Markdown links (`a`) in lessons. Root-relative links such as `[Security](/modules/theory/security/)`
+ * get the site base, so they keep working on a GitHub Pages project site (BASE_PATH=/netlearn).
+ * External, relative, `#fragment` and already-based links are passed through unchanged.
+ */
+import type { HTMLAttributes } from 'astro/types';
+import { withBase } from '../../lib/url';
+
+type Props = HTMLAttributes<'a'>;
+const { href, ...rest } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+const url = typeof href === 'string' ? href : href?.toString();
+const rootRelative = !!url && url.startsWith('/') && !url.startsWith('//');
+const alreadyBased = !!base && !!url && (url === base || (url.startsWith(base) && /^[/?#]/.test(url.slice(base.length))));
+const rebased = rootRelative && !alreadyBased ? withBase(url!) : url;
+---
+
+<a href={rebased} {...rest}><slot /></a>

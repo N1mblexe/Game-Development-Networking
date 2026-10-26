@@ -29,8 +29,13 @@
 .dg-step {
   transition: opacity 0.25s ease, background-color 0.25s ease;
 }
-.dg-step[data-state='future'] {
-  opacity: 0.32;
+/* Upcoming steps: fade the arrow strongly but keep the text readable (WCAG AA contrast), just muted. */
+.dg-step[data-state='future'] svg {
+  opacity: 0.3;
+}
+.dg-step[data-state='future'] .dg-label-bg,
+.dg-step[data-state='future'] .dg-label-bg * {
+  color: var(--muted);
 }
 .dg-step[data-state='active'] {
   background: color-mix(in srgb, var(--accent) 9%, transparent);
@@ -44,6 +49,11 @@
 .dg-step[data-tone='warn'][data-state='active'] .dg-head {
   stroke: var(--warn);
   fill: var(--warn);
+}
+.dg-step[data-tone='ok'][data-state='active'] .dg-line,
+.dg-step[data-tone='ok'][data-state='active'] .dg-head {
+  stroke: var(--ok);
+  fill: var(--ok);
 }
 .dg-step[data-tone='danger'][data-state='active'] .dg-line,
 .dg-step[data-tone='danger'][data-state='active'] .dg-head {

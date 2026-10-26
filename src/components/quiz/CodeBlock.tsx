@@ -5,7 +5,7 @@ import { highlightLines, type CodeToken, type TokenKind } from '../../lib/quiz/h
 export const TOKEN_CLASS: Record<TokenKind, string> = {
   plain: '',
   keyword: 'text-[#cf222e] dark:text-[#ff7b72]',
-  type: 'text-[#8250df] dark:text-[#d2a8ff]',
+  type: 'text-[#6f42c1] dark:text-[#d2a8ff]',
   string: 'text-[#0a3069] dark:text-[#a5d6ff]',
   number: 'text-[#0550ae] dark:text-[#79c0ff]',
   comment: 'italic text-[#6e7781] dark:text-[#8b949e]',

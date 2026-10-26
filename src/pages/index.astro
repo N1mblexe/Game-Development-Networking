@@ -130,7 +130,7 @@ const features = [
           data-state="start"
         >
           <span class="absolute inset-x-0 top-0 h-1" style="background:var(--module)" aria-hidden="true" />
-          <p class="text-xs font-bold tracking-wider uppercase" style="color:var(--module)" data-continue-eyebrow>
+          <p class="text-module-ink text-xs font-bold tracking-wider uppercase" data-continue-eyebrow>
             Start here
           </p>
           <h2 class="mt-1.5 text-xl leading-snug font-bold group-hover:underline" data-continue-title>
@@ -233,7 +233,7 @@ const features = [
                     {...(ls.length ? { 'data-module-progress': '', 'data-lesson-keys': ls.map((l) => l.id).join(',') } : {})}
                   >
                     <div class="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-3">
-                      <span class="relative grid h-10 w-10 shrink-0 place-items-center rounded-lg text-sm font-bold text-white" style={`background:${m.data.color}`}>
+                      <span class="bg-module-solid relative grid h-10 w-10 shrink-0 place-items-center rounded-lg text-sm font-bold">
                         {m.data.badge}
                         <span class="map-done absolute -right-1.5 -bottom-1.5 hidden h-5 w-5 place-items-center rounded-full border-2 border-surface bg-ok text-[0.65rem] text-white" aria-hidden="true">
                           ✓
@@ -244,7 +244,7 @@ const features = [
                           Module {m.data.order}
                           {m.data.estimatedHours && <> · ~{m.data.estimatedHours} h</>}
                         </p>
-                        <h3 class="leading-snug font-bold group-hover:text-[color:var(--module)]">{m.data.title}</h3>
+                        <h3 class="leading-snug font-bold group-hover:text-module-ink">{m.data.title}</h3>
                       </div>
                     </div>
                     <p class="mt-2 hidden text-sm text-muted md:line-clamp-3">{m.data.summary}</p>
