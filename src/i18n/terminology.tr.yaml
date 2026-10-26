@@ -39,7 +39,7 @@ terms:
   - { en: course, tr: kurs }
   - { en: module, tr: modül }
   - { en: lesson, tr: ders }
-  - { en: quiz, tr: kısa sınav, note: 'Lesson quiz. "Test" is avoided because testing code is a lesson topic.', avoid: [quiz’i, kuiz] }
+  - { en: quiz, tr: kısa sınav, note: 'Lesson quiz. "Test" is avoided because testing code is a lesson topic.', avoid: [kuiz] }
   - { en: exam, tr: sınav, note: Module exam }
   - { en: flashcard, tr: bilgi kartı, avoid: [flaş kart] }
   - { en: spaced repetition, tr: aralıklı tekrar }
@@ -110,8 +110,8 @@ terms:
   # ------------------------------------------------------------------------------------------- delivery
   - { en: reliable delivery, tr: güvenilir teslim, avoid: [güvenli teslim, emniyetli teslim] }
   - { en: unreliable delivery, tr: güvenilmez teslim, avoid: [güvensiz teslim] }
-  - { en: reliable, tr: güvenilir, avoid: [güvenli] , note: '"güvenli" means secure, not reliable' }
-  - { en: unreliable, tr: güvenilmez, avoid: [güvensiz] }
+  - { en: reliable, tr: güvenilir, note: '"güvenli" means secure, not reliable (it is fine for safe sizes or secure channels)' }
+  - { en: unreliable, tr: güvenilmez }
   - { en: ordered, tr: sıralı }
   - { en: sequenced, tr: sequenced, keepEnglish: true, firstUse: sequenced (eskileri atan), note: '"unreliable sequenced" → "güvenilmez sequenced"' }
   - { en: delivery type, tr: teslim türü }
@@ -137,7 +137,7 @@ terms:
   # ------------------------------------------------------------------------------------------- topology & authority
   - { en: topology, tr: topoloji }
   - { en: client, tr: istemci, avoid: [müşteri, alıcı bilgisayar] }
-  - { en: server, tr: sunucu, avoid: [servis] }
+  - { en: server, tr: sunucu }
   - { en: dedicated server, tr: özel sunucu, firstUse: özel sunucu (dedicated server), avoid: [adanmış sunucu] }
   - { en: listen server, tr: listen server, keepEnglish: true, firstUse: listen server (oyuncunun barındırdığı sunucu) }
   - { en: host, tr: host, keepEnglish: true, note: '"host’a", "host’un". The NGO role: server + client in one process.', avoid: [ev sahibi] }
