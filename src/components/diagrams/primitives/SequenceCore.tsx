@@ -128,11 +128,12 @@ export default function SequenceCore({ actors, steps, intro, footer, stepMs = 22
                     <span
                       className={[
                         'dg-label-bg rounded px-1',
-                        st.tone === 'warn' ? 'text-warn' : st.tone === 'danger' ? 'text-danger' : st.tone === 'muted' ? 'text-muted italic' : '',
+                        st.tone === 'warn' ? 'text-warn' : st.tone === 'danger' ? 'text-danger' : st.tone === 'ok' ? 'text-ok' : st.tone === 'muted' ? 'text-muted italic' : '',
                       ].join(' ')}
                     >
                       <span className="mr-1 font-mono text-[0.7rem] text-muted">{i + 1}</span>
                       {(st.tone === 'warn' || st.tone === 'danger') && <span className="mr-0.5">⚠</span>}
+                      {st.tone === 'ok' && <span className="mr-0.5">✓</span>}
                       <span className="font-medium">{st.label}</span>
                     </span>
                     {st.code && showRowCode && (

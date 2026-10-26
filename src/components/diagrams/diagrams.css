@@ -50,6 +50,11 @@
   stroke: var(--warn);
   fill: var(--warn);
 }
+.dg-step[data-tone='ok'][data-state='active'] .dg-line,
+.dg-step[data-tone='ok'][data-state='active'] .dg-head {
+  stroke: var(--ok);
+  fill: var(--ok);
+}
 .dg-step[data-tone='danger'][data-state='active'] .dg-line,
 .dg-step[data-tone='danger'][data-state='active'] .dg-head {
   stroke: var(--danger);
