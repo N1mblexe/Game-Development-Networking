@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { allRoutes, firstLessonOf, modules } from './routes';
@@ -98,4 +99,42 @@ test.describe('accessibility (axe)', () => {
       });
     }
   }
+});
+
+test.describe('lazy loading', () => {
+  test.skip(({ isMobile }) => isMobile, 'Bundle behaviour does not depend on the device.');
+  // Registry names map to component files: tcp-vs-udp → TcpVsUdp.tsx → TcpVsUdp.<hash>.js
+  const simChunk = (name: string) => name.replace(/(^|-)([a-z])/g, (_m, _d, c: string) => c.toUpperCase());
+  const allSims = readdirSync('src/components/sim')
+    .filter((f) => /^[A-Z].*\.tsx$/.test(f) && f !== 'SimHost.tsx')
+    .map((f) => f.replace('.tsx', ''));
+
+  test('a lesson loads only the simulators it embeds', async ({ page }) => {
+    const url = firstLessonOf('theory');
+    const file = readdirSync('src/content/lessons/theory').find((f) => url.endsWith(`/${f.replace(/^\d+-|\.mdx$/g, '')}/`))!;
+    const source = readFileSync(`src/content/lessons/theory/${file}`, 'utf8');
+    const embedded = [...new Set([...source.matchAll(/<Sim\s[^>]*name="([^"]+)"/g)].map((m) => simChunk(m[1])))];
+    expect(embedded.length).toBeGreaterThan(0);
+    const scripts: string[] = [];
+    page.on('request', (r) => {
+      if (r.resourceType() === 'script') scripts.push(new URL(r.url()).pathname.split('/').pop()!);
+    });
+    await page.goto(url);
+    await hydrateAll(page);
+    const loaded = allSims.filter((s) => scripts.some((f) => f.startsWith(`${s}.`)));
+    expect(loaded.sort()).toEqual(embedded.sort());
+  });
+
+  test('the Pagefind UI is only downloaded when search is opened', async ({ page }) => {
+    const scripts: string[] = [];
+    page.on('request', (r) => {
+      if (r.resourceType() === 'script') scripts.push(r.url());
+    });
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    expect(scripts.filter((u) => /component-ui/.test(u))).toEqual([]);
+    await page.keyboard.press('Control+k');
+    await expect(page.locator('pagefind-modal pagefind-input input')).toBeVisible();
+    expect(scripts.filter((u) => /component-ui/.test(u)).length).toBeGreaterThan(0);
+  });
 });
