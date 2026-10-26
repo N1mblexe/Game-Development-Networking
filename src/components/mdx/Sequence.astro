@@ -11,10 +11,11 @@
  */
 import SequenceFlow from '../diagrams/SequenceFlow';
 import type { SequenceProps } from '../diagrams/types';
+import { getLocale } from '../../lib/i18n/route';
 
 type Props = SequenceProps;
 ---
 
 <div data-pagefind-ignore>
-  <SequenceFlow client:visible {...Astro.props} />
+  <SequenceFlow client:visible {...Astro.props} locale={getLocale(Astro)} />
 </div>

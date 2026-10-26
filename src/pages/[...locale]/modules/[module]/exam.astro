@@ -1,0 +1,37 @@
+---
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import ExamRunner from '../../../../components/quiz/ExamRunner';
+import { certificateUrl, getExam, getModule, getModules, moduleUrl } from '../../../../lib/content/nav';
+import { getLocale, localeStaticPaths } from '../../../../lib/i18n/route';
+
+export async function getStaticPaths() {
+  return localeStaticPaths((await getModules()).map((m) => ({ params: { module: m.id } })));
+}
+
+const locale = getLocale(Astro);
+const moduleId = Astro.params.module!;
+const { title, color } = (await getModule(moduleId, locale))!.data;
+const exam = await getExam(moduleId, locale);
+---
+
+<BaseLayout title={`${title} exam`} accent={color}>
+  <p class="mb-2 text-sm"><a class="text-accent underline" href={moduleUrl(moduleId, locale)}>← {title}</a></p>
+  <h1 class="mb-6 text-3xl font-extrabold tracking-tight">{exam?.data.title ?? `${title} exam`}</h1>
+  {
+    exam ? (
+      <ExamRunner
+        client:load
+        moduleId={moduleId}
+        title={exam.data.title}
+        questions={exam.data.questions}
+        drawCount={exam.data.drawCount}
+        passPct={exam.data.passPct}
+        timeLimitMin={exam.data.timeLimitMin}
+        certificateUrl={certificateUrl(moduleId, locale)}
+        locale={locale}
+      />
+    ) : (
+      <p class="text-muted">This module's exam hasn't been written yet.</p>
+    )
+  }
+</BaseLayout>

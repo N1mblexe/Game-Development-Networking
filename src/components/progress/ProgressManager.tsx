@@ -4,6 +4,8 @@ import { exportProgress, importProgress, isLessonComplete, migrate, resetProgres
 import type { Progress } from '../../lib/progress/types';
 import { isDue, toDay } from '../../lib/srs/sm2';
 import { withBase } from '../../lib/url';
+import { DEFAULT_LOCALE, type Locale } from '../../i18n/locales';
+import { LocaleProvider } from '../../i18n/react';
 
 export interface ProgressManagerProps {
   /** For the summary table: every module and its lesson keys. */
@@ -40,7 +42,7 @@ const summarize = (p: Progress) => {
 };
 
 /** Summary table plus export (download), import (file, validated, confirmed) and reset (two-step). */
-export default function ProgressManager({ modules }: ProgressManagerProps) {
+function ProgressManagerView({ modules }: ProgressManagerProps) {
   const progress = useProgress();
   const [status, setStatus] = useState<Status>(null);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -295,5 +297,14 @@ export default function ProgressManager({ modules }: ProgressManagerProps) {
         </p>
       </section>
     </div>
+  );
+}
+
+/** Root island. Its only locale-related prop is `locale`; children read text with useT() (see src/i18n/react.tsx). */
+export default function ProgressManager({ locale = DEFAULT_LOCALE, ...props }: ProgressManagerProps & { locale?: Locale }) {
+  return (
+    <LocaleProvider locale={locale}>
+      <ProgressManagerView {...props} />
+    </LocaleProvider>
   );
 }

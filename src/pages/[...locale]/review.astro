@@ -1,0 +1,21 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import ReviewSession from '../../components/srs/ReviewSession';
+import { getFlashcards, getModules } from '../../lib/content/nav';
+import { getLocale, localeStaticPaths } from '../../lib/i18n/route';
+
+export const getStaticPaths = () => localeStaticPaths();
+const locale = getLocale(Astro);
+
+const cards = await getFlashcards(undefined, locale);
+const moduleTitles = Object.fromEntries((await getModules(locale)).map((m) => [m.id, m.data.title]));
+---
+
+<BaseLayout title="Review">
+  <h1 class="mb-2 text-3xl font-extrabold tracking-tight">Flashcard review</h1>
+  <p class="mb-8 text-muted">
+    Spaced repetition: cards you know come back less often. Add <code>?module=&lt;id&gt;</code> to the URL to review one
+    module only.
+  </p>
+  <ReviewSession client:load cards={cards} moduleTitles={moduleTitles} locale={locale} />
+</BaseLayout>

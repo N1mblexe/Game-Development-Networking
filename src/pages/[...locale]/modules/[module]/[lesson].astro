@@ -1,0 +1,25 @@
+---
+import { render } from 'astro:content';
+import LessonLayout from '../../../../layouts/LessonLayout.astro';
+import { mdxComponents } from '../../../../components/mdx';
+import { getLessons, getModule, lessonModule, lessonSlug } from '../../../../lib/content/nav';
+import { localizeLesson } from '../../../../lib/content/localized';
+import { getLocale, localeStaticPaths } from '../../../../lib/i18n/route';
+
+export async function getStaticPaths() {
+  return localeStaticPaths((await getLessons()).map((lesson) => ({ params: { module: lessonModule(lesson), lesson: lessonSlug(lesson) }, props: { lesson } })));
+}
+
+const locale = getLocale(Astro);
+const { lesson: english } = Astro.props;
+const module = await getModule(lessonModule(english), locale);
+if (!module) throw new Error(`Lesson ${english.id} belongs to unknown module`);
+// Translated lessons render their own MDX; untranslated ones render the English body (a fallback page).
+const localized = await localizeLesson(english, locale);
+const lesson = { ...english, data: localized.data };
+const { Content, headings } = await render(localized.entry);
+---
+
+<LessonLayout lesson={lesson} module={module} headings={headings} translated={localized.translated}>
+  <Content components={mdxComponents} />
+</LessonLayout>

@@ -1,13 +1,43 @@
 ---
+/**
+ * The only 404 page: GitHub Pages serves this one file for every missing URL, in every language. It renders in English;
+ * the inline script switches to the language of the URL (/tr/… → Turkish) before first paint.
+ */
 import BaseLayout from '../layouts/BaseLayout.astro';
-import { withBase } from '../lib/url';
+import { t } from '../i18n';
+import { LOCALES, TRANSLATED_LOCALES } from '../i18n/locales';
+import { localizePath } from '../lib/i18n/route';
+
+const m = t('en').pages.notFound;
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+const translations = Object.fromEntries(
+  TRANSLATED_LOCALES.map((l) => [
+    LOCALES[l].prefix,
+    { ...t(l).pages.notFound, lang: LOCALES[l].htmlLang, home: localizePath('/', l), suffix: ' · NetLearn' },
+  ]),
+);
 ---
 
-<BaseLayout title="Not found">
-  <div class="py-20 text-center">
+<BaseLayout title={m.title}>
+  <div class="py-20 text-center" data-not-found>
     <p class="font-mono text-6xl font-bold text-muted">404</p>
-    <h1 class="mt-4 text-2xl font-bold">This packet was lost.</h1>
-    <p class="mt-2 text-muted">The page you asked for doesn't exist, and nobody is going to retransmit it.</p>
-    <a class="btn btn-primary mt-6" href={withBase('/')}>Back to the course</a>
+    <h1 class="mt-4 text-2xl font-bold" data-nf="heading">{m.heading}</h1>
+    <p class="mt-2 text-muted" data-nf="body">{m.body}</p>
+    <a class="btn btn-primary mt-6" href={localizePath('/', 'en')} data-nf="back">{m.back}</a>
   </div>
+  <script is:inline define:vars={{ translations, base }}>
+    (function () {
+      var seg = location.pathname.slice(base.length).split('/')[1];
+      var tr = translations[seg];
+      if (!tr) return;
+      document.documentElement.lang = tr.lang;
+      document.title = tr.title + tr.suffix;
+      var root = document.querySelector('[data-not-found]');
+      root.querySelector('[data-nf="heading"]').textContent = tr.heading;
+      root.querySelector('[data-nf="body"]').textContent = tr.body;
+      var back = root.querySelector('[data-nf="back"]');
+      back.textContent = tr.back;
+      back.setAttribute('href', tr.home);
+    })();
+  </script>
 </BaseLayout>

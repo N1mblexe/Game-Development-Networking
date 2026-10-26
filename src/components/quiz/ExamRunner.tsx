@@ -8,6 +8,8 @@ import { useProgress } from '../../lib/progress/react';
 import Feedback from './Feedback';
 import QuestionView, { TYPE_LABEL } from './QuestionView';
 import ScoreRing from './ScoreRing';
+import { DEFAULT_LOCALE, type Locale } from '../../i18n/locales';
+import { LocaleProvider } from '../../i18n/react';
 
 export interface ExamRunnerProps {
   moduleId: string;
@@ -71,7 +73,7 @@ const FlagIcon = ({ filled }: { filled: boolean }) => (
  * → review → grade everything at once → results with explanations. Optional time limit
  * auto-submits. Leaving mid-exam asks for confirmation.
  */
-export default function ExamRunner({
+function ExamRunnerView({
   moduleId,
   title,
   questions,
@@ -488,3 +490,11 @@ export default function ExamRunner({
   );
 }
 
+/** Root island. Its only locale-related prop is `locale`; children read text with useT() (see src/i18n/react.tsx). */
+export default function ExamRunner({ locale = DEFAULT_LOCALE, ...props }: ExamRunnerProps & { locale?: Locale }) {
+  return (
+    <LocaleProvider locale={locale}>
+      <ExamRunnerView {...props} />
+    </LocaleProvider>
+  );
+}

@@ -3,6 +3,8 @@ import { useHydrated } from '../../lib/progress/react';
 import { randomSeed, range, shuffle } from '../../lib/quiz/random';
 import FlipCard from './FlipCard';
 import type { DeckCard } from './types';
+import { DEFAULT_LOCALE, type Locale } from '../../i18n/locales';
+import { LocaleProvider } from '../../i18n/react';
 
 export interface FlashcardDeckProps {
   /** Cards for one module or lesson; browse mode (no scheduling). */
@@ -15,7 +17,7 @@ const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
 /** Browse mode: flip, previous/next, shuffle. Space flips and arrows navigate while the deck has focus. */
-export default function FlashcardDeck({ cards, label = 'Flashcards' }: FlashcardDeckProps) {
+function FlashcardDeckView({ cards, label = 'Flashcards' }: FlashcardDeckProps) {
   const [order, setOrder] = useState(() => range(cards.length));
   const [pos, setPos] = useState(0);
   const [flipped, setFlipped] = useState(false);
@@ -93,5 +95,14 @@ export default function FlashcardDeck({ cards, label = 'Flashcards' }: Flashcard
         <kbd className="rounded border border-border bg-surface-2 px-1.5 font-mono">→</kbd> navigate
       </p>
     </section>
+  );
+}
+
+/** Root island. Its only locale-related prop is `locale`; children read text with useT() (see src/i18n/react.tsx). */
+export default function FlashcardDeck({ locale = DEFAULT_LOCALE, ...props }: FlashcardDeckProps & { locale?: Locale }) {
+  return (
+    <LocaleProvider locale={locale}>
+      <FlashcardDeckView {...props} />
+    </LocaleProvider>
   );
 }

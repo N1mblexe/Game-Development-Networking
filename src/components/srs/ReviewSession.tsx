@@ -15,6 +15,8 @@ import {
 } from '../../lib/srs/session';
 import FlipCard from './FlipCard';
 import type { DeckCard } from './types';
+import { DEFAULT_LOCALE, type Locale } from '../../i18n/locales';
+import { LocaleProvider } from '../../i18n/react';
 
 export interface ReviewSessionProps {
   /** Every card in the course; the session picks due + new cards using lib/srs. */
@@ -55,7 +57,7 @@ const isTyping = (el: EventTarget | null) =>
  * Spaced-repetition review: due cards plus a few new ones, flip, then grade Again/Hard/Good/Easy
  * (keys 1–4). "Again" brings the card back later in the same session.
  */
-export default function ReviewSession({ cards, moduleTitles, newPerSession = DEFAULT_NEW_PER_SESSION }: ReviewSessionProps) {
+function ReviewSessionView({ cards, moduleTitles, newPerSession = DEFAULT_NEW_PER_SESSION }: ReviewSessionProps) {
   const progress = useProgress();
   const [moduleId, setModuleId] = useState<string | null>(null);
   const [session, setSession] = useState<SessionState | null>(null);
@@ -336,5 +338,14 @@ export default function ReviewSession({ cards, moduleTitles, newPerSession = DEF
         </div>
       </section>
     </div>
+  );
+}
+
+/** Root island. Its only locale-related prop is `locale`; children read text with useT() (see src/i18n/react.tsx). */
+export default function ReviewSession({ locale = DEFAULT_LOCALE, ...props }: ReviewSessionProps & { locale?: Locale }) {
+  return (
+    <LocaleProvider locale={locale}>
+      <ReviewSessionView {...props} />
+    </LocaleProvider>
   );
 }

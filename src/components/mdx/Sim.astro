@@ -1,6 +1,7 @@
 ---
 /** <Sim name="prediction" preset="high-latency" caption="Optional caption" /> (see sim/registry.ts) */
 import SimHost from '../sim/SimHost';
+import { getLocale } from '../../lib/i18n/route';
 
 interface Props {
   name: string;
@@ -11,4 +12,4 @@ interface Props {
 }
 ---
 
-<SimHost client:visible {...Astro.props} />
+<SimHost client:visible {...Astro.props} locale={getLocale(Astro)} />

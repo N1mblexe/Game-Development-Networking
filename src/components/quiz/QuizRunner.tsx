@@ -8,6 +8,8 @@ import { useProgress } from '../../lib/progress/react';
 import Feedback from './Feedback';
 import QuestionView, { TYPE_LABEL } from './QuestionView';
 import ScoreRing from './ScoreRing';
+import { DEFAULT_LOCALE, type Locale } from '../../i18n/locales';
+import { LocaleProvider } from '../../i18n/react';
 
 export interface QuizRunnerProps {
   /** Lesson key; results are stored with recordQuiz(lessonKey, pct, passPct). */
@@ -26,7 +28,7 @@ const initResponses = (questions: Question[], seed: number) =>
  * to progress (passing completes the lesson). The first attempt's shuffle is seeded from the
  * lesson key so server and client render the same markup; retries reshuffle randomly.
  */
-export default function QuizRunner({ lessonKey, questions, passPct }: QuizRunnerProps) {
+function QuizRunnerView({ lessonKey, questions, passPct }: QuizRunnerProps) {
   const progress = useProgress();
   const [seed, setSeed] = useState(() => hashString(lessonKey));
   const orders = useMemo(() => Object.fromEntries(questions.map((q) => [q.id, optionOrder(q, seed)])), [questions, seed]);
@@ -262,5 +264,14 @@ export default function QuizRunner({ lessonKey, questions, passPct }: QuizRunner
         </div>
       )}
     </div>
+  );
+}
+
+/** Root island. Its only locale-related prop is `locale`; children read text with useT() (see src/i18n/react.tsx). */
+export default function QuizRunner({ locale = DEFAULT_LOCALE, ...props }: QuizRunnerProps & { locale?: Locale }) {
+  return (
+    <LocaleProvider locale={locale}>
+      <QuizRunnerView {...props} />
+    </LocaleProvider>
   );
 }

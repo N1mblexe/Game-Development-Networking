@@ -4,13 +4,16 @@
  * progress-dom.ts (module bars, exam status; loaded by BaseLayout) and dashboard.ts (continue card, stats).
  */
 import { getEntry } from 'astro:content';
-import BaseLayout from '../layouts/BaseLayout.astro';
-import { getFlashcards, getLessons, getModules, lessonUrl, moduleUrl } from '../lib/content/nav';
-import { withBase } from '../lib/url';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { getFlashcards, getLessons, getModules, lessonUrl, moduleUrl, pageUrl } from '../../lib/content/nav';
+import { getLocale, localeStaticPaths } from '../../lib/i18n/route';
 
-const modules = await getModules();
-const lessons = await getLessons();
-const cards = await getFlashcards();
+export const getStaticPaths = () => localeStaticPaths();
+const locale = getLocale(Astro);
+
+const modules = await getModules(locale);
+const lessons = await getLessons(undefined, locale);
+const cards = await getFlashcards(undefined, locale);
 const byModule = (id: string) => lessons.filter((l) => l.id.startsWith(`${id}/`));
 const moduleById = new Map(modules.map((m) => [m.id, m]));
 const examModules = (await Promise.all(modules.map(async (m) => ((await getEntry('exams', m.id)) ? m.id : null)))).filter(
@@ -59,7 +62,7 @@ const dashboardData = {
       module: mid,
       moduleTitle: m?.data.short ?? mid,
       color: m?.data.color ?? 'var(--accent)',
-      url: lessonUrl(l),
+      url: lessonUrl(l, locale),
       durationMin: l.data.durationMin,
       index: n,
       moduleCount: byModule(mid).length,
@@ -67,8 +70,8 @@ const dashboardData = {
   }),
   cardIds: cards.map((c) => c.globalId),
   examModules,
-  reviewUrl: withBase('/review/'),
-  progressUrl: withBase('/progress/'),
+  reviewUrl: pageUrl('/review/', locale),
+  progressUrl: pageUrl('/progress/', locale),
 };
 const first = dashboardData.lessons[0];
 
@@ -76,7 +79,7 @@ const features = [
   {
     title: 'Simulators',
     text: 'Change latency, jitter and loss and watch prediction, interpolation and lag compensation react, all in your browser.',
-    href: withBase('/playground/'),
+    href: pageUrl('/playground/', locale),
     cta: 'Open the playground',
     icon: 'M3 12h4l3-8 4 16 3-8h4',
   },
@@ -88,21 +91,21 @@ const features = [
   {
     title: 'Flashcards',
     text: 'Spaced repetition brings each card back just before you would forget it. A few minutes a day is enough.',
-    href: withBase('/review/'),
+    href: pageUrl('/review/', locale),
     cta: 'Review cards',
     icon: 'M4 7h12v13H4zM8 7V4h12v13h-4',
   },
   {
     title: 'Exams & certificates',
     text: 'Each module ends with an exam drawn from a larger pool. Pass it to unlock a printable certificate.',
-    href: withBase('/progress/'),
+    href: pageUrl('/progress/', locale),
     cta: 'See your progress',
     icon: 'M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM8.5 14 7 22l5-3 5 3-1.5-8',
   },
 ];
 ---
 
-<BaseLayout title="NetLearn" wide>
+<BaseLayout title="NetLearn" isHome wide>
   <!-- ============================================================ hero + continue -->
   <section class="mb-10 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_24rem]">
     <div class="max-w-3xl">
@@ -114,8 +117,8 @@ const features = [
         result, test yourself, and keep what you learn with spaced-repetition flashcards.
       </p>
       <div class="mt-6 flex flex-wrap gap-3">
-        <a class="btn" href={withBase('/playground/')}>Open the playground</a>
-        <a class="btn" href={withBase('/glossary/')}>Browse the glossary</a>
+        <a class="btn" href={pageUrl('/playground/', locale)}>Open the playground</a>
+        <a class="btn" href={pageUrl('/glossary/', locale)}>Browse the glossary</a>
       </div>
     </div>
 
@@ -171,7 +174,7 @@ const features = [
       </div>
       <div class="card relative p-4 hover:border-accent" data-stat="cards">
         <dt class="text-xs font-semibold tracking-wider text-muted uppercase">
-          <a href={withBase('/review/')} class="after:absolute after:inset-0 after:rounded-[0.85rem] hover:text-accent">Flashcards →</a>
+          <a href={pageUrl('/review/', locale)} class="after:absolute after:inset-0 after:rounded-[0.85rem] hover:text-accent">Flashcards →</a>
         </dt>
         <dd class="mt-1 text-2xl font-extrabold tabular-nums" data-stat-value>0</dd>
         <dd class="text-xs text-muted" data-stat-sub>due today · {cards.length} new</dd>
@@ -227,7 +230,7 @@ const features = [
                 const prereqs = m.data.prerequisites.map((p) => moduleById.get(p)?.data.short).filter(Boolean);
                 return (
                   <a
-                    href={moduleUrl(m.id)}
+                    href={moduleUrl(m.id, locale)}
                     class="map-node card group flex flex-col p-4"
                     style={`--module:${m.data.color}`}
                     {...(ls.length ? { 'data-module-progress': '', 'data-lesson-keys': ls.map((l) => l.id).join(',') } : {})}
@@ -369,5 +372,5 @@ const features = [
 </style>
 
 <script>
-  import '../scripts/dashboard';
+  import '../../scripts/dashboard';
 </script>

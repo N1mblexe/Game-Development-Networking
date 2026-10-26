@@ -1,10 +1,12 @@
 ---
 /**
  * Replaces Markdown links (`a`) in lessons. Root-relative links such as `[Security](/modules/theory/security/)`
- * get the site base, so they keep working on a GitHub Pages project site (BASE_PATH=/netlearn).
+ * get the site base, so they keep working on a GitHub Pages project site (BASE_PATH=/netlearn), and on a translated
+ * page they also get the locale prefix (/tr/modules/theory/security/), so translators keep the English paths.
  * External, relative, `#fragment` and already-based links are passed through unchanged.
  */
 import type { HTMLAttributes } from 'astro/types';
+import { getLocale, localizePath } from '../../lib/i18n/route';
 import { withBase } from '../../lib/url';
 
 type Props = HTMLAttributes<'a'>;
@@ -13,7 +15,9 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const url = typeof href === 'string' ? href : href?.toString();
 const rootRelative = !!url && url.startsWith('/') && !url.startsWith('//');
 const alreadyBased = !!base && !!url && (url === base || (url.startsWith(base) && /^[/?#]/.test(url.slice(base.length))));
-const rebased = rootRelative && !alreadyBased ? withBase(url!) : url;
+// Pages get the base and the page's locale prefix (none for English); files (/favicon.svg) only the base.
+const isFile = !!url && /\.[a-z0-9]+$/i.test(url.split(/[?#]/)[0]!);
+const rebased = rootRelative && !alreadyBased ? (isFile ? withBase(url!) : localizePath(url!, getLocale(Astro))) : url;
 ---
 
 <a href={rebased} {...rest}><slot /></a>

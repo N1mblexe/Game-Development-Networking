@@ -207,6 +207,84 @@ export const glossaryFileSchema = z
   .superRefine((f, ctx) => uniqueIds(f.terms, ctx, 'term'));
 
 // ---------------------------------------------------------------------------------------------
+// Translations — src/content/<locale>/{lessons,modules,quizzes,exams,flashcards,glossary}/…
+//
+// Same file layout and ids as English. A translated lesson is a full MDX copy whose frontmatter holds ONLY the text
+// fields below; everything else (order, duration, targets, sources, …) comes from the English lesson. The other
+// types are overlays keyed by id that hold ONLY text fields. All schemas are strict, so a structural field
+// (answer, order, color, code, …) in a translation is a schema error instead of a silent override.
+// `sourceHash` / `_src` are written by `pnpm i18n:stamp` (a hash of the English source; see src/lib/i18n/hash.ts).
+// ---------------------------------------------------------------------------------------------
+const srcHash = z.string().regex(/^[0-9a-f]{12}$/, 'must be a 12-digit hex hash (written by pnpm i18n:stamp)');
+
+export const lessonTranslationSchema = z
+  .object({
+    title: z.string(),
+    summary: z.string(),
+    objectives: z.array(z.string()).min(1),
+    sourceHash: srcHash.optional(),
+  })
+  .strict();
+
+export const moduleOverlaySchema = z
+  .object({ title: z.string(), short: z.string().max(16).optional(), summary: z.string(), _src: srcHash.optional() })
+  .strict();
+
+/** Text fields of one question. `options`/`items` must have the English length and order; `answers` (fill only) are
+ *  extra accepted answers, added to the English ones. */
+export const questionOverlaySchema = z
+  .object({
+    prompt: z.string(),
+    explanation: z.string(),
+    options: z.array(z.string()).optional(),
+    items: z.array(z.string()).optional(),
+    placeholder: z.string().optional(),
+    unit: z.string().optional(),
+    answers: z.array(z.string()).optional(),
+    _src: srcHash.optional(),
+  })
+  .strict();
+
+export const quizOverlaySchema = z.object({ questions: z.record(kebab, questionOverlaySchema) }).strict();
+
+export const examOverlaySchema = z
+  .object({ title: z.string().optional(), _src: srcHash.optional(), questions: z.record(kebab, questionOverlaySchema).default({}) })
+  .strict();
+
+export const flashcardOverlaySchema = z
+  .object({ cards: z.record(kebab, z.object({ front: z.string(), back: z.string(), _src: srcHash.optional() }).strict()) })
+  .strict();
+
+export const glossaryOverlaySchema = z
+  .object({
+    terms: z.record(
+      kebab,
+      z
+        .object({
+          term: z.string(),
+          short: z.string().max(240),
+          long: z.string().optional(),
+          aliases: z.array(z.string()).optional(),
+          _src: srcHash.optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+/**
+ * The English fields a translation depends on, per type. `_src`/`sourceHash` is a hash of exactly these, so changing
+ * an answer key or a code sample marks the translation stale too (its explanation probably changed).
+ */
+export const TRANSLATION_SOURCE_FIELDS = {
+  module: ['title', 'short', 'summary'],
+  exam: ['title'],
+  question: ['type', 'prompt', 'explanation', 'code', 'options', 'answer', 'answers', 'items', 'answerLines', 'placeholder', 'unit'],
+  flashcard: ['front', 'back', 'code'],
+  glossary: ['term', 'short', 'long', 'aliases'],
+} as const;
+
+// ---------------------------------------------------------------------------------------------
 // Derived types used by components
 // ---------------------------------------------------------------------------------------------
 export type ModuleData = z.infer<typeof moduleSchema>;
@@ -217,6 +295,13 @@ export type Quiz = z.infer<typeof quizSchema>;
 export type Exam = z.infer<typeof examSchema>;
 export type Flashcard = z.infer<typeof flashcardSchema>;
 export type GlossaryTerm = z.infer<typeof glossaryTermSchema>;
+export type LessonTranslation = z.infer<typeof lessonTranslationSchema>;
+export type ModuleOverlay = z.infer<typeof moduleOverlaySchema>;
+export type QuestionOverlay = z.infer<typeof questionOverlaySchema>;
+export type QuizOverlay = z.infer<typeof quizOverlaySchema>;
+export type ExamOverlay = z.infer<typeof examOverlaySchema>;
+export type FlashcardOverlay = z.infer<typeof flashcardOverlaySchema>;
+export type GlossaryOverlay = z.infer<typeof glossaryOverlaySchema>;
 
 /** Strip the "NN-" ordering prefix from a lesson file path: "theory/01-packets.mdx" → "theory/packets". */
 export function lessonIdFromPath(entry: string): string {

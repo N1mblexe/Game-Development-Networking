@@ -4,30 +4,39 @@
  * Uses the default Pagefind instance; the modal uses its own "modal" instance.
  */
 import PagefindConfig from 'astro-pagefind/components/PagefindConfig.astro';
-import BaseLayout from '../layouts/BaseLayout.astro';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { t } from '../../i18n';
+import { getLocale, localeStaticPaths } from '../../lib/i18n/route';
+
+// Pagefind keeps one index per <html lang>, so /tr/search/ only finds Turkish pages; its built-in UI strings follow
+// <html lang> as well.
+export const getStaticPaths = () => localeStaticPaths();
+const locale = getLocale(Astro);
+const m = t(locale).pages.search;
+const ui = t(locale).ui.search;
 ---
 
-<BaseLayout title="Search" description="Search every lesson and glossary term.">
+<BaseLayout title={m.title} description={m.description}>
   <div class="mx-auto max-w-4xl">
-    <h1 class="mb-2 text-3xl font-extrabold tracking-tight sm:text-4xl">Search</h1>
+    <h1 class="mb-2 text-3xl font-extrabold tracking-tight sm:text-4xl">{m.title}</h1>
     <p class="mb-6 text-muted">
-      Lessons and glossary terms. Tip: press <kbd class="rounded border border-border bg-surface-2 px-1.5 text-xs">Ctrl K</kbd> on any page.
+      {m.introBefore} <kbd class="rounded border border-border bg-surface-2 px-1.5 text-xs">Ctrl K</kbd> {m.introAfter}
     </p>
 
     <PagefindConfig excerpt-length="30" />
     <div class="nl-search-page">
-      <pagefind-input placeholder="Search lessons and the glossary…" autofocus debounce="150"></pagefind-input>
+      <pagefind-input placeholder={ui.placeholder} autofocus debounce="150"></pagefind-input>
       <div class="mt-6 grid gap-6 md:grid-cols-[12rem_minmax(0,1fr)]">
-        <aside aria-label="Filters">
+        <aside aria-label={m.filters}>
           <pagefind-filter-pane open="module" sort="alphabetical"></pagefind-filter-pane>
         </aside>
         <div class="min-w-0">
-          <pagefind-summary default-message="Type to search."></pagefind-summary>
+          <pagefind-summary default-message={m.defaultMessage}></pagefind-summary>
           <pagefind-results max-sub-results="4"></pagefind-results>
         </div>
       </div>
     </div>
-    <noscript><p class="mt-4 text-sm text-muted">Search needs JavaScript. Browse the course from the home page instead.</p></noscript>
+    <noscript><p class="mt-4 text-sm text-muted">{m.noscript}</p></noscript>
   </div>
 </BaseLayout>
 

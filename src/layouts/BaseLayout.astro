@@ -1,6 +1,10 @@
 ---
 import '../styles/global.css';
 import Header from '../components/layout/Header.astro';
+import LanguageBanner from '../components/layout/LanguageBanner.astro';
+import { t } from '../i18n';
+import { LOCALES } from '../i18n/locales';
+import { getLocale, localizePath } from '../lib/i18n/route';
 import { withBase } from '../lib/url';
 
 interface Props {
@@ -10,18 +14,26 @@ interface Props {
   accent?: string;
   /** Wider main column (dashboards, playground). */
   wide?: boolean;
+  /** The home page: the <title> is just "NetLearn" instead of "<title> · NetLearn". */
+  isHome?: boolean;
+  /** Absolute canonical URL, when it isn't this page (a lesson shown in English on a translated page). */
+  canonical?: string;
 }
-const { title, description = 'Interactive course: game networking, Unity Netcode for GameObjects and Steam.', accent, wide } = Astro.props;
-const fullTitle = title === 'NetLearn' ? title : `${title} · NetLearn`;
+const locale = getLocale(Astro);
+const loc = LOCALES[locale];
+const m = t(locale).ui.layout;
+const { title, description = m.defaultDescription, accent, wide, isHome, canonical } = Astro.props;
+const fullTitle = isHome ? title : `${title} · NetLearn`;
 ---
 
 <!doctype html>
-<html lang="en" data-theme="light" style={accent ? `--module: ${accent}` : undefined}>
+<html lang={loc.htmlLang} data-theme="light" class={loc.uppercase ? undefined : 'no-uppercase'} style={accent ? `--module: ${accent}` : undefined}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
+    {canonical && <link rel="canonical" href={canonical} />}
     <link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
     <script is:inline>
       (function () {
@@ -35,16 +47,24 @@ const fullTitle = title === 'NetLearn' ? title : `${title} · NetLearn`;
     </script>
   </head>
   <body class="flex min-h-dvh flex-col">
-    <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 btn">Skip to content</a>
+    <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 btn">{m.skipToContent}</a>
     <Header />
+    <LanguageBanner />
     <main id="main" class:list={['mx-auto w-full flex-1 px-4 py-8 sm:px-6', wide ? 'max-w-7xl' : 'max-w-6xl']}>
       <slot />
     </main>
     <footer class="no-print border-t border-border py-6 text-center text-sm text-muted">
-      NetLearn · progress is stored only in this browser · <a class="underline" href={withBase('/progress/')}>export or reset</a>
+      {m.footerNote} <a class="underline" href={localizePath('/progress/', locale)}>{m.footerLink}</a>
     </footer>
     <script>
       import '../scripts/progress-dom';
     </script>
   </body>
 </html>
+
+<style is:global>
+  /* See `uppercase` in src/i18n/locales.ts. */
+  html.no-uppercase .uppercase {
+    text-transform: none;
+  }
+</style>
