@@ -30,10 +30,16 @@ sources:
     url: https://github.com/Unity-Technologies/multiplayer-community-contributions/issues/247
   - title: 'Issue 217: connectedClients steamId is always 0 with the bundled Facepunch.Steamworks'
     url: https://github.com/Unity-Technologies/multiplayer-community-contributions/issues/217
-  - title: 'NGO source: NetworkTransport.cs (develop-2.0.0)'
-    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/develop-2.0.0/com.unity.netcode.gameobjects/Runtime/Transports/NetworkTransport.cs
-  - title: 'NGO CHANGELOG (OnEarlyUpdate added in 2.2.0)'
-    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/develop-2.0.0/com.unity.netcode.gameobjects/CHANGELOG.md
+  - title: 'NGO source v2.13.3: NetworkTransport.cs'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Transports/NetworkTransport.cs
+  - title: 'NGO CHANGELOG v2.13.3 (OnEarlyUpdate added in 2.2.0, #3113)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/CHANGELOG.md
+  - title: 'NGO source v2.13.3: NetworkTimeSystem.cs (half-RTT local time offset)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Timing/NetworkTimeSystem.cs
+  - title: 'FacepunchTransport commit 6115f6e (#160): QuickStatus RTT reverted, not in a Facepunch release at the time'
+    url: https://github.com/Unity-Technologies/multiplayer-community-contributions/commit/6115f6e9
+  - title: 'Facepunch.Steamworks 2.5.2: Connection.cs (QuickStatus, SendMessage)'
+    url: https://github.com/Facepunch/Facepunch.Steamworks/blob/2.5.2/Facepunch.Steamworks/Networking/Connection.cs
   - title: 'NGO 2.13 manual: Transports'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/transports.html
   - title: 'Facepunch.Steamworks wiki: Installing for Unity'
@@ -309,7 +315,8 @@ public override ulong GetCurrentRtt(ulong clientId)
 </CodeTabs>
 
 `Connection.QuickStatus()` returns Facepunch's `ConnectionStatus`, whose `Ping` property is Steam's current ping estimate
-in milliseconds. The transport's interfaces (`IConnectionManager`, `ISocketManager`, `SendMessage(byte[], int, int, SendType)`) have the same
+in milliseconds. This patch depends on step 2: the transport used `QuickStatus()` once before, in 2022, and reverted it
+(#160) because the API wasn't in a released Facepunch.Steamworks build yet, so it won't compile against the bundled 2.3.2 DLLs. The transport's interfaces (`IConnectionManager`, `ISocketManager`, `SendMessage(byte[], int, int, SendType)`) have the same
 signatures in Facepunch.Steamworks 2.5.2, so the rest of the file compiles unchanged against the newer DLLs.
 
 ## SteamBootstrap: one owner for Steam

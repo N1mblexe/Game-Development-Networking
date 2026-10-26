@@ -50,7 +50,7 @@ questions:
   - Delete the bundled Runtime/Facepunch folder and import Facepunch.Steamworks 2.5.2
   - Patch Shutdown (no SteamClient.Shutdown) and GetCurrentRtt (QuickStatus().Ping)
   - Set Log Level to Developer and check the [FacepunchTransport] messages when hosting
-  explanation: Embedding comes first so your edits survive. Swapping the DLLs before patching avoids two copies of the same assemblies, and the log check confirms the transport is the one in use.
+  explanation: Embedding comes first so your edits survive. Swapping the DLLs before patching avoids two copies of the same assemblies and gives you `QuickStatus()`, which the bundled 2.3.2 build lacks, and the log check confirms the transport is the one in use.
 - id: rtt-zero
   type: single
   prompt: What does the unpatched `GetCurrentRtt` return, and what is one consequence?

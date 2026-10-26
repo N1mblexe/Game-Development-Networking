@@ -86,7 +86,7 @@ const DATA: Record<V, { actors: SequenceActor[]; steps: SequenceStep[]; runs: Ar
         kind: 'local',
         tone: 'ok',
         label: 'Body runs locally on Client A right away',
-        note: 'Because the caller is one of the targets, NGO invokes it locally with no network trip (set DeferLocal = true to run it next frame instead).',
+        note: 'Because the caller is one of the targets, NGO invokes it locally with no network trip (set DeferLocal = true to run it on the next network tick instead).',
       },
       {
         from: 'a',

@@ -32,11 +32,10 @@ questions:
       - Initialize Unity Services and sign in
       - Create a Relay allocation for the number of clients
       - Set the relay server data on UnityTransport
-      - Request the join code for the allocation
-      - Call StartHost and show the join code
+      - Call StartHost and show the allocation's join code
     explanation: >-
       Every UGS call needs a signed-in player. The allocation reserves relay capacity, the transport must point at it
-      before NGO starts, and the join code is what clients use to find the allocation.
+      before NGO starts, and the join code (from `GetJoinCodeAsync`) is what clients use to find the allocation.
   - id: session-shutdown
     type: codeline
     prompt: The game uses a Relay session. After pressing Leave, the session package logs a warning and the next Host fails. Click the buggy line.

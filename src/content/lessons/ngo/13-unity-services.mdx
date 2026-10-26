@@ -25,16 +25,20 @@ sources:
     url: https://docs.unity.com/en-us/mps-sdk/join-session
   - title: 'Multiplayer Services SDK: Network connection management'
     url: https://docs.unity.com/en-us/mps-sdk/manage-session-network-connection
-  - title: 'Unity Lobby: Heartbeat a lobby'
-    url: https://docs.unity.com/en-us/lobby/heartbeat-a-lobby
+  - title: 'Unity Lobby glossary: Inactive lobby (30 s without update or heartbeat)'
+    url: https://docs.unity.com/ugs/en-us/manual/lobby/manual/glossary
+  - title: 'Multiplayer Services 2.4.1 package source (SessionOptions, LobbyHandler heartbeat, NetworkManagerSession starts NGO and warns on Shutdown)'
+    url: https://download.packages.unity.com/com.unity.services.multiplayer/-/com.unity.services.multiplayer-2.4.1.tgz
+  - title: 'Authentication 3.8.0 package source and changelog (MPPM profiles since 3.3.1)'
+    url: https://download.packages.unity.com/com.unity.services.authentication/-/com.unity.services.authentication-3.8.0.tgz
+  - title: 'NGO 2.13 docs: Distributed authority quickstart (SwitchProfile)'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/learn/distributed-authority-quick-start.html
   - title: 'Multiplayer Services 2.4 API: SessionOptions'
     url: https://docs.unity3d.com/Packages/com.unity.services.multiplayer@2.4/api/Unity.Services.Multiplayer.SessionOptions.html
   - title: 'Multiplayer Services 2.4 API: ISession'
     url: https://docs.unity3d.com/Packages/com.unity.services.multiplayer@2.4/api/Unity.Services.Multiplayer.ISession.html
   - title: 'NGO 2.13 API: UnityTransport (SetRelayServerData)'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Transports.UTP.UnityTransport.html
-  - title: 'Multiplayer Services 2.4.1 package source: NetworkManagerSession.cs (starts NGO, Shutdown warning)'
-    url: https://packages.unity.com/com.unity.services.multiplayer
   - title: 'Steamworks: Steam Datagram Relay'
     url: https://partner.steamgames.com/doc/features/multiplayer/steamdatagramrelay
   - title: 'Steamworks: Matchmaking and lobbies'
@@ -274,8 +278,8 @@ public class ArenaSessions : MonoBehaviour
 Other entry points on `MultiplayerService.Instance`: `QuerySessionsAsync` lists public sessions for a browser,
 `JoinSessionByIdAsync` joins one from that list, `CreateOrJoinSessionAsync(id, options)` avoids duplicates when several
 players race for the same id (lesson 11 used it), and `MatchmakeSessionAsync` joins through Unity's matchmaker.
-`SessionOptions.Password` (8 to 64 characters) protects a session, and `SessionProperties` holds up to 20 custom values,
-such as the map name.
+`SessionOptions.Password` (8 to 64 characters) protects a session, and `SessionProperties` holds custom values such as the map name
+(up to 20 per session, including the ones the package uses internally).
 
 ## Unity services or Steam?
 
@@ -298,10 +302,13 @@ so cross-play works.
 
 <Callout type="pitfall" title="Every MPPM instance signs in as the same player">
 
-Anonymous sign-in caches a player per machine profile. Several Multiplayer Play Mode instances on one machine can end
-up with the same player id, so the second one "joins" as the first and the session sees one player. The NGO distributed
-authority quickstart avoids this by giving each instance its own profile with `SwitchProfile(name)` on `AuthenticationService.Instance`
-before signing in. Use the instance's MPPM tag (lesson 12) as the profile name.
+Anonymous sign-in caches the player's session token in `PlayerPrefs`, per Authentication **profile**. Instances on one
+machine that use the same profile end up with the same player id, so the second one "joins" as the first and the
+session sees one player. Since Authentication 3.3.1, additional MPPM **Editor** instances get a profile named after
+their virtual player automatically, but builds you launch as local instances don't. The NGO distributed authority
+quickstart handles it explicitly: each instance calls `SwitchProfile(name)` on `AuthenticationService.Instance` with
+its own name before signing in. Make that name unique per instance (for example from a command-line argument); a
+shared tag such as `Client` would put three clients back on one profile.
 
 </Callout>
 

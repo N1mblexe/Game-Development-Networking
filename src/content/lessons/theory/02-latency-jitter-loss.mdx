@@ -23,6 +23,8 @@ sources:
     url: https://www.rfc-editor.org/rfc/rfc8200
   - title: 'NGO docs: Understanding latency'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/learn/lagandpacketloss.html
+  - title: 'NGO docs: Testing multiplayer games with artificial network conditions'
+    url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.4/manual/tutorials/testing/testing_with_artificial_conditions.html
   - title: 'Unity Transport docs: Using pipelines (SimulatorPipelineStage)'
     url: https://docs.unity3d.com/Packages/com.unity.transport@2.4/manual/pipelines-usage.html
 ---
@@ -211,8 +213,9 @@ ping and quality per connection.
 <Callout type="unity" title="Simulate bad networks in Unity">
   Unity Transport has a `SimulatorPipelineStage` that adds delay, jitter and drop percentage to your traffic, and NGO's
   `UnityTransport` component exposes these as debug simulator settings. The Multiplayer Tools package adds a Network
-  Simulator component with presets. Unity's own docs suggest about 20 ms delay for good broadband and up to 200 ms for
-  poor mobile, with jitter around half the delay. Turn it on from day one, not the week before launch.
+  Simulator component with presets. Unity's NGO docs report testing Boss Room at about 100–150 ms for desktop and
+  200–300 ms for mobile with 5–10% packet loss, and suggest also trying 500 ms and 1000 ms to flush out race conditions.
+  Turn it on from day one, not the week before launch.
 </Callout>
 
 ## Pitfalls

@@ -26,6 +26,8 @@ sources:
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkManager.html
   - title: 'NGO 2.13 API: NetworkConfig'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.NetworkConfig.html
+  - title: 'NGO source v2.13.3: NetworkConnectionManager.cs (AddClient sends ClientConnectedMessage to clients)'
+    url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/blob/v2.13.3/com.unity.netcode.gameobjects/Runtime/Connection/NetworkConnectionManager.cs
   - title: 'NGO 2.13 API: UnityTransport'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.Transports.UTP.UnityTransport.html
 ---
@@ -238,8 +240,9 @@ On the server, three collections give you the current set of players:
   <Term id="player-object">player object</Term>.
 - `ConnectedClientsList`: the same `NetworkClient` values as a list.
 
-These are server-side views. A client only knows about itself (`LocalClient`, `LocalClientId`) and whatever you
-replicate to it.
+The server's views are the authoritative ones. Since NGO 2.0, the server also tells every client when a peer joins or
+leaves, so a client's `ConnectedClientsIds` and `ConnectedClients` list the other clients' ids too. Anything beyond the
+ids, like names, teams or scores, is only what you replicate yourself.
 
 ## Leaving, kicking and shutting down
 

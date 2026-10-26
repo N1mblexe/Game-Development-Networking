@@ -44,7 +44,7 @@ questions:
     answer: false
     explanation: >-
       NGO spawns the player prefab for each approved client, including the host's local client. NGO doesn't support an
-      in-scene placed object as a player object, so a copy in the scene is just an extra, unowned object.
+      in-scene placed object as a player object, so a copy in the scene is just an extra, server-owned object.
   - id: bootstrap-bug
     type: codeline
     prompt: This bootstrap is on the NetworkManager GameObject, but after you click Client the start buttons are still drawn. Click the buggy line.

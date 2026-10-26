@@ -27,7 +27,7 @@ sources:
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/manual/advanced-topics/message-system/custom-messages.html
   - title: 'NGO 2.13 API: CustomMessagingManager'
     url: https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.13/api/Unity.Netcode.CustomMessagingManager.html
-  - title: 'NGO source v2.13.3: CustomMessageManager.cs (size checks, host delivery), NetworkVariable.cs (equality check)'
+  - title: 'NGO source v2.13.3: CustomMessageManager.cs (size checks, host delivery), NetworkVariable.cs (equality check), BytePacker.cs (ushort bit packing)'
     url: https://github.com/Unity-Technologies/com.unity.netcode.gameobjects/tree/v2.13.3/com.unity.netcode.gameobjects/Runtime
 ---
 
@@ -194,8 +194,8 @@ public static class BufferBasics
 
 Read in exactly the order you wrote. A buffer has no field names: if you swap two reads, you get garbage, not an error.
 `BytePacker.WriteValueBitPacked` is a [quantization](../../theory/reliability-serialization/)-style saving for integers
-that are usually small. It reserves a few bits for the length, so the range shrinks (a bit-packed `ushort` only holds
-0 to 32,767).
+that are usually small. It spends two bits on the length, so a bit-packed `ushort` takes one byte below 64, two bytes up
+to 16,383, and three bytes (one more than unpacked) above that. It only pays off when most values are small.
 
 ## Custom named messages
 

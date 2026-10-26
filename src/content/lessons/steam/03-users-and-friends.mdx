@@ -203,7 +203,9 @@ public static class SteamAvatarCache
         if (pending.TryGetValue(id, out var task)) return task;   // already downloading
 
         task = LoadAsync(id);
-        pending[id] = task;
+        // If Steam already had the image, LoadAsync finished synchronously and its
+        // finally block has already run: don't park a completed task in pending.
+        if (!task.IsCompleted) pending[id] = task;
         return task;
     }
 

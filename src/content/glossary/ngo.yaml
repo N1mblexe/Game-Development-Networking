@@ -5,7 +5,7 @@ terms:
     short: Unity's official high-level netcode library for GameObject-based games. It provides spawning, NetworkVariables, RPCs, scene sync and ownership on top of a transport.
     long: >-
       NGO keeps the familiar GameObject, prefab and MonoBehaviour workflow and adds networking on top of a transport,
-      usually **Unity Transport**. This course targets NGO 2.13 on Unity 6. NGO 3.0 adds Netcode for Entities as a dependency.
+      usually **Unity Transport**. This course targets NGO 2.13 on Unity 6. NGO 3.x requires Unity 6.7 or later and adds Netcode for Entities as a dependency.
     lesson: ngo/setup
     seeAlso: [network-manager, unity-transport]
   - id: unity-transport
@@ -212,7 +212,7 @@ terms:
     seeAlso: [network-simulator]
   - id: network-simulator
     term: Network Simulator
-    short: A Multiplayer Tools component that adds latency, jitter, packet loss, lag spikes and disconnects to an instance's Unity Transport connection, in the Editor and in builds.
+    short: A Multiplayer Tools component that adds latency, jitter, packet loss, lag spikes and disconnects to an instance's Unity Transport connection, in the Editor and in development builds.
     lesson: ngo/debugging-tools
     seeAlso: [multiplayer-play-mode, network-profiler]
   - id: network-profiler

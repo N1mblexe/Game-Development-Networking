@@ -71,7 +71,7 @@ questions:
       - An error, because the value changed twice in one frame
     answer: 1
     explanation: >-
-      NetworkVariables send the latest value when changes are collected at the end of the frame. Intermediate values are
+      NetworkVariables send the latest value when dirty variables are collected on the next network tick. Intermediate values are
       lost, because the variable syncs state, not history.
   - id: string-type
     type: single
