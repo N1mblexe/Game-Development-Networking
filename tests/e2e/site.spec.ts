@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { allRoutes, firstLessonOf, modules } from './routes';
+import { hydrateAll } from './hydrate';
 
 // Whole-site checks: every route renders without console errors, nothing scrolls sideways at 360 px,
 // and a representative set of pages has no axe violations in either theme.
@@ -17,20 +18,6 @@ function watchErrors(page: Page) {
     if (r.status() >= 400 && r.request().resourceType() !== 'document') errors.push(`${r.status()} ${r.url()}`);
   });
   return errors;
-}
-
-/** Scroll through the page so every client:visible island hydrates, then come back to the top. */
-async function hydrateAll(page: Page) {
-  await page.evaluate(async () => {
-    const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
-    for (let y = 0; y < document.documentElement.scrollHeight; y += step) {
-      window.scrollTo(0, y);
-      await new Promise((r) => setTimeout(r, 30));
-    }
-    window.scrollTo(0, 0);
-  });
-  await page.waitForLoadState('networkidle');
-  await expect(page.locator('astro-island[ssr]')).toHaveCount(0); // Astro drops [ssr] once an island hydrates
 }
 
 test.describe('every route', () => {

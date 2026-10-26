@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { trRoutes } from './routes';
+import { hydrateAll } from './hydrate';
 
 // Translated locales: every route exists under /tr/, the switcher and the one-time banner, English fallback pages,
 // per-locale search, and that English pages never download Turkish text.
@@ -12,20 +13,6 @@ const STORAGE_KEY = 'netlearn-locale';
 async function switchTo(page: Page, locale: string, isMobile: boolean) {
   if (isMobile) await page.locator('header details summary').click();
   await page.locator(`[data-locale-switch="${locale}"]:visible`).first().click();
-}
-
-/** Scroll through the page so every client:visible island hydrates (same as site.spec.ts). */
-async function hydrateAll(page: Page) {
-  await page.evaluate(async () => {
-    const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
-    for (let y = 0; y < document.documentElement.scrollHeight; y += step) {
-      window.scrollTo(0, y);
-      await new Promise((r) => setTimeout(r, 30));
-    }
-    window.scrollTo(0, 0);
-  });
-  await page.waitForLoadState('networkidle');
-  await expect(page.locator('astro-island[ssr]')).toHaveCount(0);
 }
 
 test.describe('routes', () => {
