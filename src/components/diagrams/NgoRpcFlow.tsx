@@ -4,170 +4,102 @@
  * RpcDelivery.Reliable; a target that includes the local process runs the body locally right away
  * (DeferLocal defers it to the next frame); clients have no direct connections, so the server forwards
  * client-to-client RPCs.
+ *
+ * Structure (step ids, arrows, code) lives here; the text is in src/i18n/<locale>/diagrams/ngo-rpc-flow.ts.
  */
 import SequenceCore from './primitives/SequenceCore';
 import { DiagramNote, RunsOn, useVariant, VariantSwitcher } from './primitives/VariantSwitcher';
-import type { SequenceActor, SequenceStep } from './types';
+import type Msgs from '../../i18n/en/diagrams/ngo-rpc-flow';
+import { useLazyT } from '../../i18n/react';
+import { withActorText, withStepText, type ActorShape, type StepShape } from '../../lib/i18n/diagram';
 
 const VARIANTS = ['to-server', 'to-everyone', 'to-owner'] as const;
 type V = (typeof VARIANTS)[number];
+// API names, not translated.
 const LABELS: Record<V, string> = { 'to-server': 'SendTo.Server', 'to-everyone': 'SendTo.Everyone', 'to-owner': 'SendTo.Owner' };
 
-const actorsClientCaller: SequenceActor[] = [
-  { id: 'a', label: 'Client A (caller)', kind: 'client' },
-  { id: 's', label: 'Server', kind: 'server' },
-  { id: 'b', label: 'Client B', kind: 'client' },
+type ActorKey = keyof (typeof Msgs)['actors'];
+const actorsClientCaller: ActorShape<ActorKey>[] = [
+  { id: 'a', label: 'clientACaller', kind: 'client' },
+  { id: 's', label: 'server', kind: 'server' },
+  { id: 'b', label: 'clientB', kind: 'client' },
 ];
 
-const DATA: Record<V, { actors: SequenceActor[]; steps: SequenceStep[]; runs: Array<[string, 'client' | 'server', boolean]> }> = {
+const DATA: Record<V, { actors: ActorShape<ActorKey>[]; steps: StepShape[]; runs: Array<[ActorKey, 'client' | 'server', boolean]> }> = {
   'to-server': {
     actors: actorsClientCaller,
     steps: [
-      {
-        from: 'a',
-        to: 'a',
-        kind: 'local',
-        label: 'Gameplay code calls FireRpc(aim)',
-        code: '[Rpc(SendTo.Server)] void FireRpc(Vector3 aim)',
-        note: 'NGO’s generated code intercepts the call. On a client, the method body does NOT run here.',
-      },
-      {
-        from: 'a',
-        to: 'a',
-        kind: 'local',
-        label: 'Serialize into an RPC message',
-        note: 'NGO writes which NetworkObject and NetworkBehaviour this is, which RPC method, and the serialized arguments (here a Vector3).',
-      },
-      {
-        from: 'a',
-        to: 's',
-        kind: 'rpc',
-        label: 'Send through the transport',
-        code: 'Delivery = RpcDelivery.Reliable (default)',
-        note: 'The message is queued and sent by the transport (Unity Transport, FacepunchTransport, …) at the end of the frame.',
-      },
-      {
-        from: 's',
-        to: 's',
-        kind: 'local',
-        tone: 'ok',
-        label: 'Server deserializes and runs FireRpc(aim)',
-        note: 'The body executes on the server only. Validate the input here: the server is the authority.',
-      },
-      {
-        from: 'b',
-        to: 'b',
-        kind: 'local',
-        tone: 'muted',
-        label: 'Client B: nothing arrives, nothing runs',
-        note: 'Other clients only learn about the shot through whatever the server does next (spawning a projectile, updating a NetworkVariable).',
-      },
+      { id: 'call', from: 'a', to: 'a', kind: 'local', code: '[Rpc(SendTo.Server)] void FireRpc(Vector3 aim)' },
+      { id: 'serialize', from: 'a', to: 'a', kind: 'local' },
+      { id: 'send', from: 'a', to: 's', kind: 'rpc', code: 'Delivery = RpcDelivery.Reliable (default)' },
+      { id: 'run', from: 's', to: 's', kind: 'local', tone: 'ok' },
+      { id: 'other', from: 'b', to: 'b', kind: 'local', tone: 'muted' },
     ],
     runs: [
-      ['Client A', 'client', false],
-      ['Server', 'server', true],
-      ['Client B', 'client', false],
+      ['clientA', 'client', false],
+      ['server', 'server', true],
+      ['clientB', 'client', false],
     ],
   },
   'to-everyone': {
     actors: actorsClientCaller,
     steps: [
-      {
-        from: 'a',
-        to: 'a',
-        kind: 'local',
-        label: 'Gameplay code calls EmoteRpc(id)',
-        code: '[Rpc(SendTo.Everyone)] void EmoteRpc(int id)',
-        note: 'Everyone includes the caller.',
-      },
-      {
-        from: 'a',
-        to: 'a',
-        kind: 'local',
-        tone: 'ok',
-        label: 'Body runs locally on Client A right away',
-        note: 'Because the caller is one of the targets, NGO invokes it locally with no network trip (set DeferLocal = true to run it on the next network tick instead).',
-      },
-      {
-        from: 'a',
-        to: 's',
-        kind: 'rpc',
-        label: 'RPC message to the server',
-        note: 'Clients have no direct connection to each other, so a client-to-client RPC always goes through the server.',
-      },
-      { from: 's', to: 's', kind: 'local', tone: 'ok', label: 'Server runs EmoteRpc(id)', note: 'The server is part of Everyone too.' },
-      {
-        from: 's',
-        to: 'b',
-        kind: 'rpc',
-        label: 'Server forwards the RPC to the other clients',
-        note: 'The server relays the message to every remaining target. Client A already ran it, so it is not sent back.',
-      },
-      { from: 'b', to: 'b', kind: 'local', tone: 'ok', label: 'Client B runs EmoteRpc(id)' },
+      { id: 'call', from: 'a', to: 'a', kind: 'local', code: '[Rpc(SendTo.Everyone)] void EmoteRpc(int id)' },
+      { id: 'local', from: 'a', to: 'a', kind: 'local', tone: 'ok' },
+      { id: 'toServer', from: 'a', to: 's', kind: 'rpc' },
+      { id: 'serverRuns', from: 's', to: 's', kind: 'local', tone: 'ok' },
+      { id: 'forward', from: 's', to: 'b', kind: 'rpc' },
+      { id: 'clientRuns', from: 'b', to: 'b', kind: 'local', tone: 'ok' },
     ],
     runs: [
-      ['Client A', 'client', true],
-      ['Server', 'server', true],
-      ['Client B', 'client', true],
+      ['clientA', 'client', true],
+      ['server', 'server', true],
+      ['clientB', 'client', true],
     ],
   },
   'to-owner': {
     actors: [
-      { id: 's', label: 'Server (caller)', kind: 'server' },
-      { id: 'a', label: 'Client A (owner)', kind: 'client' },
-      { id: 'b', label: 'Client B', kind: 'client' },
+      { id: 's', label: 'serverCaller', kind: 'server' },
+      { id: 'a', label: 'clientAOwner', kind: 'client' },
+      { id: 'b', label: 'clientB', kind: 'client' },
     ],
     steps: [
-      {
-        from: 's',
-        to: 's',
-        kind: 'local',
-        label: 'Server calls TakeDamageRpc(10)',
-        code: '[Rpc(SendTo.Owner)] void TakeDamageRpc(int amount)',
-        note: 'The target is resolved when the RPC is called, from this NetworkObject’s OwnerClientId.',
-      },
-      { from: 's', to: 's', kind: 'local', label: 'Serialize into an RPC message' },
-      {
-        from: 's',
-        to: 'a',
-        kind: 'rpc',
-        label: 'Sent only to the owning client',
-        note: 'One message, one recipient: no bandwidth is spent on clients that do not need it.',
-      },
-      { from: 'a', to: 'a', kind: 'local', tone: 'ok', label: 'Client A runs TakeDamageRpc(10)', note: 'Typical use: owner-only feedback such as screen shake or a hit marker.' },
-      { from: 'b', to: 'b', kind: 'local', tone: 'muted', label: 'Client B: nothing arrives, nothing runs' },
+      { id: 'call', from: 's', to: 's', kind: 'local', code: '[Rpc(SendTo.Owner)] void TakeDamageRpc(int amount)' },
+      { id: 'serialize', from: 's', to: 's', kind: 'local' },
+      { id: 'send', from: 's', to: 'a', kind: 'rpc' },
+      { id: 'ownerRuns', from: 'a', to: 'a', kind: 'local', tone: 'ok' },
+      { id: 'other', from: 'b', to: 'b', kind: 'local', tone: 'muted' },
     ],
     runs: [
-      ['Server', 'server', false],
-      ['Client A (owner)', 'client', true],
-      ['Client B', 'client', false],
+      ['server', 'server', false],
+      ['clientAOwner', 'client', true],
+      ['clientB', 'client', false],
     ],
   },
 };
 
 export default function NgoRpcFlow({ variant }: { variant?: string }) {
+  const m = useLazyT<typeof Msgs>('diagrams/ngo-rpc-flow');
   const v = useVariant(VARIANTS, variant);
   const d = DATA[v.value];
   return (
     <div>
-      {!v.pinned && <VariantSwitcher variants={VARIANTS} value={v.value} onChange={v.set} labels={LABELS} label="RPC target" />}
+      {!v.pinned && <VariantSwitcher variants={VARIANTS} value={v.value} onChange={v.set} labels={LABELS} label={m.variantLabel} />}
       <SequenceCore
         key={v.value}
-        title={`NGO RPC flow, ${LABELS[v.value]}`}
-        actors={d.actors}
-        steps={d.steps}
+        title={m.title(LABELS[v.value])}
+        actors={withActorText(d.actors, m.actors)}
+        steps={withStepText(d.steps, m.steps[v.value])}
         intro={
           <>
-            Follow one <code className="font-mono text-xs">[Rpc({LABELS[v.value]})]</code> call from the caller to the machines that execute it.
+            {m.introBefore} <code className="font-mono text-xs">[Rpc({LABELS[v.value]})]</code> {m.introAfter}
           </>
         }
         footer={
           <div className="space-y-2">
-            <RunsOn title="Body executes on:" items={d.runs.map(([label, kind, yes]) => ({ label, kind, yes }))} />
+            <RunsOn title={m.runsOn} items={d.runs.map(([label, kind, yes]) => ({ label: m.actors[label], kind, yes }))} />
             <DiagramNote>
-              <strong>Host = server + client in one process.</strong> When the host calls an RPC whose targets include itself
-              (for example <code className="font-mono text-xs">SendTo.Server</code> from the host), that part runs locally and
-              immediately, with no network trip. That is why bugs that depend on latency often hide while you test as host.
+              <strong>{m.hostTitle}</strong> {m.hostBefore} <code className="font-mono text-xs">SendTo.Server</code> {m.hostAfter}
             </DiagramNote>
           </div>
         }
