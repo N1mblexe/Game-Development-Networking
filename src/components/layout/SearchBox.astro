@@ -73,6 +73,11 @@ import { withBase } from '../../lib/url';
     --pf-modal-backdrop: rgb(0 0 0 / 0.7);
     --pf-scroll-shadow: rgb(255 255 255 / 0.08);
   }
+  /* The UI is imported on first use. Until then <pagefind-modal> is an unknown element and would render its
+     light-DOM children (footer link, input) inline in the header. */
+  pagefind-modal:not(:defined) {
+    display: none;
+  }
   /* Search-term highlights inside excerpts. */
   pagefind-results mark,
   pagefind-modal mark {
